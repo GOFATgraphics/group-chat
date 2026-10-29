@@ -15,6 +15,7 @@
 
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { gateway } from '@ai-sdk/gateway'
+import { getVercelOidcToken } from '@vercel/oidc'
 import { route, auth, body, check, HttpError } from '../lib.js'
 import { PERSONAS, defaultPersona } from '../personas.js'
 
@@ -109,6 +110,19 @@ const start = route({
   },
 })
 
+// Turns AI Gateway failures into a short reason people can act on.
+function explain(err) {
+  const text = `${err?.message ?? err} ${err?.cause?.message ?? ''} ${JSON.stringify(err?.responseBody ?? err?.data ?? '')}`
+  const status = err?.statusCode ?? err?.status ?? err?.cause?.statusCode
+  if (/insufficient|credit|balance|payment|billing|402/i.test(text) || status === 402) {
+    return 'AI Gateway has no credits for live calls. Add credits in Vercel → AI Gateway.'
+  }
+  if (status === 401 || status === 403 || /auth|unauthor|forbidden|oidc|api key/i.test(text)) {
+    return `AI Gateway refused the request (${status ?? 'auth'}): ${err.message}`
+  }
+  return `AI Gateway error${status ? ` ${status}` : ''}: ${err.message}`
+}
+
 const token = route({
   async POST(req) {
     const claims = readTicket(req.query.ticket)
@@ -116,9 +130,36 @@ const token = route({
       const { token: secret, url } = await gateway.experimental_realtime.getToken({ model: claims.m })
       return { token: secret, url, tools: [] }
     } catch (err) {
-      throw new HttpError(502, `Could not start the call: ${err.message}`)
+      console.error('realtime token failed', err)
+      throw new HttpError(502, `Could not start the call. ${explain(err)}`)
     }
   },
 })
 
-export default { start, token }
+// GET /api/call/check: can this deployment start live calls? Tries to mint
+// a client secret (discarded, never returned) and reads the AI Gateway credit
+// balance. Safe to open in a browser.
+const checkRoute = route({
+  async GET() {
+    const out = { model: CALL_MODEL }
+    try {
+      await gateway.experimental_realtime.getToken({ model: CALL_MODEL })
+      out.realtime = 'ok'
+    } catch (err) {
+      console.error('realtime check failed', err)
+      out.realtime = explain(err)
+      out.raw = { message: err?.message, statusCode: err?.statusCode, name: err?.name, cause: err?.cause?.message }
+    }
+    try {
+      const key = process.env.AI_GATEWAY_API_KEY || (await getVercelOidcToken().catch(() => ''))
+      out.auth = process.env.AI_GATEWAY_API_KEY ? 'api key' : key ? 'vercel oidc' : 'none'
+      const res = await fetch('https://ai-gateway.vercel.sh/v1/credits', { headers: { Authorization: `Bearer ${key}` } })
+      out.credits = res.ok ? await res.json() : `HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`
+    } catch (err) {
+      out.credits = `unavailable: ${err.message}`
+    }
+    return out
+  },
+})
+
+export default { start, token, check: checkRoute }

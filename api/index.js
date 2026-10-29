@@ -37,6 +37,7 @@ const exact = {
   'push/key': pushKey,
   'call/start': call.start,
   'call/token': call.token,
+  'call/check': call.check,
 }
 
 export default async function handler(req, res) {

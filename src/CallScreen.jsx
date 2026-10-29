@@ -64,8 +64,22 @@ function LiveCall({ setup, peer, avatar, myName, onEnded }) {
     model,
     api: { token: `/api/call/token?ticket=${encodeURIComponent(setup.ticket)}` },
     sessionConfig: setup.sessionConfig,
-    onError: (err) => setProblem(err.message),
+    onError: (err) => reportProblem(err),
   })
+  // The SDK only reports "Failed to fetch realtime setup: <status>"; ask our
+  // server for the actual reason so the screen says something useful.
+  async function reportProblem(err) {
+    const message = err?.message ?? String(err)
+    if (!/realtime setup/i.test(message)) return setProblem(message)
+    try {
+      const res = await fetch(`/api/call/token?ticket=${encodeURIComponent(setup.ticket)}`, { method: 'POST' })
+      const body = await res.json().catch(() => ({}))
+      setProblem(body.error || message)
+    } catch {
+      setProblem(message)
+    }
+  }
+
   // Timers and hang-up read the latest session (messages, methods) from here.
   const callRef = useRef(call)
   callRef.current = call
