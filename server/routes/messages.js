@@ -1,6 +1,6 @@
 import {
   route, auth, body, check, present, markRead, userIdFor, sleep, HttpError, BUCKET, MAX_FILE_BYTES,
-} from '../_lib.js'
+} from '../lib.js'
 
 const MAX_WAIT_SECONDS = 25
 const POLL_MS = 150

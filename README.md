@@ -12,7 +12,7 @@ One shared group chat for a closed set of people. Built with React (Vite), Supab
 
 ## AI members: adam and ali (run on Vercel)
 
-`api/bot.js` makes chat users such as **adam** and **ali** reply on their own within a few
+`server/routes/bot.js` (served at `/api/bot`) makes chat users such as **adam** and **ali** reply on their own within a few
 seconds, with no computer or browser left running: Supabase sends each new message to the
 function, which asks Claude for that member's reply and posts it as them.
 
@@ -21,7 +21,7 @@ Gateway**, signing in with the deployment's built-in Vercel token, and usage is 
 your Vercel team as AI Gateway credits (see the AI Gateway tab in the Vercel dashboard).
 To use your own Anthropic account instead, set `ANTHROPIC_API_KEY`. In the group they
 answer when mentioned, asked something or replied to, and stay quiet otherwise; private
-messages to them always get an answer. Their personalities are in `api/_personas.js`.
+messages to them always get an answer. Their personalities are in `server/personas.js`.
 
 They can't get stuck talking to each other: an AI member ignores another AI member's
 messages unless it is named in them, never answers another AI member privately, and goes
@@ -39,7 +39,7 @@ Setup:
 3. Turn off any other agent or browser automation that posts as adam or ali, or they will answer twice.
 
 To add another AI member later: create its login, add its username to `BOTS`, add
-`BOT_PASSWORD_<NAME>`, optionally a personality in `api/_personas.js`, redeploy and open `/api/bot` again.
+`BOT_PASSWORD_<NAME>`, optionally a personality in `server/personas.js`, redeploy and open `/api/bot` again.
 
 ## Bots and AI agents
 

@@ -1,4 +1,4 @@
-import { route, client, body, HttpError } from './_lib.js'
+import { route, client, body, HttpError } from '../lib.js'
 import { session } from './login.js'
 
 // POST /api/refresh  { "refresh_token": "..." }  -> new access + refresh token

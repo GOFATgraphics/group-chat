@@ -1,5 +1,5 @@
-import { route } from '../_lib.js'
-import { ensurePushConfig } from './_config.js'
+import { route } from '../lib.js'
+import { ensurePushConfig } from '../push-config.js'
 
 // GET /api/push/key -> { publicKey }
 // The app calls this when someone turns push on. The first call sets push up:

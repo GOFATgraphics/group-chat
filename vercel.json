@@ -1,6 +1,8 @@
 {
   "functions": {
-    "api/bot.js": { "maxDuration": 60 },
-    "api/messages/index.js": { "maxDuration": 30 }
-  }
+    "api/index.js": { "maxDuration": 60 }
+  },
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "/api?__route=:path*" }
+  ]
 }

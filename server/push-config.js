@@ -1,5 +1,5 @@
 import webpush from 'web-push'
-import { admin, HttpError } from '../_lib.js'
+import { admin, HttpError } from './lib.js'
 
 // Push settings live in the push_config table (service role only). The
 // VAPID key pair is created on first use and the sender URL is kept pointed

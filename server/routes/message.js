@@ -1,4 +1,4 @@
-import { route, auth, check, present, HttpError, BUCKET } from '../_lib.js'
+import { route, auth, check, present, HttpError, BUCKET } from '../lib.js'
 
 // GET    /api/messages/:id  -> one message
 // DELETE /api/messages/:id  -> delete one of your own messages

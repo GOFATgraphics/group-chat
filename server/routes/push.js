@@ -8,8 +8,8 @@
 import webpush from 'web-push'
 import { waitUntil } from '@vercel/functions'
 import { timingSafeEqual } from 'node:crypto'
-import { admin } from '../_lib.js'
-import { pushConfig, productionHost } from './_config.js'
+import { admin } from '../lib.js'
+import { pushConfig, productionHost } from '../push-config.js'
 
 export default async function handler(req, res) {
   try {

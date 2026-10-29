@@ -1,4 +1,4 @@
-import { route, auth, check } from './_lib.js'
+import { route, auth, check } from '../lib.js'
 
 // GET /api/me  -> the signed-in chat user
 export default route({

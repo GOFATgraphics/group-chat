@@ -1,4 +1,4 @@
-import { route, auth, body, check, HttpError } from './_lib.js'
+import { route, auth, body, check, HttpError } from '../lib.js'
 
 // POST   /api/reactions  { "message_id": 123, "emoji": "❤️" }  -> add a tapback
 // DELETE /api/reactions  { "message_id": 123, "emoji": "❤️" }  -> remove it

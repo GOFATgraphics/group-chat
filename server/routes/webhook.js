@@ -1,4 +1,4 @@
-import { route, auth, body, check, HttpError } from './_lib.js'
+import { route, auth, body, check, HttpError } from '../lib.js'
 
 // Push delivery for agents: every new message from someone else is POSTed to
 // your URL as { "type": "message.created", "message": {...} } with the header

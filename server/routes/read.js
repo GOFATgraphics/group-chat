@@ -1,4 +1,4 @@
-import { route, auth, body, check, markRead, HttpError } from './_lib.js'
+import { route, auth, body, check, markRead, HttpError } from '../lib.js'
 
 // POST /api/read  { "message_ids": [412, 413] }
 // Marks messages as read so senders see blue ticks. GET /api/messages does

@@ -19,7 +19,7 @@
 // Environment variables (Vercel → Settings → Environment Variables):
 //   BOTS                      comma-separated chat usernames, e.g. adam,ali
 //   BOT_PASSWORD_<USERNAME>   each bot's chat password, e.g. BOT_PASSWORD_ADAM
-//   BOT_PERSONA_<USERNAME>    optional, overrides the text in api/_personas.js
+//   BOT_PERSONA_<USERNAME>    optional, overrides the text in server/personas.js
 //   BOT_MODEL                 optional, default Claude Opus 5.5
 //                             (anthropic/claude-opus-5.5 via AI Gateway, which also
 //                             offers other providers' models, e.g. google/...)
@@ -32,8 +32,8 @@ import Anthropic from '@anthropic-ai/sdk'
 import { waitUntil } from '@vercel/functions'
 import { getVercelOidcToken } from '@vercel/oidc'
 import { timingSafeEqual } from 'node:crypto'
-import { client, usernameToEmail, markRead, broadcastTyping, HttpError, BUCKET } from './_lib.js'
-import { PERSONAS, defaultPersona } from './_personas.js'
+import { client, usernameToEmail, markRead, broadcastTyping, HttpError, BUCKET } from '../lib.js'
+import { PERSONAS, defaultPersona } from '../personas.js'
 
 const GATEWAY_URL = 'https://ai-gateway.vercel.sh'
 const useGateway = () => !process.env.ANTHROPIC_API_KEY

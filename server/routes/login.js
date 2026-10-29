@@ -1,4 +1,4 @@
-import { route, client, body, usernameToEmail, HttpError } from './_lib.js'
+import { route, client, body, usernameToEmail, HttpError } from '../lib.js'
 
 // POST /api/login  { "username": "...", "password": "..." }
 export default route({

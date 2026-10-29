@@ -1,4 +1,4 @@
-import { route, auth, check } from './_lib.js'
+import { route, auth, check } from '../lib.js'
 
 // GET /api/members  -> everyone in the group chat
 export default route({

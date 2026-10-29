@@ -1,4 +1,4 @@
-import { route, auth, body, broadcastTyping, userIdFor } from './_lib.js'
+import { route, auth, body, broadcastTyping, userIdFor } from '../lib.js'
 
 // POST /api/typing  { }                     -> "typing…" in the group chat
 // POST /api/typing  { "to": "mom" }         -> "typing…" in your private chat with mom

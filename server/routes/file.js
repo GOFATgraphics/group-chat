@@ -1,4 +1,4 @@
-import { route, auth, HttpError, BUCKET } from './_lib.js'
+import { route, auth, HttpError, BUCKET } from '../lib.js'
 
 // GET /api/file?path=<attachment path>  -> redirects to a 1-hour download link
 //   add &json=1 to get { "url": "..." } instead of a redirect
