@@ -114,6 +114,9 @@ const start = route({
 function explain(err) {
   const text = `${err?.message ?? err} ${err?.cause?.message ?? ''} ${JSON.stringify(err?.responseBody ?? err?.data ?? '')}`
   const status = err?.statusCode ?? err?.status ?? err?.cause?.statusCode
+  if (/only be minted with a Gateway API key/i.test(text)) {
+    return 'Live calls need an AI Gateway API key: create one in Vercel → AI Gateway → API Keys and add it to the project as AI_GATEWAY_API_KEY, then redeploy.'
+  }
   if (/insufficient|credit|balance|payment|billing|402/i.test(text) || status === 402) {
     return 'AI Gateway has no credits for live calls. Add credits in Vercel → AI Gateway.'
   }
