@@ -212,6 +212,8 @@ a { color: inherit; }
 
 .avatar {
   border-radius: 50%;
+  object-fit: cover;
+  background: var(--gray-bubble);
   display: inline-grid;
   place-items: center;
   color: #fff;
@@ -610,6 +612,43 @@ video.media { cursor: default; }
   font-weight: 600;
   font-size: 16px;
 }
+.my-photo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+.my-photo-avatar {
+  position: relative;
+  border: 0;
+  padding: 0;
+  background: none;
+  border-radius: 50%;
+}
+.my-photo-avatar .avatar { width: 84px; height: 84px; font-size: 34px; }
+.my-photo-busy {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  display: grid;
+  place-items: center;
+}
+.my-photo-name { font-size: 20px; font-weight: 600; }
+.my-photo-actions { display: flex; gap: 8px; }
+.my-photo-actions button {
+  border: 0;
+  border-radius: 999px;
+  padding: 6px 14px;
+  background: var(--bg);
+  color: var(--blue);
+  font-size: 15px;
+  font-weight: 500;
+}
+.my-photo-actions button.danger { color: var(--danger); }
+.my-photo-actions button:disabled { opacity: 0.5; }
+
 .member-list {
   list-style: none;
   margin: 0;

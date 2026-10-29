@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { supabase, BUCKET } from './supabase.js'
+import { supabase, BUCKET, AVATAR_BUCKET, avatarUrl } from './supabase.js'
 
 const PAGE_SIZE = 100
 const MAX_FILE_BYTES = 25 * 1024 * 1024
@@ -8,11 +8,13 @@ const TAPBACKS = ['❤️', '👍', '👎', '😂', '‼️', '❓', '🔥']
 const GROUP_WINDOW_MS = 5 * 60 * 1000
 const STAMP_GAP_MS = 15 * 60 * 1000
 const LONG_PRESS_MS = 450
+const AVATAR_PX = 256
 
 export default function Chat({ session }) {
   const myId = session.user.id
   const [me, setMe] = useState(undefined)
   const [profiles, setProfiles] = useState({})
+  const [avatars, setAvatars] = useState({})
   const [messages, setMessages] = useState([])
   const [reactions, setReactions] = useState({})
   const [urls, setUrls] = useState({})
@@ -58,9 +60,14 @@ export default function Chat({ session }) {
 
   const ensureProfile = useCallback(async (userId) => {
     if (profilesRef.current[userId]) return
-    const { data } = await supabase.from('profiles').select('id, username').eq('id', userId).single()
-    if (data) setProfiles((p) => ({ ...p, [data.id]: data.username }))
+    const { data } = await supabase.from('profiles').select('id, username, avatar_path').eq('id', userId).single()
+    if (data) applyProfile(data)
   }, [])
+
+  const applyProfile = (row) => {
+    setProfiles((p) => ({ ...p, [row.id]: row.username }))
+    setAvatars((a) => ({ ...a, [row.id]: avatarUrl(row.avatar_path) }))
+  }
 
   const addMessage = useCallback(
     (msg) => {
@@ -94,7 +101,7 @@ export default function Chat({ session }) {
     async function load() {
       const [{ data: meRow }, { data: profileRows }, { data: msgRows, error: msgErr }] = await Promise.all([
         supabase.from('profiles').select('id, username').eq('id', myId).maybeSingle(),
-        supabase.from('profiles').select('id, username'),
+        supabase.from('profiles').select('id, username, avatar_path'),
         supabase.from('messages').select('*').order('id', { ascending: false }).limit(PAGE_SIZE),
       ])
       if (cancelled) return
@@ -104,6 +111,7 @@ export default function Chat({ session }) {
 
       const rows = (msgRows ?? []).reverse()
       setProfiles(Object.fromEntries((profileRows ?? []).map((p) => [p.id, p.username])))
+      setAvatars(Object.fromEntries((profileRows ?? []).map((p) => [p.id, avatarUrl(p.avatar_path)])))
       setMessages(rows)
       setHasMore((msgRows ?? []).length === PAGE_SIZE)
       setLoading(false)
@@ -124,6 +132,9 @@ export default function Chat({ session }) {
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'reactions' }, ({ old: r }) =>
         applyReaction(r.message_id, r.user_id, r.emoji, false),
       )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, ({ new: row }) => {
+        if (row?.id) applyProfile(row)
+      })
       .on('presence', { event: 'sync' }, () => {
         const ids = new Set(Object.values(channel.presenceState()).flat().map((p) => p.user_id))
         setOnline([...ids])
@@ -232,6 +243,33 @@ export default function Chat({ session }) {
     }
   }
 
+  async function changeAvatar(file) {
+    setError('')
+    let blob
+    try {
+      blob = await squareImage(file, AVATAR_PX)
+    } catch {
+      return setError('That image could not be read. Try a JPEG or PNG.')
+    }
+    const path = `${myId}/${Date.now()}.jpg`
+    const { error: upErr } = await supabase.storage
+      .from(AVATAR_BUCKET)
+      .upload(path, blob, { contentType: 'image/jpeg' })
+    if (upErr) return setError(`Upload failed: ${upErr.message}`)
+    await setAvatarPath(path)
+  }
+
+  async function setAvatarPath(path) {
+    const { data: old } = await supabase.from('profiles').select('avatar_path').eq('id', myId).single()
+    const { error: err } = await supabase.from('profiles').update({ avatar_path: path }).eq('id', myId)
+    if (err) {
+      if (path) supabase.storage.from(AVATAR_BUCKET).remove([path])
+      return setError(err.message)
+    }
+    setAvatars((a) => ({ ...a, [myId]: avatarUrl(path) }))
+    if (old?.avatar_path && old.avatar_path !== path) supabase.storage.from(AVATAR_BUCKET).remove([old.avatar_path])
+  }
+
   async function deleteMessage(msg) {
     if (!window.confirm('Delete this message for everyone?')) return
     const { error: err } = await supabase.from('messages').delete().eq('id', msg.id)
@@ -268,7 +306,7 @@ export default function Chat({ session }) {
         <button className="topbar-center" onClick={() => setShowMembers(true)}>
           <span className="group-avatar">
             {headerFaces.map((id) => (
-              <Avatar key={id} name={profiles[id] ?? '?'} />
+              <Avatar key={id} name={profiles[id] ?? '?'} src={avatars[id]} />
             ))}
           </span>
           <span className="people-pill">
@@ -302,6 +340,7 @@ export default function Chat({ session }) {
               mine={item.msg.user_id === myId}
               myId={myId}
               username={profiles[item.msg.user_id] ?? '…'}
+              avatar={avatars[item.msg.user_id]}
               profiles={profiles}
               reactions={reactions[item.msg.id] ?? []}
               url={urls[item.msg.attachment_path]}
@@ -334,12 +373,18 @@ export default function Chat({ session }) {
                 Done
               </button>
             </div>
+            <MyPhoto
+              name={me.username}
+              src={avatars[myId]}
+              onPick={changeAvatar}
+              onRemove={() => setAvatarPath(null)}
+            />
             <ul className="member-list">
               {memberIds
                 .sort((a, b) => (profiles[a] ?? '').localeCompare(profiles[b] ?? ''))
                 .map((id) => (
                   <li key={id}>
-                    <Avatar name={profiles[id]} />
+                    <Avatar name={profiles[id]} src={avatars[id]} />
                     <span className="member-name">
                       {profiles[id]}
                       {id === myId && <span className="muted"> (you)</span>}
@@ -371,6 +416,7 @@ function Message({
   mine,
   myId,
   username,
+  avatar,
   profiles,
   reactions,
   url,
@@ -426,7 +472,7 @@ function Message({
     <div
       className={`row ${mine ? 'mine' : 'theirs'} ${first ? 'first' : ''} ${grouped.length ? 'has-tapback' : ''}`}
     >
-      {!mine && <div className="row-avatar">{last && <Avatar name={username} />}</div>}
+      {!mine && <div className="row-avatar">{last && <Avatar name={username} src={avatar} />}</div>}
       <div className="stack">
         {!mine && first && <div className="sender">{username}</div>}
         <div className="pieces" onClick={(e) => e.stopPropagation()} {...gestures}>
@@ -649,7 +695,43 @@ function Composer({ onSend }) {
   )
 }
 
-function Avatar({ name }) {
+function MyPhoto({ name, src, onPick, onRemove }) {
+  const input = useRef(null)
+  const [busy, setBusy] = useState(false)
+
+  async function pick(e) {
+    const f = e.target.files?.[0]
+    e.target.value = ''
+    if (!f) return
+    setBusy(true)
+    await onPick(f)
+    setBusy(false)
+  }
+
+  return (
+    <div className="my-photo">
+      <button className="my-photo-avatar" onClick={() => input.current.click()} aria-label="Change photo">
+        <Avatar name={name} src={src} />
+        {busy && <span className="my-photo-busy"><span className="spinner" /></span>}
+      </button>
+      <div className="my-photo-name">{name}</div>
+      <div className="my-photo-actions">
+        <button onClick={() => input.current.click()} disabled={busy}>
+          {src ? 'Change Photo' : 'Add Photo'}
+        </button>
+        {src && (
+          <button className="danger" onClick={onRemove} disabled={busy}>
+            Remove
+          </button>
+        )}
+      </div>
+      <input ref={input} type="file" accept="image/*" hidden onChange={pick} />
+    </div>
+  )
+}
+
+function Avatar({ name, src }) {
+  if (src) return <img className="avatar" src={src} alt="" />
   const hue = [...name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7)
   return (
     <span
@@ -725,6 +807,21 @@ function formatStamp(d) {
   if (d.toDateString() === yesterday.toDateString()) return { day: 'Yesterday', time }
   if (today - d < 6 * 24 * 60 * 60 * 1000) return { day: d.toLocaleDateString(undefined, { weekday: 'long' }), time }
   return { day: d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }), time: `at ${time}` }
+}
+
+// Center-crop an image file to a square JPEG of the given size.
+async function squareImage(file, size) {
+  const bitmap = await createImageBitmap(file)
+  const side = Math.min(bitmap.width, bitmap.height)
+  const canvas = document.createElement('canvas')
+  canvas.width = canvas.height = size
+  canvas
+    .getContext('2d')
+    .drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, size, size)
+  bitmap.close()
+  return new Promise((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('encode failed'))), 'image/jpeg', 0.88),
+  )
 }
 
 function formatSize(bytes) {

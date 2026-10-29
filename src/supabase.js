@@ -14,3 +14,8 @@ export const BUCKET = 'chat-files'
 // Supabase Auth signs in with an email, so each username maps to an internal
 // address. Keep in sync with public.create_chat_user() in the migration.
 export const usernameToEmail = (username) => `${username.trim().toLowerCase()}@chat.local`
+
+export const AVATAR_BUCKET = 'avatars'
+
+export const avatarUrl = (path) =>
+  path ? supabase.storage.from(AVATAR_BUCKET).getPublicUrl(path).data.publicUrl : null

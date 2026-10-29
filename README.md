@@ -6,6 +6,7 @@ One shared group chat for a closed set of people. Built with React (Vite), Supab
 - Log in with a username and password given to you by the admin (no public sign-up)
 - Send messages, photos/videos and any file (up to 25 MB), with paste and drag-and-drop
 - React to messages with emoji; delete your own messages
+- Set a profile photo (tap **N People** at the top → Add Photo)
 - Live updates and an online count
 
 ## Managing users (admin)
@@ -34,7 +35,7 @@ Even with sign-up left on, accounts not created by `create_chat_user` can't read
 
 ## Setup from scratch
 
-1. Run `supabase/migrations/0001_group_chat.sql` in your Supabase project's SQL editor.
+1. Run the files in `supabase/migrations/` in order in your Supabase project's SQL editor.
 2. Copy `.env.example` to `.env.local` and fill in the project URL and publishable (anon) key.
 3. `npm install && npm run dev`
 4. On Vercel, import the repo and set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
