@@ -87,6 +87,11 @@ export default function Chat({ session }) {
   // writes a row for the sender themselves), so a sender's ticks are
   // computed from the other participants' rows only.
   const [reads, setReads] = useState({})
+  // message_id -> { user_id: read_at }, for "Read 10:09" under your latest message.
+  const [readTimes, setReadTimes] = useState({})
+  // Messages that arrived while the app was in the background: marked as
+  // read only once the screen is actually showing them.
+  const pendingReadsRef = useRef([])
   // Messages already marked as read this session, so marking runs once
   // per message even if the same page is reloaded by realtime updates.
   const markedReadRef = useRef(new Set())
@@ -141,7 +146,12 @@ export default function Chat({ session }) {
   // empty bucket, so its ticks correctly stay grey.
   const loadReads = useCallback(async (ids) => {
     if (!ids.length) return
-    const { data } = await supabase.from('message_reads').select('message_id, user_id').in('message_id', ids)
+    const { data } = await supabase.from('message_reads').select('message_id, user_id, read_at').in('message_id', ids)
+    setReadTimes((prev) => {
+      const next = { ...prev }
+      for (const r of data ?? []) next[r.message_id] = { ...(next[r.message_id] ?? {}), [r.user_id]: r.read_at }
+      return next
+    })
     setReads((prev) => {
       const next = { ...prev }
       for (const id of ids) next[id] = []
@@ -209,12 +219,18 @@ export default function Chat({ session }) {
         (m) => m && m.user_id !== myId && isMessageForView(m, v) && !markedReadRef.current.has(m.id),
       )
       if (!todo.length) return
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+        pendingReadsRef.current.push(...todo)
+        return
+      }
       for (const m of todo) markedReadRef.current.add(m.id)
+      // ignoreDuplicates: insert-or-skip. A plain upsert tries to UPDATE an
+      // existing row, which the read policies don't allow (it failed with 403).
       supabase
         .from('message_reads')
         .upsert(
           todo.map((m) => ({ message_id: m.id, user_id: myId })),
-          { onConflict: 'message_id,user_id' },
+          { onConflict: 'message_id,user_id', ignoreDuplicates: true },
         )
         .then(() => {})
         .catch(() => {})
@@ -746,10 +762,88 @@ export default function Chat({ session }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me, view])
 
+  // ---- never miss a message --------------------------------------------------
+  // Phones cut the realtime connection whenever the app is in the background
+  // or the network blips, and messages sent meanwhile are not replayed. So:
+  // after every (re)connect, whenever the app comes back to the screen or
+  // back online, and every few seconds while it is open, fetch everything
+  // newer than the last message seen and run it through the live handler.
+  const seenIdsRef = useRef(new Set())
+  const lastIdRef = useRef(null)
+  const incomingRef = useRef(null)
+  const catchingUpRef = useRef(false)
+  const messagesRef = useRef(messages)
+  messagesRef.current = messages
+
   useEffect(() => {
-    const channel = supabase
-      .channel('group-chat')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, ({ new: m }) => {
+    if (!myId) return
+    supabase
+      .from('messages')
+      .select('id')
+      .order('id', { ascending: false })
+      .limit(1)
+      .then(({ data }) => {
+        if (lastIdRef.current == null) lastIdRef.current = data?.[0]?.id ?? 0
+      })
+  }, [myId])
+
+  const catchUp = useCallback(async () => {
+    if (catchingUpRef.current || lastIdRef.current == null) return
+    catchingUpRef.current = true
+    try {
+      for (let page = 0; page < 5; page++) {
+        const { data, error: err } = await supabase
+          .from('messages')
+          .select('*')
+          .gt('id', lastIdRef.current)
+          .order('id')
+          .limit(100)
+        if (err || !data?.length) break
+        for (const m of data) incomingRef.current?.(m)
+        if (data.length < 100) break
+      }
+    } finally {
+      catchingUpRef.current = false
+    }
+  }, [])
+
+  // Read receipts can be missed the same way; refresh them for your own
+  // messages in view.
+  const refreshReads = useCallback(() => {
+    const own = messagesRef.current.filter((m) => m.user_id === myId).map((m) => m.id)
+    if (own.length) loadReads(own.slice(-50))
+  }, [myId, loadReads])
+
+  useEffect(() => {
+    const onBack = () => {
+      if (document.visibilityState !== 'visible') return
+      catchUp()
+      refreshReads()
+      const pending = pendingReadsRef.current
+      pendingReadsRef.current = []
+      if (pending.length) markAsRead(pending)
+    }
+    document.addEventListener('visibilitychange', onBack)
+    window.addEventListener('focus', onBack)
+    window.addEventListener('online', onBack)
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') catchUp()
+    }, 4000)
+    return () => {
+      document.removeEventListener('visibilitychange', onBack)
+      window.removeEventListener('focus', onBack)
+      window.removeEventListener('online', onBack)
+      clearInterval(timer)
+    }
+  }, [catchUp, refreshReads, markAsRead])
+
+  useEffect(() => {
+    // One handler for every new message, whether it came live over the
+    // realtime channel or from catchUp() after the connection dropped.
+    const onInsert = (m) => {
+        if (seenIdsRef.current.has(m.id)) return
+        seenIdsRef.current.add(m.id)
+        if (lastIdRef.current == null || m.id > lastIdRef.current) lastIdRef.current = m.id
         clearTyping(m.user_id)
         const peer = dmPeerOf(m)
         if (peer) {
@@ -796,17 +890,23 @@ export default function Chat({ session }) {
         if (m.user_id !== myId) playReceive()
         addMessage(m)
         markAsRead([m])
-      })
+    }
+    incomingRef.current = onInsert
+
+    const channel = supabase
+      .channel('group-chat')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, ({ new: m }) => onInsert(m))
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, ({ old }) =>
         setMessages((prev) => prev.filter((m) => m.id !== old.id)),
       )
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_reads' }, ({ new: r }) =>
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_reads' }, ({ new: r }) => {
+        setReadTimes((prev) => ({ ...prev, [r.message_id]: { ...(prev[r.message_id] ?? {}), [r.user_id]: r.read_at } }))
         setReads((prev) => {
           const list = prev[r.message_id] ?? []
           if (list.includes(r.user_id)) return prev
           return { ...prev, [r.message_id]: [...list, r.user_id] }
-        }),
-      )
+        })
+      })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reactions' }, ({ new: r }) =>
         applyReaction(r.message_id, r.user_id, r.emoji, true),
       )
@@ -826,13 +926,19 @@ export default function Chat({ session }) {
         setOnline([...ids])
       })
       .subscribe((status) => {
-        if (status === 'SUBSCRIBED') channel.track({ user_id: myId })
+        if (status === 'SUBSCRIBED') {
+          channel.track({ user_id: myId })
+          // (Re)connected: fetch anything sent while the connection was down.
+          catchUp()
+          refreshReads()
+        }
       })
 
     return () => {
+      incomingRef.current = null
       supabase.removeChannel(channel)
     }
-  }, [myId, addMessage, applyReaction, dmPeerOf, addDmPeer, addOwnerPair, ensureProfile, isMessageForView, notify, markAsRead])
+  }, [myId, catchUp, refreshReads, addMessage, applyReaction, dmPeerOf, addDmPeer, addOwnerPair, ensureProfile, isMessageForView, notify, markAsRead])
 
   async function loadOlder() {
     const oldest = messages[0]
@@ -1040,6 +1146,35 @@ export default function Chat({ session }) {
     )
   }
 
+  // iMessage-style status under your latest message: "Delivered", or
+  // "Read 10:09" in a private chat / "Read by …" in the group.
+  // (Plain code, not a hook: this runs after the early returns above.)
+  let lastOwnId = null
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].user_id === myId) {
+      lastOwnId = messages[i].id
+      break
+    }
+  }
+
+  function readStatus(msg) {
+    const readers = (reads[msg.id] ?? []).filter((id) => id !== myId)
+    const times = readTimes[msg.id] ?? {}
+    const latest = readers
+      .map((id) => times[id])
+      .filter(Boolean)
+      .sort()
+      .at(-1)
+    const time = latest ? formatReadTime(latest) : ''
+    if (view.type === 'group') {
+      if (!readers.length) return { label: 'Delivered' }
+      const others = Object.keys(profiles).filter((id) => id !== myId)
+      if (others.length && others.every((id) => readers.includes(id))) return { label: 'Read by everyone', time, read: true }
+      return { label: `Read by ${readers.map((id) => profiles[id] ?? 'someone').join(', ')}`, time, read: true }
+    }
+    return readers.includes(view.peerId) ? { label: 'Read', time, read: true } : { label: 'Delivered' }
+  }
+
   const memberIds = Object.keys(profiles)
   // Everyone else in the group, used only for the read-receipt rule:
   // a group message is blue only once every one of these has read it.
@@ -1160,6 +1295,7 @@ export default function Chat({ session }) {
                     : false)
               }
               readOnly={isOwnerView}
+              status={!isOwnerView && item.msg.id === lastOwnId ? readStatus(item.msg) : null}
               replyOriginal={item.msg.reply_to_id ? originals.get(item.msg.reply_to_id) ?? null : undefined}
               onReply={() => startReply(item.msg)}
               highlightMentions={isGroup}
@@ -1476,8 +1612,29 @@ function Message({
   onMediaLoad,
   replyOriginal,
   onReply,
+  status = null,
 }) {
   const pressTimer = useRef(null)
+  const [copied, setCopied] = useState(false)
+
+  // Copy from the long-press menu (on phones the bubble text itself can't be
+  // selected, because a long press opens the menu).
+  async function copy() {
+    const text = msg.content?.trim() ? msg.content : url ?? ''
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      const area = document.createElement('textarea')
+      area.value = text
+      document.body.appendChild(area)
+      area.select()
+      document.execCommand('copy')
+      area.remove()
+    }
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1200)
+  }
   // Swipe-to-reply: a rightward drag on touch. The threshold and the
   // horizontal-dominance check are the accidental-swipe guards: a small
   // drag does nothing, and a mostly vertical drag (scrolling) never
@@ -1699,6 +1856,16 @@ function Message({
                 })}
               </div>
               <div className="msg-menu">
+                {(msg.content?.trim() || url) && (
+                  <button
+                    onClick={() => {
+                      onClosePicker()
+                      copy()
+                    }}
+                  >
+                    {msg.content?.trim() ? 'Copy' : 'Copy link'}
+                  </button>
+                )}
                 <button
                   onClick={() => {
                     onClosePicker()
@@ -1722,19 +1889,33 @@ function Message({
             </>
           )}
         </div>
-        {mine && !readOnly && (
-          <div className="ticks" aria-label={read ? 'Read' : 'Sent'}>
-            <span className="ticks-time">
-              {new Date(msg.created_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
-            </span>
+        <div className="ticks" aria-label={mine && !readOnly ? (read ? 'Read' : 'Delivered') : undefined}>
+          {copied && <span className="copied-flash">Copied</span>}
+          <span className="ticks-time">
+            {new Date(msg.created_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
+          </span>
+          {mine && !readOnly && (
             <span className={`ticks-marks ${read ? 'read' : ''}`} aria-hidden="true">
               ✓✓
             </span>
+          )}
+        </div>
+        {status && (
+          <div className={`read-status ${status.read ? 'read' : ''}`}>
+            <b>{status.label}</b>
+            {status.time ? ` ${status.time}` : ''}
           </div>
         )}
       </div>
     </div>
   )
+}
+
+function formatReadTime(iso) {
+  const d = new Date(iso)
+  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  if (d.toDateString() === new Date().toDateString()) return time
+  return `${d.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`
 }
 
 function Composer({ onSend, placeholder = 'Message', enableMentions = false, members = [], viewKey = '', onTyping }) {

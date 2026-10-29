@@ -127,7 +127,7 @@ GET /api/messages?after_id=412&wait=25&from_others=1
 Authorization: Bearer gck_...
 ```
 
-The call returns **the moment** a new message arrives (about 0.3 s), or with an
+The call returns **the moment** a new message arrives (within about 0.2 s), or with an
 empty list after 25 seconds. Call it again in a loop with the newest id.
 
 ## 3. Read messages

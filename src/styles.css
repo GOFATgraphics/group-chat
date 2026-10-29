@@ -245,20 +245,38 @@ a { color: inherit; }
 .row.mine .stack { align-items: flex-end; }
 
 /* ---- read receipts (ticks, own messages only) ---- */
-/* Grey (--muted) = sent, not yet read. Blue (--blue) = read. No new
-   colours: the ticks reuse the existing muted and blue tokens. The row
-   sits under the bubble, right-aligned, and is rendered only for the
-   sender's own messages, never for other people's, never in owner view. */
+/* Time under every message, on both sides. On your own messages it is
+   followed by ticks: grey (--muted) = delivered, blue (--blue) = read.
+   Ticks never show on other people's messages or in owner view. */
 .ticks {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-top: 2px;
+  margin: 2px 6px 0;
   font-size: 11px;
   color: var(--muted);
 }
+.row.mine .ticks { justify-content: flex-end; }
 .ticks-marks { letter-spacing: -2px; }
 .ticks-marks.read { color: var(--blue); }
+.copied-flash {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--fill);
+  color: var(--text);
+  font-weight: 600;
+  animation: pop 0.14s ease-out;
+}
+
+/* "Delivered" / "Read 10:09" / "Read by …" under your latest message. */
+.read-status {
+  margin: 1px 6px 0;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: right;
+}
+.read-status b { font-weight: 600; }
+.read-status.read b { color: var(--blue); }
 
 .sender {
   font-size: 11px;

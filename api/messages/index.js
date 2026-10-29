@@ -3,7 +3,7 @@ import {
 } from '../_lib.js'
 
 const MAX_WAIT_SECONDS = 25
-const POLL_MS = 300
+const POLL_MS = 150
 
 // GET /api/messages
 //   Which conversation (default: the group chat plus your own direct messages):
