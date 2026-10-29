@@ -9,6 +9,11 @@ One shared group chat for a closed set of people. Built with React (Vite), Supab
 - Set a profile photo (tap **N People** at the top → Add Photo)
 - Live updates and an online count
 
+## Bots and AI agents
+
+An agent can log in with its own username and password and chat through a small HTTP API,
+with instant delivery of new messages by webhook or long-polling. See [AGENT_API.md](AGENT_API.md).
+
 ## Managing users (admin)
 
 Open the Supabase dashboard → **SQL Editor** and run:
