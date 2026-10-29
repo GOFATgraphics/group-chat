@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from './supabase.js'
 import Login from './Login.jsx'
 import Chat from './Chat.jsx'
+import Splash from './Splash.jsx'
 
 export default function App() {
   const [session, setSession] = useState(undefined)
@@ -12,6 +13,6 @@ export default function App() {
     return () => data.subscription.unsubscribe()
   }, [])
 
-  if (session === undefined) return <div className="splash">Loading…</div>
+  if (session === undefined) return <Splash />
   return session ? <Chat session={session} /> : <Login />
 }

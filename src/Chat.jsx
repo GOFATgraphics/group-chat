@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { supabase, BUCKET, AVATAR_BUCKET, avatarUrl } from './supabase.js'
+import Splash from './Splash.jsx'
 import { playPop, playReceive, playSend, setSoundsEnabled, soundsEnabled, unlockAudio } from './sounds.js'
 
 const PAGE_SIZE = 100
@@ -302,7 +303,7 @@ export default function Chat({ session }) {
 
   const items = useMemo(() => buildItems(messages), [messages])
 
-  if (me === undefined) return <div className="splash">Loading…</div>
+  if (me === undefined) return <Splash />
   if (me === null) {
     return (
       <div className="login-page">

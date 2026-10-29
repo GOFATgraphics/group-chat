@@ -52,12 +52,6 @@ a { color: inherit; }
 
 .muted { color: var(--muted); }
 
-.splash {
-  height: 100%;
-  display: grid;
-  place-items: center;
-  color: var(--muted);
-}
 
 /* ---- login ---- */
 

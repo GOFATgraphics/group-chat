@@ -12,10 +12,70 @@
     <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="preload" as="image" href="/logo-192.png" />
     <title>Group Chat</title>
+    <style>
+      /* Loading screen: inline so it paints before the app's JS and CSS arrive. */
+      html, body { margin: 0; height: 100%; background: #fff; }
+      @media (prefers-color-scheme: dark) { html, body { background: #000; } }
+      .splash {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', system-ui, sans-serif;
+        color: #8e8e93;
+        animation: splash-in 0.3s ease-out both;
+      }
+      .splash-logo {
+        width: 96px;
+        height: 96px;
+        filter: drop-shadow(0 8px 24px rgba(11, 132, 254, 0.28));
+        animation: splash-breathe 1.8s ease-in-out infinite;
+      }
+      .splash-name { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; color: #000; }
+      .splash-typing {
+        display: flex;
+        gap: 5px;
+        padding: 12px 15px;
+        border-radius: 19px;
+        background: #e9e9eb;
+      }
+      .splash-typing span {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #8e8e93;
+        animation: splash-dot 1.2s ease-in-out infinite;
+      }
+      .splash-typing span:nth-child(2) { animation-delay: 0.15s; }
+      .splash-typing span:nth-child(3) { animation-delay: 0.3s; }
+      @media (prefers-color-scheme: dark) {
+        .splash-name { color: #fff; }
+        .splash-typing { background: #262628; }
+      }
+      @keyframes splash-in { from { opacity: 0; } }
+      @keyframes splash-breathe { 50% { transform: scale(1.06); } }
+      @keyframes splash-dot {
+        0%, 60%, 100% { opacity: 0.35; transform: translateY(0); }
+        30% { opacity: 1; transform: translateY(-3px); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .splash-logo, .splash-typing span { animation: none; }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="splash" role="status" aria-label="Loading">
+        <img class="splash-logo" src="/logo-192.png" alt="" />
+        <div class="splash-name">Group Chat</div>
+        <div class="splash-typing"><span></span><span></span><span></span></div>
+      </div>
+    </div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
