@@ -1278,6 +1278,21 @@ export default function Chat({ session }) {
   }
 
   const memberIds = Object.keys(profiles)
+  const hasUnread = Object.values(unread).some((n) => n > 0)
+  const typingNames = typing.typers.map((id) => profiles[id]).filter(Boolean)
+  const headerTyping = typingNames.length > 0
+  const headerSubtitle = headerTyping
+    ? isGroup
+      ? `${typingNames.join(', ')} ${typingNames.length > 1 ? 'are' : 'is'} typing…`
+      : 'typing…'
+    : isGroup
+      ? `${Object.keys(profiles).length} people${online.length ? ` · ${online.length} online` : ''}`
+      : isOwnerView
+        ? 'Owner view · read only'
+        : online.includes(peerId)
+          ? 'Online'
+          : 'Private chat'
+
   // Everyone else in the group, used only for the read-receipt rule:
   // a group message is blue only once every one of these has read it.
   const otherMemberIds = memberIds.filter((id) => id !== myId)
@@ -1305,54 +1320,46 @@ export default function Chat({ session }) {
   return (
     <div className="chat">
       <header className="topbar">
+        {/* Round glass buttons, iOS style: ☰ chats (blue dot = unread) or ‹ back,
+            and ⋯ for people & settings. */}
         {isGroup ? (
-          <button className="topbar-btn left" onClick={() => setShowPanel(true)} aria-label="Open chats">
-            ☰ Chats
+          <button className="glass-btn left" onClick={() => setShowPanel(true)} aria-label={hasUnread ? 'Open chats (unread messages)' : 'Open chats'}>
+            <MenuIcon />
+            {hasUnread && <span className="glass-dot" />}
           </button>
         ) : (
-          <>
-            <button className="topbar-btn left" onClick={openGroup} aria-label="Back to Group Chat">
-              ‹ Back
-            </button>
-            <button className="topbar-btn right" onClick={() => setShowPanel(true)} aria-label="Open chats">
-              ☰ Chats
-            </button>
-          </>
+          <button className="glass-btn left" onClick={openGroup} aria-label="Back to Group Chat">
+            <BackIcon />
+          </button>
         )}
         {isGroup ? (
-          <button className="topbar-center" onClick={() => setShowMembers(true)}>
-            <span className="group-avatar">
-              {headerFaces.map((id) => (
-                <Avatar key={id} name={profiles[id] ?? '?'} src={avatars[id]} />
-              ))}
-            </span>
-            <span className="people-pill">
-              {memberIds.length} People <Chevron />
-            </span>
-          </button>
-        ) : isOwnerView ? (
-          <button className="topbar-center" onClick={() => setShowMembers(true)}>
-            <span className="group-avatar">
-              <Avatar name={ownerNameA} src={avatars[ownerA]} />
-              <Avatar name={ownerNameB} src={avatars[ownerB]} />
-            </span>
-            <span className="people-pill">{ownerPairLabel}</span>
+          <button className="glass-btn right" onClick={() => setShowMembers(true)} aria-label="People and settings">
+            <DotsIcon />
           </button>
         ) : (
-          <button className="topbar-center" onClick={() => setShowMembers(true)}>
-            <span className="group-avatar">
+          <button className="glass-btn right" onClick={() => setShowPanel(true)} aria-label={hasUnread ? 'Open chats (unread messages)' : 'Open chats'}>
+            <MenuIcon />
+            {hasUnread && <span className="glass-dot" />}
+          </button>
+        )}
+        <button className="topbar-center" onClick={() => setShowMembers(true)}>
+          <span className={`topbar-avatar ${isOwnerView ? 'pair' : ''}`}>
+            {isGroup ? (
+              <img src="/logo-192.png" alt="" />
+            ) : isOwnerView ? (
+              <>
+                <Avatar name={ownerNameA} src={avatars[ownerA]} />
+                <Avatar name={ownerNameB} src={avatars[ownerB]} />
+              </>
+            ) : (
               <Avatar name={peerName} src={avatars[peerId]} />
-            </span>
-            <span className="people-pill">{peerName}</span>
-          </button>
-        )}
-        <div className="topbar-sub">
-          {isGroup
-            ? `Group Chat${online.length > 0 ? ` · ${online.length} online` : ''}`
-            : isOwnerView
-              ? `Owner view · ${ownerPairLabel}`
-              : `Private chat · only you and ${peerName}`}
-        </div>
+            )}
+          </span>
+          <span className="glass-pill">
+            <span className="pill-title">{isGroup ? 'Group Chat' : isOwnerView ? ownerPairLabel : peerName}</span>
+            <span className={`pill-sub ${headerTyping ? 'typing' : ''}`}>{headerSubtitle}</span>
+          </span>
+        </button>
       </header>
 
       <main className="messages" ref={listRef} onScroll={onScroll} onClick={() => setPickerFor(null)}>
@@ -2074,6 +2081,24 @@ function Message({
     </div>
   )
 }
+
+const MenuIcon = () => (
+  <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+    <path d="M4 7h16M4 12h16M4 17h11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+  </svg>
+)
+const BackIcon = () => (
+  <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+    <path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+)
+const DotsIcon = () => (
+  <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+    <circle cx="5.5" cy="12" r="1.9" fill="currentColor" />
+    <circle cx="12" cy="12" r="1.9" fill="currentColor" />
+    <circle cx="18.5" cy="12" r="1.9" fill="currentColor" />
+  </svg>
+)
 
 // Circular progress over a photo/video while it uploads.
 function UploadRing({ progress }) {
