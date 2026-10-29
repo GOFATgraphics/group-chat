@@ -3,6 +3,7 @@ import { supabase, BUCKET, AVATAR_BUCKET, avatarUrl } from './supabase.js'
 import Splash from './Splash.jsx'
 import ApiKeys from './ApiKeys.jsx'
 import { useTyping } from './typing.js'
+import { VoicePlayer, VoiceRecorder, MicIcon, canRecordVoice, formatDuration } from './Voice.jsx'
 import { playPop, playReceive, playSend, setSoundsEnabled, soundsEnabled, unlockAudio } from './sounds.js'
 
 const PAGE_SIZE = 100
@@ -309,6 +310,7 @@ export default function Chat({ session }) {
     if (m.attachment_path) {
       if (m.attachment_type?.startsWith('image/')) return 'sent a photo'
       if (m.attachment_type?.startsWith('video/')) return 'sent a video'
+      if (m.attachment_type?.startsWith('audio/')) return 'sent a voice note'
       return 'sent a file'
     }
     return 'sent a message'
@@ -366,6 +368,7 @@ export default function Chat({ session }) {
     if (m.attachment_path) {
       if (m.attachment_type?.startsWith('image/')) return 'photo'
       if (m.attachment_type?.startsWith('video/')) return 'video'
+      if (m.attachment_type?.startsWith('audio/')) return 'voice note'
       return 'file'
     }
     return 'message'
@@ -1022,7 +1025,7 @@ export default function Chat({ session }) {
 
   // ---- actions -------------------------------------------------------------
 
-  async function send({ text, file }) {
+  async function send({ text, file, duration }) {
     // Owner view is read-only; the composer is hidden there, and this is
     // the second line of defence if send is ever called from that view.
     if (viewRef.current.type === 'owner') return false
@@ -1072,6 +1075,7 @@ export default function Chat({ session }) {
         attachment_name: file.name,
         attachment_type: file.type || null,
         attachment_size: file.size,
+        ...(file.type?.startsWith('audio/') && duration ? { attachment_duration: duration } : {}),
       }
     }
     const { data, error: insErr } = await supabase
@@ -1462,6 +1466,7 @@ export default function Chat({ session }) {
               .map((id) => ({ id, username: profiles[id], avatar: avatars[id] }))}
             viewKey={isGroup ? 'group' : `dm:${peerId}`}
             onTyping={typing.notify}
+            onVoiceError={setError}
           />
         </>
       )}
@@ -1765,7 +1770,8 @@ function Message({
   const isImage = msg.attachment_type?.startsWith('image/')
   const isVideo = msg.attachment_type?.startsWith('video/')
   const isMedia = msg.attachment_path && (isImage || isVideo)
-  const isFile = msg.attachment_path && !isMedia
+  const isVoice = msg.attachment_path && msg.attachment_type?.startsWith('audio/')
+  const isFile = msg.attachment_path && !isMedia && !isVoice
 
   const grouped = useMemo(() => {
     const map = new Map()
@@ -1815,6 +1821,7 @@ function Message({
     if (m.attachment_path) {
       if (m.attachment_type?.startsWith('image/')) return 'photo'
       if (m.attachment_type?.startsWith('video/')) return 'video'
+      if (m.attachment_type?.startsWith('audio/')) return 'voice note'
       return 'file'
     }
     return 'message'
@@ -1871,6 +1878,11 @@ function Message({
             ) : (
               <div className="media placeholder" />
             ))}
+          {isVoice && (
+            <div className={`bubble voice ${tail(!msg.content)}`} aria-label={`Voice note, ${formatDuration(msg.attachment_duration)}`}>
+              <VoicePlayer url={url} duration={msg.attachment_duration} seed={msg.attachment_path} />
+            </div>
+          )}
           {isFile && (
             <a
               className={`bubble file ${tail(!msg.content)}`}
@@ -2035,12 +2047,13 @@ function formatReadTime(iso) {
   return `${d.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`
 }
 
-function Composer({ onSend, placeholder = 'Message', enableMentions = false, members = [], viewKey = '', onTyping }) {
+function Composer({ onSend, placeholder = 'Message', enableMentions = false, members = [], viewKey = '', onTyping, onVoiceError }) {
   const [text, setText] = useState('')
   const [file, setFile] = useState(null)
   const [preview, setPreview] = useState(null)
   const [busy, setBusy] = useState(false)
   const [menu, setMenu] = useState(false)
+  const [recording, setRecording] = useState(false)
   // Mention picker state, group chat only. `at` is the index of the '@'
   // being typed, `query` is the text after it, `active` is the keyboard
   // highlight. Null means no picker is open.
@@ -2185,6 +2198,19 @@ function Composer({ onSend, placeholder = 'Message', enableMentions = false, mem
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) submit(e)
   }
 
+  if (recording) {
+    return (
+      <div className="composer">
+        <VoiceRecorder
+          onSend={onSend}
+          onCancel={() => setRecording(false)}
+          onError={onVoiceError}
+          onTyping={onTyping}
+        />
+      </div>
+    )
+  }
+
   return (
     <form
       className="composer"
@@ -2289,6 +2315,18 @@ function Composer({ onSend, placeholder = 'Message', enableMentions = false, mem
               onPointerDown={(e) => e.preventDefault()}
             >
               {busy ? <span className="spinner" /> : <ArrowUpIcon />}
+            </button>
+          ) : canRecordVoice() ? (
+            <button
+              type="button"
+              className="mic-btn"
+              aria-label="Record a voice note"
+              onClick={() => {
+                setMenu(false)
+                setRecording(true)
+              }}
+            >
+              <MicIcon />
             </button>
           ) : null}
         </div>

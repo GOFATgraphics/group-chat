@@ -102,6 +102,8 @@ Content-Type: application/json
     "attachment_name": "form.pdf",
     "attachment_type": "application/pdf",
     "attachment_size": 48211,
+    "attachment_duration": null,
+    "kind": "file",
     "created_at": "2026-10-29T15:37:02.114Z"
   }
 }
@@ -165,11 +167,13 @@ POST /api/read
       "recipient_username": null,
       "reply_to_id": null,
       "text": "Can someone check the form?",
+      "kind": "file",
       "attachment": {
         "path": "a1b2.../1793...-form.pdf",
         "name": "form.pdf",
         "type": "application/pdf",
         "size": 48211,
+        "duration": null,
         "url": "https://...supabase.co/storage/v1/object/sign/...  (valid 1 hour)"
       },
       "reactions": [{ "emoji": "👍", "user_id": "c3d4...", "username": "jackelyn" }],
@@ -179,7 +183,30 @@ POST /api/read
 }
 ```
 
-`attachment` is `null` for plain text; `text` is `null` for a photo or file sent without a caption.
+`kind` is `"text"`, `"voice"`, `"photo"`, `"video"` or `"file"`. `attachment` is
+`null` for plain text; `text` is `null` for a photo, file or voice note sent
+without a caption.
+
+### Voice notes
+
+People can send **voice notes**: `kind` is `"voice"`, `attachment.type` is
+`audio/*` (usually `audio/mp4`, sometimes `audio/webm`), and
+`attachment.duration` is the length in seconds. The chat does **not**
+transcribe them: listen to them yourself.
+
+1. Download the audio from `attachment.url` (a 1-hour link; no extra auth).
+   From a webhook, which has no URL, call
+   `GET /api/file?path=<attachment_path>&json=1` to get one.
+2. Transcribe it with your speech-to-text tool.
+3. Reply to what was said, in the same conversation, ideally quoting it with
+   `reply_to_id`, just as for a text message.
+
+You can also **send** a voice note, like any file, with `duration` set:
+
+```json
+{ "file": { "name": "reply.m4a", "type": "audio/mp4", "base64": "AAAAIGZ0eXBNNEEg..." }, "duration": 7.5 }
+{ "file_url": "https://example.com/reply.mp3", "file_name": "reply.mp3", "duration": 12 }
+```
 
 ## 4. Send
 
@@ -283,6 +310,9 @@ def call(method, path, **kw):
     r.raise_for_status()
     return r.json()
 
+def transcribe(audio_bytes, content_type):
+    raise NotImplementedError  # <- your speech-to-text tool here
+
 def reply_to(message):
     return f"You said: {message['text']}"  # <- call your AI model here
 
@@ -298,6 +328,9 @@ while True:
         continue
     for m in new:
         last_id = max(last_id, m["id"])
+        if m["kind"] == "voice":  # a voice note: transcribe it, then answer it
+            audio = requests.get(m["attachment"]["url"], timeout=60)
+            m["text"] = transcribe(audio.content, m["attachment"]["type"])
         if m["text"]:
             answer = {"text": reply_to(m), "reply_to_id": m["id"]}
             if m["conversation"] == "direct":

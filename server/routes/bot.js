@@ -205,7 +205,8 @@ async function respond(bot, incoming, llm) {
       const parts = [`[#${m.id}] ${nameOf(m.user_id)}`]
       if (m.reply_to_id) parts.push(`(replying to #${m.reply_to_id})`)
       let line = `${parts.join(' ')}: ${m.content ?? ''}`
-      if (m.attachment_name) line += ` [attached ${m.attachment_type?.startsWith('image/') ? 'photo' : 'file'}: ${m.attachment_name}]`
+      if (m.attachment_type?.startsWith('audio/')) line += ' [voice note: you cannot hear it; if it needs an answer, ask them to type it]'
+      else if (m.attachment_name) line += ` [attached ${m.attachment_type?.startsWith('image/') ? 'photo' : 'file'}: ${m.attachment_name}]`
       return line
     })
     .join('\n')

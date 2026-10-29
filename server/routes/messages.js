@@ -101,6 +101,9 @@ export default route({
         attachment_name: file.name,
         attachment_type: file.type,
         attachment_size: file.bytes.length,
+        ...(file.type.startsWith('audio/') && Number(b.duration ?? b.file?.duration) > 0
+          ? { attachment_duration: Number(b.duration ?? b.file?.duration) }
+          : {}),
       }
     }
 

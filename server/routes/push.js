@@ -95,6 +95,7 @@ function preview(m) {
   if (text) return text.length > 140 ? `${text.slice(0, 139)}…` : text
   if (m.attachment_type?.startsWith('image/')) return 'sent a photo'
   if (m.attachment_type?.startsWith('video/')) return 'sent a video'
+  if (m.attachment_type?.startsWith('audio/')) return '🎤 Voice note'
   if (m.attachment_name) return `sent a file: ${m.attachment_name}`
   return 'New message'
 }

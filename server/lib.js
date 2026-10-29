@@ -178,12 +178,14 @@ export async function present(sb, rows) {
     recipient_username: m.recipient_id ? names[m.recipient_id] ?? null : null,
     reply_to_id: m.reply_to_id ?? null,
     text: m.content,
+    kind: kindOf(m),
     attachment: m.attachment_path
       ? {
           path: m.attachment_path,
           name: m.attachment_name,
           type: m.attachment_type,
           size: m.attachment_size,
+          duration: m.attachment_duration ?? null,
           url: urls[m.attachment_path] ?? null,
         }
       : null,
@@ -192,6 +194,16 @@ export async function present(sb, rows) {
       .map((r) => ({ emoji: r.emoji, user_id: r.user_id, username: names[r.user_id] ?? null })),
     created_at: m.created_at,
   }))
+}
+
+// "text", "voice" (a voice note: transcribe attachment.url yourself), "photo",
+// "video" or "file".
+export function kindOf(m) {
+  const t = m.attachment_type ?? ''
+  if (t.startsWith('audio/')) return 'voice'
+  if (t.startsWith('image/')) return 'photo'
+  if (t.startsWith('video/')) return 'video'
+  return m.attachment_path ? 'file' : 'text'
 }
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
