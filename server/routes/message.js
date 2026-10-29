@@ -1,12 +1,21 @@
 import { route, auth, check, present, HttpError, BUCKET } from '../lib.js'
+import { transcribeAudio } from '../speech.js'
 
-// GET    /api/messages/:id  -> one message
+// GET    /api/messages/:id               -> one message
+// GET    /api/messages/:id?transcribe=1  -> a voice note, plus "transcript" of what was said
 // DELETE /api/messages/:id  -> delete one of your own messages
 export default route({
   async GET(req) {
     const { sb } = await auth(req)
     const row = check(await sb.from('messages').select('*').eq('id', id(req)).single(), 'Message not found')
     const [message] = await present(sb, [row])
+    if (req.query.transcribe && row.attachment_type?.startsWith('audio/')) {
+      const { data: blob, error } = await sb.storage.from(BUCKET).download(row.attachment_path)
+      if (error || !blob) throw new HttpError(404, 'Voice note audio not found')
+      const { text, language } = await transcribeAudio(new Uint8Array(await blob.arrayBuffer()), row.attachment_type)
+      message.transcript = text
+      message.transcript_language = language
+    }
     return { message }
   },
 

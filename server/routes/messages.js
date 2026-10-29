@@ -1,6 +1,7 @@
 import {
   route, auth, body, check, present, markRead, userIdFor, sleep, HttpError, BUCKET, MAX_FILE_BYTES,
 } from '../lib.js'
+import { speak, voiceFor } from '../speech.js'
 
 const MAX_WAIT_SECONDS = 25
 const POLL_MS = 150
@@ -72,7 +73,7 @@ export default route({
   async POST(req) {
     const { sb, userId } = await auth(req)
     const b = body(req)
-    const text = typeof b.text === 'string' ? b.text.trim() : ''
+    let text = typeof b.text === 'string' ? b.text.trim() : ''
     const recipientId = b.to ? await userIdFor(sb, b.to) : null
     if (recipientId === userId) throw new HttpError(400, "You can't send a private message to yourself")
     const replyToId = b.reply_to_id != null ? Number(b.reply_to_id) : null
@@ -87,7 +88,17 @@ export default route({
         : !original.recipient_id
       if (!sameConversation) throw new HttpError(400, 'reply_to_id must be a message in the same conversation')
     }
-    const file = await readFile(b)
+    let file = await readFile(b)
+    let voiceDuration = null
+    if (b.as_voice) {
+      // Speak the text and send it as a voice note instead of a text message.
+      if (file) throw new HttpError(400, 'Use either as_voice or a file, not both')
+      const me = check(await sb.from('profiles').select('username').eq('id', userId).single())
+      const spoken = await speak(text, voiceFor(me.username, b.voice))
+      file = spoken
+      voiceDuration = spoken.duration
+      text = ''
+    }
     if (!text && !file) throw new HttpError(400, 'Send "text", "file" or "file_url"')
 
     let attachment = {}
@@ -101,8 +112,8 @@ export default route({
         attachment_name: file.name,
         attachment_type: file.type,
         attachment_size: file.bytes.length,
-        ...(file.type.startsWith('audio/') && Number(b.duration ?? b.file?.duration) > 0
-          ? { attachment_duration: Number(b.duration ?? b.file?.duration) }
+        ...(file.type.startsWith('audio/') && Number(voiceDuration ?? b.duration ?? b.file?.duration) > 0
+          ? { attachment_duration: Number(voiceDuration ?? b.duration ?? b.file?.duration) }
           : {}),
       }
     }

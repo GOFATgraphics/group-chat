@@ -190,22 +190,33 @@ without a caption.
 ### Voice notes
 
 People can send **voice notes**: `kind` is `"voice"`, `attachment.type` is
-`audio/*` (usually `audio/mp4`, sometimes `audio/webm`), and
-`attachment.duration` is the length in seconds. The chat does **not**
-transcribe them: listen to them yourself.
+`audio/*` and `attachment.duration` is the length in seconds. The chat never
+shows a transcript to people, but you can get one:
 
-1. Download the audio from `attachment.url` (a 1-hour link; no extra auth).
-   From a webhook, which has no URL, call
-   `GET /api/file?path=<attachment_path>&json=1` to get one.
-2. Transcribe it with your speech-to-text tool.
-3. Reply to what was said, in the same conversation, ideally quoting it with
-   `reply_to_id`, just as for a text message.
+```http
+GET /api/messages/412?transcribe=1
+```
 
-You can also **send** a voice note, like any file, with `duration` set:
+returns the message with `"transcript": "what they said"` (speech-to-text
+done by the chat server; you can also download `attachment.url` and use your
+own tool).
+
+**Answer a voice note with a voice note.** Send your reply text with
+`"as_voice": true` and the server speaks it in your own voice and sends it as
+a voice note (no text bubble):
+
+```json
+{ "text": "Hey Mubarak! Yes, I got it.", "as_voice": true, "to": "mubarak", "reply_to_id": 412 }
+```
+
+Optional `"voice"` picks another voice (`alloy`, `echo`, `fable`, `onyx`,
+`nova`, `shimmer`). Rule of thumb: voice note in, voice note out; text in,
+text out.
+
+You can also send audio you made yourself, like any file, with `duration`:
 
 ```json
 { "file": { "name": "reply.m4a", "type": "audio/mp4", "base64": "AAAAIGZ0eXBNNEEg..." }, "duration": 7.5 }
-{ "file_url": "https://example.com/reply.mp3", "file_name": "reply.mp3", "duration": 12 }
 ```
 
 ### Photos
@@ -333,9 +344,6 @@ def call(method, path, **kw):
     r.raise_for_status()
     return r.json()
 
-def transcribe(audio_bytes, content_type):
-    raise NotImplementedError  # <- your speech-to-text tool here
-
 def reply_to(message):
     return f"You said: {message['text']}"  # <- call your AI model here
 
@@ -351,11 +359,11 @@ while True:
         continue
     for m in new:
         last_id = max(last_id, m["id"])
-        if m["kind"] == "voice":  # a voice note: transcribe it, then answer it
-            audio = requests.get(m["attachment"]["url"], timeout=60)
-            m["text"] = transcribe(audio.content, m["attachment"]["type"])
+        voice = m["kind"] == "voice"
+        if voice:  # a voice note: get what was said, answer with a voice note
+            m["text"] = call("GET", f"/messages/{m['id']}?transcribe=1")["message"]["transcript"]
         if m["text"]:
-            answer = {"text": reply_to(m), "reply_to_id": m["id"]}
+            answer = {"text": reply_to(m), "reply_to_id": m["id"], "as_voice": voice}
             if m["conversation"] == "direct":
                 answer["to"] = m["username"]  # answer privately
             call("POST", "/messages", json=answer)

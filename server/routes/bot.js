@@ -34,6 +34,7 @@ import { getVercelOidcToken } from '@vercel/oidc'
 import { timingSafeEqual } from 'node:crypto'
 import { client, usernameToEmail, markRead, broadcastTyping, HttpError, BUCKET } from '../lib.js'
 import { PERSONAS, defaultPersona } from '../personas.js'
+import { speak, transcribeAudio, voiceFor } from '../speech.js'
 
 const GATEWAY_URL = 'https://ai-gateway.vercel.sh'
 const useGateway = () => !process.env.ANTHROPIC_API_KEY
@@ -200,12 +201,29 @@ async function respond(bot, incoming, llm) {
   const newestFromPeople = history.filter((m) => m.user_id !== userId && !isBot(m.user_id)).at(-1)
   if (newestFromPeople && newestFromPeople.id > incoming.id) return
 
+  // A voice note: hear it (speech-to-text), and answer it with a voice note.
+  const incomingIsVoice = Boolean(incoming.attachment_type?.startsWith('audio/'))
+  let heard = null
+  if (incomingIsVoice) {
+    try {
+      const { data: blob } = await sb.storage.from(BUCKET).download(incoming.attachment_path)
+      if (blob) heard = (await transcribeAudio(new Uint8Array(await blob.arrayBuffer()), incoming.attachment_type)).text
+    } catch (err) {
+      console.error('transcription failed', err.message)
+    }
+  }
+
   const transcript = history
     .map((m) => {
       const parts = [`[#${m.id}] ${nameOf(m.user_id)}`]
       if (m.reply_to_id) parts.push(`(replying to #${m.reply_to_id})`)
       let line = `${parts.join(' ')}: ${m.content ?? ''}`
-      if (m.attachment_type?.startsWith('audio/')) line += ' [voice note: you cannot hear it; if it needs an answer, ask them to type it]'
+      if (m.attachment_type?.startsWith('audio/')) {
+        line +=
+          m.id === incoming.id && heard
+            ? ` [voice note; they said: "${heard}"]`
+            : ' [voice note]'
+      }
       else if (m.attachment_name) line += ` [attached ${m.attachment_type?.startsWith('image/') ? 'photo' : 'file'}: ${m.attachment_name}]`
       return line
     })
@@ -286,8 +304,27 @@ async function respond(bot, incoming, llm) {
   const { data: newer } = await check
   if (newer?.some((m) => !isBot(m.user_id))) return stopTyping()
 
+  let reply = { content: text.slice(0, 4000) }
+  if (incomingIsVoice) {
+    try {
+      const voice = await speak(text, voiceFor(bot.name))
+      const path = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-voice-note.mp3`
+      const { error: upErr } = await sb.storage.from(BUCKET).upload(path, voice.bytes, { contentType: voice.type })
+      if (upErr) throw upErr
+      reply = {
+        content: null,
+        attachment_path: path,
+        attachment_name: voice.name,
+        attachment_type: voice.type,
+        attachment_size: voice.bytes.length,
+        attachment_duration: voice.duration,
+      }
+    } catch (err) {
+      console.error('voice reply failed, sending text instead', err.message)
+    }
+  }
   const { error: postError } = await sb
     .from('messages')
-    .insert({ content: text.slice(0, 4000), recipient_id: isDirect ? incoming.user_id : null })
+    .insert({ ...reply, recipient_id: isDirect ? incoming.user_id : null })
   if (postError) throw postError
 }
