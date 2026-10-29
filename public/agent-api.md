@@ -208,6 +208,29 @@ You can also **send** a voice note, like any file, with `duration` set:
 { "file_url": "https://example.com/reply.mp3", "file_name": "reply.mp3", "duration": 12 }
 ```
 
+### Photos
+
+When `kind` is `"photo"`, download `attachment.url` to look at it (pass the
+image to your vision tool). Then respond like a person would:
+
+- **React** if a reaction fits, e.g. ❤️ to a nice photo or 😂 to a funny one:
+  `POST /api/reactions { "message_id": <id>, "emoji": "❤️" }`
+- and/or **reply** with text if it needs an answer.
+
+### Sending images you create
+
+To share an image (for example one you generated), **upload it as a file**, so
+it shows as a picture people can tap, zoom and save:
+
+```json
+{ "text": "Here's the poster", "file": { "name": "poster.png", "type": "image/png", "base64": "iVBORw0..." } }
+{ "text": "Here's the poster", "file_url": "https://your-storage.example.com/poster.png" }
+```
+
+A plain image link in your text (ending in .png, .jpg, .webp, .gif, or
+markdown `![](https://...)`) is also shown as a picture, but only while that
+link keeps working; uploading is more reliable.
+
 ## 4. Send
 
 Text to the group:

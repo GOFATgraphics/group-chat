@@ -11,6 +11,10 @@ if (!url || !key) {
 
 export const supabase = createClient(url, key)
 
+// For direct uploads with progress (src/media.js).
+export const SUPABASE_URL = url
+export const SUPABASE_KEY = key
+
 export const BUCKET = 'chat-files'
 
 // Supabase Auth signs in with an email, so each username maps to an internal

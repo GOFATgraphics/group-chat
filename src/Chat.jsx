@@ -4,6 +4,8 @@ import Splash from './Splash.jsx'
 import ApiKeys from './ApiKeys.jsx'
 import { useTyping } from './typing.js'
 import { VoicePlayer, VoiceRecorder, MicIcon, canRecordVoice, formatDuration } from './Voice.jsx'
+import MediaViewer from './MediaViewer.jsx'
+import { prepareForUpload, uploadWithProgress, saveMedia, imageLinksIn, withoutMarkdownImages } from './media.js'
 import { playPop, playReceive, playSend, setSoundsEnabled, soundsEnabled, unlockAudio } from './sounds.js'
 
 const PAGE_SIZE = 100
@@ -48,7 +50,8 @@ export default function Chat({ session }) {
   const [showPanel, setShowPanel] = useState(false)
   const [dmPeers, setDmPeers] = useState([])
   const [ownerPairs, setOwnerPairs] = useState([])
-  const [lightbox, setLightbox] = useState(null)
+  const [lightbox, setLightbox] = useState(null) // { url, name, type } for the full-screen viewer
+  const [uploadProgress, setUploadProgress] = useState({}) // draft id -> 0..1
   const [sounds, setSounds] = useState(soundsEnabled)
   // Realtime notifications (in-app toast + optional browser Notification).
   // Stored separately from sounds: the sounds toggle controls sounds only,
@@ -655,7 +658,9 @@ export default function Chat({ session }) {
           (m) =>
             m._status &&
             m.user_id === msg.user_id &&
-            (m.content ?? null) === (msg.content ?? null) &&
+            (msg.attachment_path
+              ? m.attachment_path === msg.attachment_path
+              : !m._file && (m.content ?? null) === (msg.content ?? null)) &&
             (m.recipient_id ?? null) === (msg.recipient_id ?? null),
         )
         if (pending === -1) return [...prev, msg]
@@ -1055,43 +1060,34 @@ export default function Chat({ session }) {
       return true
     }
 
-    let attachment = {}
-    if (file) {
-      if (file.size > MAX_FILE_BYTES) {
-        setError('Files must be 25 MB or smaller.')
-        return false
-      }
-      const safeName = file.name.replace(/[^\w.-]+/g, '_').slice(-120) || 'file'
-      const path = `${myId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeName}`
-      const { error: upErr } = await supabase.storage
-        .from(BUCKET)
-        .upload(path, file, { contentType: file.type || 'application/octet-stream' })
-      if (upErr) {
-        setError(`Upload failed: ${upErr.message}`)
-        return false
-      }
-      attachment = {
-        attachment_path: path,
-        attachment_name: file.name,
-        attachment_type: file.type || null,
-        attachment_size: file.size,
-        ...(file.type?.startsWith('audio/') && duration ? { attachment_duration: duration } : {}),
-      }
-    }
-    const { data, error: insErr } = await supabase
-      .from('messages')
-      .insert({ content: text || null, recipient_id: peerId, reply_to_id: replyToId, ...attachment })
-      .select()
-      .single()
-    if (insErr) {
-      setError(insErr.message)
-      if (attachment.attachment_path) supabase.storage.from(BUCKET).remove([attachment.attachment_path])
+    // Photo, video, voice note or file: show it at once from the local copy,
+    // then shrink (photos), upload with progress and save in the background.
+    if (file.size > MAX_FILE_BYTES) {
+      setError('Files must be 25 MB or smaller.')
       return false
     }
+    const tempId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+    const draft = {
+      id: tempId,
+      user_id: myId,
+      recipient_id: peerId,
+      reply_to_id: replyToId,
+      content: text || null,
+      created_at: new Date().toISOString(),
+      attachment_path: `pending/${tempId}`,
+      attachment_name: file.name,
+      attachment_type: file.type || 'application/octet-stream',
+      attachment_size: file.size,
+      attachment_duration: file.type?.startsWith('audio/') && duration ? duration : null,
+      _status: 'sending',
+      _file: file,
+      _localUrl: URL.createObjectURL(file),
+    }
     stickToBottom.current = true
-    playSend()
-    addMessage(data)
+    setMessages((prev) => [...prev, draft])
     setReplyTo(null)
+    playSend()
+    deliver(draft)
     return true
   }
 
@@ -1099,11 +1095,49 @@ export default function Chat({ session }) {
   // the real message (or is dropped if realtime already delivered it); on
   // failure it stays, marked "Not delivered", with Tap to retry.
   async function deliver(draft) {
+    let attachment = {}
+    if (draft._file) {
+      // Upload once; a retry after a failed save reuses the uploaded file.
+      let { _uploadedPath: path, _upload: up } = draft
+      if (!path) {
+        try {
+          const prepared = await prepareForUpload(draft._file)
+          const safeName = prepared.name.replace(/[^\w.-]+/g, '_').slice(-120) || 'file'
+          path = `${myId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeName}`
+          await uploadWithProgress(path, prepared, (p) =>
+            setUploadProgress((prev) => ({ ...prev, [draft.id]: p })),
+          )
+          up = { name: prepared.name, type: prepared.type || draft.attachment_type, size: prepared.size }
+        } catch (err) {
+          setError(err.message)
+          setMessages((prev) => prev.map((m) => (m.id === draft.id ? { ...m, _status: 'failed' } : m)))
+          return
+        }
+        // Keep showing the local copy (no flash while the real link loads).
+        setUrls((prev) => ({ ...prev, [path]: draft._localUrl }))
+        setMessages((prev) =>
+          prev.map((m) => (m.id === draft.id ? { ...m, attachment_path: path, _uploadedPath: path, _upload: up } : m)),
+        )
+      }
+      attachment = {
+        attachment_path: path,
+        attachment_name: up.name,
+        attachment_type: up.type,
+        attachment_size: up.size,
+        ...(draft.attachment_duration ? { attachment_duration: draft.attachment_duration } : {}),
+      }
+    }
     const { data, error: insErr } = await supabase
       .from('messages')
-      .insert({ content: draft.content, recipient_id: draft.recipient_id, reply_to_id: draft.reply_to_id })
+      .insert({ content: draft.content, recipient_id: draft.recipient_id, reply_to_id: draft.reply_to_id, ...attachment })
       .select()
       .single()
+    setUploadProgress((prev) => {
+      if (!(draft.id in prev)) return prev
+      const next = { ...prev }
+      delete next[draft.id]
+      return next
+    })
     setMessages((prev) => {
       if (insErr || !data) return prev.map((m) => (m.id === draft.id ? { ...m, _status: 'failed' } : m))
       return prev.some((m) => m.id === data.id)
@@ -1115,7 +1149,7 @@ export default function Chat({ session }) {
 
   function retrySend(msg) {
     setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, _status: 'sending' } : m)))
-    deliver(msg)
+    deliver({ ...msg, _status: 'sending' })
   }
 
   // Start a reply from a swipe or from the Reply action. Never in an
@@ -1221,7 +1255,10 @@ export default function Chat({ session }) {
   }
 
   function readStatus(msg) {
-    if (msg._status === 'sending') return { label: 'Sending…' }
+    if (msg._status === 'sending') {
+      const p = uploadProgress[msg.id]
+      return { label: p != null && p < 1 ? `Sending… ${Math.round(p * 100)}%` : 'Sending…' }
+    }
     if (msg._status === 'failed') return { label: 'Not delivered', failed: true }
     const readers = (reads[msg.id] ?? []).filter((id) => id !== myId)
     const times = readTimes[msg.id] ?? {}
@@ -1382,7 +1419,8 @@ export default function Chat({ session }) {
               avatar={avatars[item.msg.user_id]}
               profiles={profiles}
               reactions={reactions[item.msg.id] ?? []}
-              url={urls[item.msg.attachment_path]}
+              url={urls[item.msg.attachment_path] ?? item.msg._localUrl}
+              uploadProgress={uploadProgress[item.msg.id]}
               pickerOpen={pickerFor === item.msg.id}
               onOpenPicker={() => !item.msg._status && setPickerFor(item.msg.id)}
               onClosePicker={() => setPickerFor(null)}
@@ -1659,11 +1697,7 @@ export default function Chat({ session }) {
         </div>
       )}
 
-      {lightbox && (
-        <div className="lightbox" onClick={() => setLightbox(null)}>
-          <img src={lightbox} alt="" />
-        </div>
-      )}
+      {lightbox && <MediaViewer item={lightbox} onClose={() => setLightbox(null)} />}
     </div>
   )
 }
@@ -1694,6 +1728,7 @@ function Message({
   status = null,
   tickState = 'sent',
   onRetry,
+  uploadProgress,
 }) {
   const pressTimer = useRef(null)
   const [copied, setCopied] = useState(false)
@@ -1772,6 +1807,9 @@ function Message({
   const isMedia = msg.attachment_path && (isImage || isVideo)
   const isVoice = msg.attachment_path && msg.attachment_type?.startsWith('audio/')
   const isFile = msg.attachment_path && !isMedia && !isVoice
+  // An image link in the text (e.g. an AI's generated image) shows as a picture.
+  const linkedImages = useMemo(() => imageLinksIn(msg.content), [msg.content])
+  const shownText = useMemo(() => withoutMarkdownImages(msg.content), [msg.content])
 
   const grouped = useMemo(() => {
     const map = new Map()
@@ -1865,15 +1903,21 @@ function Message({
           {isMedia &&
             (url ? (
               isImage ? (
-                <img
-                  className="media"
-                  src={url}
-                  alt={msg.attachment_name}
-                  onLoad={onMediaLoad}
-                  onClick={() => onOpenImage(url)}
-                />
+                <span className="media-wrap">
+                  <img
+                    className="media"
+                    src={url}
+                    alt={msg.attachment_name}
+                    onLoad={onMediaLoad}
+                    onClick={() => !msg._status && onOpenImage({ url, name: msg.attachment_name ?? 'photo.jpg', type: 'image' })}
+                  />
+                  {msg._status === 'sending' && <UploadRing progress={uploadProgress} />}
+                </span>
               ) : (
-                <video className="media" src={url} controls preload="metadata" onLoadedMetadata={onMediaLoad} />
+                <span className="media-wrap">
+                  <video className="media" src={url} controls playsInline preload="metadata" onLoadedMetadata={onMediaLoad} />
+                  {msg._status === 'sending' && <UploadRing progress={uploadProgress} />}
+                </span>
               )
             ) : (
               <div className="media placeholder" />
@@ -1897,11 +1941,24 @@ function Message({
               </span>
             </a>
           )}
-          {msg.content && (
-            <div className={`bubble ${tail(true)}`} title={new Date(msg.created_at).toLocaleString()}>
-              {renderMessageContent(msg.content, highlightMentions ? profiles : null)}
+          {shownText && (
+            <div className={`bubble ${tail(!linkedImages.length)}`} title={new Date(msg.created_at).toLocaleString()}>
+              {renderMessageContent(shownText, highlightMentions ? profiles : null)}
             </div>
           )}
+          {linkedImages.map((src) => (
+            <img
+              key={src}
+              className="media linked"
+              src={src}
+              alt=""
+              loading="lazy"
+              referrerPolicy="no-referrer"
+              onLoad={onMediaLoad}
+              onError={(e) => (e.currentTarget.style.display = 'none')}
+              onClick={() => onOpenImage({ url: src, name: decodeURIComponent(src.split('?')[0].split('/').pop() || 'image'), type: 'image' })}
+            />
+          ))}
 
           {grouped.length > 0 && (
             <button
@@ -1950,6 +2007,16 @@ function Message({
                 })}
               </div>
               <div className="msg-menu">
+                {msg.attachment_path && url && (
+                  <button
+                    onClick={() => {
+                      onClosePicker()
+                      saveMedia(url, msg.attachment_name ?? 'download')
+                    }}
+                  >
+                    Save
+                  </button>
+                )}
                 {(msg.content?.trim() || url) && (
                   <button
                     onClick={() => {
@@ -2005,6 +2072,30 @@ function Message({
           ))}
       </div>
     </div>
+  )
+}
+
+// Circular progress over a photo/video while it uploads.
+function UploadRing({ progress }) {
+  const p = Math.max(0.04, Math.min(1, progress ?? 0))
+  const c = 2 * Math.PI * 16
+  return (
+    <span className="upload-ring" role="progressbar" aria-valuenow={Math.round(p * 100)} aria-valuemin={0} aria-valuemax={100}>
+      <svg viewBox="0 0 40 40">
+        <circle cx="20" cy="20" r="16" fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth="3.5" />
+        <circle
+          cx="20"
+          cy="20"
+          r="16"
+          fill="none"
+          stroke="#fff"
+          strokeWidth="3.5"
+          strokeLinecap="round"
+          strokeDasharray={`${c * p} ${c}`}
+          transform="rotate(-90 20 20)"
+        />
+      </svg>
+    </span>
   )
 }
 
