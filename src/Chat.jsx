@@ -287,6 +287,7 @@ export default function Chat({ session }) {
     return (
       <div className="login-page">
         <div className="login-card">
+          <img className="login-logo" src="/logo.png" alt="" />
           <h1>No access</h1>
           <p className="muted">This account hasn&apos;t been added to the group chat. Ask the admin for a login.</p>
           <button className="primary" onClick={() => supabase.auth.signOut()}>
@@ -325,7 +326,12 @@ export default function Chat({ session }) {
           </button>
         )}
         {loading && <div className="empty">Loading messages…</div>}
-        {!loading && !messages.length && <div className="empty">No messages yet. Say hi 👋</div>}
+        {!loading && !messages.length && (
+          <div className="empty">
+            <img className="empty-logo" src="/logo.png" alt="" />
+            No messages yet. Say hi 👋
+          </div>
+        )}
         {items.map((item) =>
           item.type === 'stamp' ? (
             <div key={item.key} className="stamp">

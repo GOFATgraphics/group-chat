@@ -86,7 +86,11 @@ a { color: inherit; }
 }
 .login-card h1 { margin: 0; font-size: 26px; letter-spacing: -0.02em; }
 .login-card p { margin: 0 0 6px; }
-.login-logo { font-size: 44px; }
+.login-logo {
+  width: 76px;
+  height: 76px;
+  filter: drop-shadow(0 4px 14px rgba(11, 132, 254, 0.25));
+}
 .login-card label {
   display: flex;
   flex-direction: column;
@@ -179,6 +183,7 @@ a { color: inherit; }
 }
 
 .empty { text-align: center; color: var(--muted); padding: 40px 0; font-size: 15px; }
+.empty-logo { display: block; width: 88px; height: 88px; margin: 0 auto 14px; }
 
 .load-older {
   display: block;

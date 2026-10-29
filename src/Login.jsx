@@ -22,7 +22,7 @@ export default function Login() {
   return (
     <div className="login-page">
       <form className="login-card" onSubmit={onSubmit}>
-        <div className="login-logo">💬</div>
+        <img className="login-logo" src="/logo.png" alt="" />
         <h1>Group Chat</h1>
         <p className="muted">Sign in with the username and password you were given.</p>
         <label>
