@@ -112,7 +112,14 @@ export default function Chat({ session }) {
     setReactions((prev) => {
       const next = { ...prev }
       for (const id of ids) next[id] = []
-      for (const r of data ?? []) next[r.message_id].push({ user_id: r.user_id, emoji: r.emoji })
+      for (const r of data ?? []) {
+        // Guard: a reaction row for a message outside the loaded page
+        // used to crash here (next[id] undefined, .push throws inside
+        // the state updater, which unmounts the tree). Create the bucket
+        // instead; it is harmless if that message is never rendered.
+        const bucket = next[r.message_id] ?? (next[r.message_id] = [])
+        bucket.push({ user_id: r.user_id, emoji: r.emoji })
+      }
       return next
     })
   }, [])
@@ -255,11 +262,17 @@ export default function Chat({ session }) {
       if (browserNotificationsRef.current && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
         const sender = profilesRef.current[m.user_id] ?? 'Someone'
         const convo = target.owner ? 'Owner view' : target.label ?? profilesRef.current[target.view.peerId] ?? 'Private chat'
-        const n = new Notification(`${sender} · ${convo}`, { body: preview, tag: target.key })
-        n.onclick = () => {
-          window.focus()
-          openTarget(target)
-          n.close()
+        try {
+          const n = new Notification(`${sender} · ${convo}`, { body: preview, tag: target.key })
+          n.onclick = () => {
+            window.focus()
+            openTarget(target)
+            n.close()
+          }
+        } catch {
+          // Notification construction can throw if permission was revoked
+          // between the check and construction; the in-app toast above
+          // already shows, so just skip the browser notification.
         }
       }
     },
@@ -388,6 +401,15 @@ export default function Chat({ session }) {
     return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)))
   }
 
+  // FIX (blank-page crash): this used to be a plain function that returned
+  // null when service workers or PushManager were unavailable, but the
+  // mount effect below calls getPushRegistration().then(...). Calling
+  // .then on null throws a synchronous TypeError inside the effect, and
+  // with no error boundary React unmounts the whole tree, leaving the
+  // white blank page seen live. iOS Safari tabs (and any browser without
+  // PushManager) hit exactly this path. Making it async means it always
+  // returns a promise, resolving to null when push is unavailable, so the
+  // chain below is safe and push simply stays off.
   async function getPushRegistration() {
     if (!('serviceWorker' in navigator) || !('PushManager' in window)) return null
     return navigator.serviceWorker.register('/sw.js')
@@ -716,7 +738,12 @@ export default function Chat({ session }) {
         if (row?.id) applyProfile(row)
       })
       .on('presence', { event: 'sync' }, () => {
-        const ids = new Set(Object.values(channel.presenceState()).flat().map((p) => p.user_id))
+        const ids = new Set(
+          Object.values(channel.presenceState())
+            .flat()
+            .map((p) => p?.user_id)
+            .filter(Boolean),
+        )
         setOnline([...ids])
       })
       .subscribe((status) => {
@@ -1886,13 +1913,17 @@ function MyPhoto({ name, src, onPick, onRemove }) {
 
 function Avatar({ name, src }) {
   if (src) return <img className="avatar" src={src} alt="" />
-  const hue = [...name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7)
+  // Guard: [...name] and name.slice throw on undefined/null. Most call
+  // sites pass a fallback, but a missing profile must never blank the
+  // whole chat, so fall back to '?' here too.
+  const safeName = name ?? '?'
+  const hue = [...safeName].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7)
   return (
     <span
       className="avatar"
       style={{ background: `linear-gradient(180deg, hsl(${hue} 55% 68%), hsl(${hue} 50% 48%))` }}
     >
-      {name.slice(0, 1).toUpperCase()}
+      {safeName.slice(0, 1).toUpperCase()}
     </span>
   )
 }
@@ -1992,6 +2023,10 @@ function formatSize(bytes) {
 // plain text in the existing content column, so no migration is needed.
 // An @name that matches nobody renders as ordinary text, never a guess.
 function renderMessageContent(text, profilesMap) {
+  // Guard: text.split throws on null/undefined/non-string content. The
+  // call sites already guard null, but a bad row must never blank the
+  // whole chat, so render nothing for it instead of crashing.
+  if (typeof text !== 'string') return []
   const mentionNames = profilesMap
     ? new Set(Object.values(profilesMap).map((u) => (u ?? '').toLowerCase()))
     : null
