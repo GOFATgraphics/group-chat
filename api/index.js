@@ -19,6 +19,7 @@ import bot from '../server/routes/bot.js'
 import push from '../server/routes/push.js'
 import pushKey from '../server/routes/push-key.js'
 import call from '../server/routes/call.js'
+import presence from '../server/routes/presence.js'
 
 const exact = {
   '': root,
@@ -38,6 +39,7 @@ const exact = {
   'call/start': call.start,
   'call/token': call.token,
   'call/check': call.check,
+  presence,
 }
 
 export default async function handler(req, res) {

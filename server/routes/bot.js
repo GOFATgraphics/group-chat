@@ -327,4 +327,5 @@ async function respond(bot, incoming, llm) {
     .from('messages')
     .insert({ ...reply, recipient_id: isDirect ? incoming.user_id : null })
   if (postError) throw postError
+  await sb.rpc('touch_last_seen') // shows the bot online in the app
 }

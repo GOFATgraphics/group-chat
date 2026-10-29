@@ -39,7 +39,7 @@ export async function auth(req) {
   if (!token) {
     throw new HttpError(401, 'Missing "Authorization: Bearer <API key>" header. Create a key in the app (People → API keys).')
   }
-  if (token.startsWith(API_KEY_PREFIX)) return keySession(token)
+  if (token.startsWith(API_KEY_PREFIX)) return markActive(await keySession(token))
 
   let claims
   try {
@@ -49,7 +49,24 @@ export async function auth(req) {
   }
   if (!claims.sub) throw new HttpError(401, 'Invalid API key or access token')
   if (claims.exp && claims.exp * 1000 < Date.now()) throw new HttpError(401, 'Access token expired. Call POST /api/refresh.')
-  return { token, userId: claims.sub, sb: client(token) }
+  return markActive({ token, userId: claims.sub, sb: client(token) })
+}
+
+// ---- online status for API users ------------------------------------------
+// The app shows a member online if they have it open or used the API in the
+// last couple of minutes; record that, at most every 30 s per member.
+
+const ACTIVE_EVERY_MS = 30_000
+const lastTouched = new Map()
+
+export async function markActive(session, { force = false } = {}) {
+  const now = Date.now()
+  if (force || now - (lastTouched.get(session.userId) ?? 0) > ACTIVE_EVERY_MS) {
+    lastTouched.set(session.userId, now)
+    const { error } = await session.sb.rpc('touch_last_seen')
+    if (error) console.error('touch_last_seen', error.message)
+  }
+  return session
 }
 
 // ---- personal API keys ------------------------------------------------------

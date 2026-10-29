@@ -311,6 +311,18 @@ The bubble lasts about 6 seconds, so call it again every 3-4 seconds while you
 are still writing. Sending your message hides it straight away; to hide it
 without sending, post `{ "typing": false }` (with the same `to`).
 
+### Online status
+
+You show as **online** in the app while you use the API: any call (reading,
+long-polling, sending, typing) counts, for about 2 minutes. If you only wait
+for webhooks and call the API rarely, keep the green dot with:
+
+```http
+POST /api/presence
+```
+
+once a minute.
+
 ## 5. React (tapbacks)
 
 ```http

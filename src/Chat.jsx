@@ -29,7 +29,15 @@ export default function Chat({ session }) {
   const [urls, setUrls] = useState({})
   const [hasMore, setHasMore] = useState(false)
   const [loading, setLoading] = useState(true)
-  const [online, setOnline] = useState([])
+  // Online = has the app open (realtime presence) or used the API recently
+  // (AI agents); see onlineIds below.
+  const [presenceIds, setOnline] = useState([])
+  const [lastSeen, setLastSeen] = useState({}) // user id -> ms of last API activity
+  const [clock, setClock] = useState(() => Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setClock(Date.now()), 15_000)
+    return () => clearInterval(t)
+  }, [])
   const [error, setError] = useState('')
   const [pickerFor, setPickerFor] = useState(null)
   const [showMembers, setShowMembers] = useState(false)
@@ -645,13 +653,14 @@ export default function Chat({ session }) {
 
   const ensureProfile = useCallback(async (userId) => {
     if (profilesRef.current[userId]) return
-    const { data } = await supabase.from('profiles').select('id, username, avatar_path, is_ai').eq('id', userId).single()
+    const { data } = await supabase.from('profiles').select('id, username, avatar_path, is_ai, last_seen_at').eq('id', userId).single()
     if (data) applyProfile(data)
   }, [])
 
   const applyProfile = (row) => {
     setProfiles((p) => ({ ...p, [row.id]: row.username }))
     setAvatars((a) => ({ ...a, [row.id]: avatarUrl(row.avatar_path) }))
+    if (row.last_seen_at) setLastSeen((l) => ({ ...l, [row.id]: Date.parse(row.last_seen_at) }))
     if (row.is_ai != null) {
       setAiIds((prev) => {
         if (prev.has(row.id) === row.is_ai) return prev
@@ -712,7 +721,7 @@ export default function Chat({ session }) {
     async function load() {
       const [{ data: meRow }, { data: profileRows }, { data: dmRows, error: dmErr }] = await Promise.all([
         supabase.from('profiles').select('id, username').eq('id', myId).maybeSingle(),
-        supabase.from('profiles').select('id, username, avatar_path, is_ai'),
+        supabase.from('profiles').select('id, username, avatar_path, is_ai, last_seen_at'),
         supabase
           .from('messages')
           .select('user_id, recipient_id')
@@ -727,6 +736,9 @@ export default function Chat({ session }) {
       setProfiles(Object.fromEntries((profileRows ?? []).map((p) => [p.id, p.username])))
       setAvatars(Object.fromEntries((profileRows ?? []).map((p) => [p.id, avatarUrl(p.avatar_path)])))
       setAiIds(new Set((profileRows ?? []).filter((p) => p.is_ai).map((p) => p.id)))
+      setLastSeen(
+        Object.fromEntries((profileRows ?? []).filter((p) => p.last_seen_at).map((p) => [p.id, Date.parse(p.last_seen_at)])),
+      )
       // Peers the user already has a DM conversation with, from message history.
       const peers = new Set()
       for (const row of dmRows ?? []) {
@@ -1313,6 +1325,16 @@ export default function Chat({ session }) {
   }
 
   const memberIds = Object.keys(profiles)
+  // (Plain code after the early returns, not a hook.)
+  const ONLINE_WINDOW_MS = 2 * 60 * 1000
+  const online = [
+    ...new Set([
+      ...presenceIds,
+      ...Object.entries(lastSeen)
+        .filter(([, t]) => clock - t < ONLINE_WINDOW_MS)
+        .map(([id]) => id),
+    ]),
+  ]
   const hasUnread = Object.values(unread).some((n) => n > 0)
   const typingNames = typing.typers.map((id) => profiles[id]).filter(Boolean)
   const headerTyping = typingNames.length > 0
