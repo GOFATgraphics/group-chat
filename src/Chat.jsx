@@ -4,8 +4,10 @@ import { supabase, BUCKET } from './supabase.js'
 const PAGE_SIZE = 100
 const MAX_FILE_BYTES = 25 * 1024 * 1024
 const URL_TTL_SECONDS = 60 * 60 * 12
-const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🔥', '🎉', '👏']
+const TAPBACKS = ['❤️', '👍', '👎', '😂', '‼️', '❓', '🔥']
 const GROUP_WINDOW_MS = 5 * 60 * 1000
+const STAMP_GAP_MS = 15 * 60 * 1000
+const LONG_PRESS_MS = 450
 
 export default function Chat({ session }) {
   const myId = session.user.id
@@ -18,7 +20,8 @@ export default function Chat({ session }) {
   const [loading, setLoading] = useState(true)
   const [online, setOnline] = useState([])
   const [error, setError] = useState('')
-  const [activeId, setActiveId] = useState(null)
+  const [pickerFor, setPickerFor] = useState(null)
+  const [showMembers, setShowMembers] = useState(false)
   const [lightbox, setLightbox] = useState(null)
 
   const listRef = useRef(null)
@@ -230,7 +233,7 @@ export default function Chat({ session }) {
   }
 
   async function deleteMessage(msg) {
-    if (!window.confirm('Delete this message?')) return
+    if (!window.confirm('Delete this message for everyone?')) return
     const { error: err } = await supabase.from('messages').delete().eq('id', msg.id)
     if (err) return setError(err.message)
     setMessages((prev) => prev.filter((m) => m.id !== msg.id))
@@ -256,30 +259,28 @@ export default function Chat({ session }) {
     )
   }
 
-  const memberCount = Object.keys(profiles).length
+  const memberIds = Object.keys(profiles)
+  const headerFaces = [...memberIds.filter((id) => id !== myId), myId].slice(0, 3)
 
   return (
     <div className="chat">
-      <header className="chat-header">
-        <div className="room">
-          <div className="room-icon">💬</div>
-          <div>
-            <div className="room-name">Group Chat</div>
-            <div className="room-meta">
-              {memberCount} members · <span className="online-dot" /> {online.length} online
-            </div>
-          </div>
-        </div>
-        <div className="me">
-          <Avatar name={me.username} small />
-          <span className="me-name">{me.username}</span>
-          <button className="ghost" onClick={() => supabase.auth.signOut()}>
-            Sign out
-          </button>
+      <header className="topbar">
+        <button className="topbar-center" onClick={() => setShowMembers(true)}>
+          <span className="group-avatar">
+            {headerFaces.map((id) => (
+              <Avatar key={id} name={profiles[id] ?? '?'} />
+            ))}
+          </span>
+          <span className="people-pill">
+            {memberIds.length} People <Chevron />
+          </span>
+        </button>
+        <div className="topbar-sub">
+          Group Chat{online.length > 0 && ` · ${online.length} online`}
         </div>
       </header>
 
-      <main className="messages" ref={listRef} onScroll={onScroll} onClick={() => setActiveId(null)}>
+      <main className="messages" ref={listRef} onScroll={onScroll} onClick={() => setPickerFor(null)}>
         {hasMore && (
           <button className="load-older" onClick={loadOlder}>
             Load earlier messages
@@ -288,23 +289,25 @@ export default function Chat({ session }) {
         {loading && <div className="empty">Loading messages…</div>}
         {!loading && !messages.length && <div className="empty">No messages yet. Say hi 👋</div>}
         {items.map((item) =>
-          item.type === 'day' ? (
-            <div key={item.key} className="day">
-              <span>{item.label}</span>
+          item.type === 'stamp' ? (
+            <div key={item.key} className="stamp">
+              <b>{item.day}</b> {item.time}
             </div>
           ) : (
             <Message
               key={item.msg.id}
               msg={item.msg}
-              compact={item.compact}
+              first={item.first}
+              last={item.last}
               mine={item.msg.user_id === myId}
               myId={myId}
               username={profiles[item.msg.user_id] ?? '…'}
               profiles={profiles}
               reactions={reactions[item.msg.id] ?? []}
               url={urls[item.msg.attachment_path]}
-              active={activeId === item.msg.id}
-              onActivate={() => setActiveId(item.msg.id)}
+              pickerOpen={pickerFor === item.msg.id}
+              onOpenPicker={() => setPickerFor(item.msg.id)}
+              onClosePicker={() => setPickerFor(null)}
               onReact={(emoji) => toggleReaction(item.msg.id, emoji)}
               onDelete={() => deleteMessage(item.msg)}
               onOpenImage={setLightbox}
@@ -316,11 +319,41 @@ export default function Chat({ session }) {
 
       {error && (
         <div className="toast" onClick={() => setError('')}>
-          {error} <span className="muted">(tap to dismiss)</span>
+          {error}
         </div>
       )}
 
       <Composer onSend={send} />
+
+      {showMembers && (
+        <div className="sheet-backdrop" onClick={() => setShowMembers(false)}>
+          <div className="sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-head">
+              <span>{memberIds.length} People</span>
+              <button className="sheet-done" onClick={() => setShowMembers(false)}>
+                Done
+              </button>
+            </div>
+            <ul className="member-list">
+              {memberIds
+                .sort((a, b) => (profiles[a] ?? '').localeCompare(profiles[b] ?? ''))
+                .map((id) => (
+                  <li key={id}>
+                    <Avatar name={profiles[id]} />
+                    <span className="member-name">
+                      {profiles[id]}
+                      {id === myId && <span className="muted"> (you)</span>}
+                    </span>
+                    {online.includes(id) && <span className="online-dot" title="Online" />}
+                  </li>
+                ))}
+            </ul>
+            <button className="sheet-signout" onClick={() => supabase.auth.signOut()}>
+              Sign out
+            </button>
+          </div>
+        </div>
+      )}
 
       {lightbox && (
         <div className="lightbox" onClick={() => setLightbox(null)}>
@@ -333,23 +366,27 @@ export default function Chat({ session }) {
 
 function Message({
   msg,
-  compact,
+  first,
+  last,
   mine,
   myId,
   username,
   profiles,
   reactions,
   url,
-  active,
-  onActivate,
+  pickerOpen,
+  onOpenPicker,
+  onClosePicker,
   onReact,
   onDelete,
   onOpenImage,
   onMediaLoad,
 }) {
-  const [picker, setPicker] = useState(false)
+  const pressTimer = useRef(null)
   const isImage = msg.attachment_type?.startsWith('image/')
   const isVideo = msg.attachment_type?.startsWith('video/')
+  const isMedia = msg.attachment_path && (isImage || isVideo)
+  const isFile = msg.attachment_path && !isMedia
 
   const grouped = useMemo(() => {
     const map = new Map()
@@ -359,91 +396,129 @@ function Message({
     }
     return [...map.entries()]
   }, [reactions])
+  const iReacted = reactions.some((r) => r.user_id === myId)
+
+  // Long-press on touch, right-click or double-click on desktop opens tapbacks.
+  const gestures = {
+    onPointerDown: (e) => {
+      if (e.pointerType === 'mouse') return
+      pressTimer.current = setTimeout(onOpenPicker, LONG_PRESS_MS)
+    },
+    onPointerUp: () => clearTimeout(pressTimer.current),
+    onPointerLeave: () => clearTimeout(pressTimer.current),
+    onPointerCancel: () => clearTimeout(pressTimer.current),
+    onContextMenu: (e) => {
+      e.preventDefault()
+      onOpenPicker()
+    },
+    onMouseDown: (e) => {
+      if (e.detail > 1) e.preventDefault() // keep double-click from selecting text
+    },
+    onDoubleClick: () => {
+      window.getSelection()?.removeAllRanges()
+      onOpenPicker()
+    },
+  }
+
+  const tail = (isLastPiece) => (last && isLastPiece ? 'tail' : '')
 
   return (
     <div
-      className={`msg ${mine ? 'mine' : ''} ${compact ? 'compact' : ''} ${active ? 'active' : ''}`}
-      onClick={(e) => {
-        e.stopPropagation()
-        onActivate()
-      }}
-      onMouseLeave={() => setPicker(false)}
+      className={`row ${mine ? 'mine' : 'theirs'} ${first ? 'first' : ''} ${grouped.length ? 'has-tapback' : ''}`}
     >
-      <div className="msg-avatar">{!compact && !mine && <Avatar name={username} />}</div>
-      <div className="msg-body">
-        {!compact && (
-          <div className="msg-head">
-            <span className="msg-author">{mine ? 'You' : username}</span>
-            <span className="msg-time">{formatTime(msg.created_at)}</span>
-          </div>
-        )}
-        <div className="bubble-row">
-          <div className="bubble" title={new Date(msg.created_at).toLocaleString()}>
-            {msg.attachment_path &&
-              (isImage ? (
-                url ? (
-                  <img className="attachment-img" src={url} alt={msg.attachment_name} onLoad={onMediaLoad} onClick={() => onOpenImage(url)} />
-                ) : (
-                  <div className="attachment-placeholder">Loading image…</div>
-                )
-              ) : isVideo && url ? (
-                <video className="attachment-img" src={url} controls preload="metadata" onLoadedMetadata={onMediaLoad} />
+      {!mine && <div className="row-avatar">{last && <Avatar name={username} />}</div>}
+      <div className="stack">
+        {!mine && first && <div className="sender">{username}</div>}
+        <div className="pieces" onClick={(e) => e.stopPropagation()} {...gestures}>
+          {isMedia &&
+            (url ? (
+              isImage ? (
+                <img
+                  className="media"
+                  src={url}
+                  alt={msg.attachment_name}
+                  onLoad={onMediaLoad}
+                  onClick={() => onOpenImage(url)}
+                />
               ) : (
-                <a
-                  className="file-card"
-                  href={url ? `${url}&download=${encodeURIComponent(msg.attachment_name ?? 'file')}` : undefined}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <span className="file-icon">📄</span>
-                  <span className="file-info">
-                    <span className="file-name">{msg.attachment_name}</span>
-                    <span className="file-size">{formatSize(msg.attachment_size)} · Download</span>
-                  </span>
-                </a>
+                <video className="media" src={url} controls preload="metadata" onLoadedMetadata={onMediaLoad} />
+              )
+            ) : (
+              <div className="media placeholder" />
+            ))}
+          {isFile && (
+            <a
+              className={`bubble file ${tail(!msg.content)}`}
+              href={url ? `${url}&download=${encodeURIComponent(msg.attachment_name ?? 'file')}` : undefined}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <FileIcon />
+              <span className="file-info">
+                <span className="file-name">{msg.attachment_name}</span>
+                <span className="file-size">{formatSize(msg.attachment_size)}</span>
+              </span>
+            </a>
+          )}
+          {msg.content && (
+            <div className={`bubble ${tail(true)}`} title={new Date(msg.created_at).toLocaleString()}>
+              {linkify(msg.content)}
+            </div>
+          )}
+
+          {grouped.length > 0 && (
+            <button
+              className={`tapback ${iReacted ? 'reacted' : ''}`}
+              title={grouped
+                .map(([e, users]) => `${e} ${users.map((u) => (u === myId ? 'You' : profiles[u] ?? '…')).join(', ')}`)
+                .join('\n')}
+              onClick={onOpenPicker}
+            >
+              {grouped.slice(0, 3).map(([e]) => (
+                <span key={e}>{e}</span>
               ))}
-            {msg.content && <div className="text">{linkify(msg.content)}</div>}
-          </div>
-          <div className="actions">
-            <button className="icon-btn" title="React" onClick={() => setPicker((p) => !p)}>
-              😊
+              {reactions.length > 1 && <span className="tapback-count">{reactions.length}</span>}
             </button>
-            {mine && (
-              <button className="icon-btn" title="Delete" onClick={onDelete}>
-                🗑️
-              </button>
-            )}
-            {picker && (
-              <div className="picker">
-                {EMOJIS.map((e) => (
+          )}
+
+          <button className="react-hint" title="React" onClick={onOpenPicker}>
+            <SmileIcon />
+          </button>
+
+          {pickerOpen && (
+            <>
+              <div className="tapback-bar">
+                {TAPBACKS.map((e) => {
+                  const on = reactions.some((r) => r.user_id === myId && r.emoji === e)
+                  return (
+                    <button
+                      key={e}
+                      className={on ? 'on' : ''}
+                      onClick={() => {
+                        onReact(e)
+                        onClosePicker()
+                      }}
+                    >
+                      {e}
+                    </button>
+                  )
+                })}
+              </div>
+              {mine && (
+                <div className="msg-menu">
                   <button
-                    key={e}
                     onClick={() => {
-                      onReact(e)
-                      setPicker(false)
+                      onClosePicker()
+                      onDelete()
                     }}
                   >
-                    {e}
+                    Delete
                   </button>
-                ))}
-              </div>
-            )}
-          </div>
+                </div>
+              )}
+            </>
+          )}
         </div>
-        {grouped.length > 0 && (
-          <div className="reactions">
-            {grouped.map(([emoji, users]) => (
-              <button
-                key={emoji}
-                className={`reaction ${users.includes(myId) ? 'reacted' : ''}`}
-                title={users.map((u) => (u === myId ? 'You' : profiles[u] ?? '…')).join(', ')}
-                onClick={() => onReact(emoji)}
-              >
-                {emoji} <span>{users.length}</span>
-              </button>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   )
@@ -454,6 +529,7 @@ function Composer({ onSend }) {
   const [file, setFile] = useState(null)
   const [preview, setPreview] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [menu, setMenu] = useState(false)
   const imageInput = useRef(null)
   const fileInput = useRef(null)
   const textRef = useRef(null)
@@ -468,15 +544,16 @@ function Composer({ onSend }) {
   useEffect(() => {
     const el = textRef.current
     el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+    el.style.height = `${Math.min(el.scrollHeight, 140)}px`
   }, [text])
+
+  const canSend = !busy && (text.trim() || file)
 
   async function submit(e) {
     e?.preventDefault()
-    const trimmed = text.trim()
-    if (busy || (!trimmed && !file)) return
+    if (!canSend) return
     setBusy(true)
-    const ok = await onSend({ text: trimmed, file })
+    const ok = await onSend({ text: text.trim(), file })
     setBusy(false)
     if (ok) {
       setText('')
@@ -489,6 +566,7 @@ function Composer({ onSend }) {
     const f = e.target.files?.[0]
     if (f) setFile(f)
     e.target.value = ''
+    setMenu(false)
   }
 
   function onPaste(e) {
@@ -510,54 +588,110 @@ function Composer({ onSend }) {
         if (f) setFile(f)
       }}
     >
-      {file && (
-        <div className="pending">
-          {preview ? <img src={preview} alt="" /> : <span className="file-icon">📄</span>}
-          <span className="file-info">
-            <span className="file-name">{file.name}</span>
-            <span className="file-size">{formatSize(file.size)}</span>
-          </span>
-          <button type="button" className="icon-btn" onClick={() => setFile(null)} title="Remove">
-            ✕
-          </button>
+      <div className="plus-wrap">
+        <button type="button" className="circle-btn" aria-label="Add photo or file" onClick={() => setMenu((m) => !m)}>
+          <PlusIcon />
+        </button>
+        {menu && (
+          <div className="plus-menu">
+            <button type="button" onClick={() => imageInput.current.click()}>
+              <span className="plus-menu-icon photos">🖼️</span> Photos
+            </button>
+            <button type="button" onClick={() => fileInput.current.click()}>
+              <span className="plus-menu-icon files">📎</span> File
+            </button>
+          </div>
+        )}
+      </div>
+      <input ref={imageInput} type="file" accept="image/*,video/*" hidden onChange={pick} />
+      <input ref={fileInput} type="file" hidden onChange={pick} />
+
+      <div className={`input-pill ${file ? 'with-file' : ''}`}>
+        {file && (
+          <div className="pending">
+            {preview ? (
+              <img src={preview} alt="" />
+            ) : (
+              <div className="pending-file">
+                <FileIcon />
+                <span className="file-info">
+                  <span className="file-name">{file.name}</span>
+                  <span className="file-size">{formatSize(file.size)}</span>
+                </span>
+              </div>
+            )}
+            <button type="button" className="pending-remove" onClick={() => setFile(null)} aria-label="Remove">
+              ✕
+            </button>
+          </div>
+        )}
+        <div className="input-row">
+          <textarea
+            ref={textRef}
+            rows={1}
+            placeholder="Message"
+            value={text}
+            onFocus={() => setMenu(false)}
+            onChange={(e) => setText(e.target.value)}
+            onPaste={onPaste}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) submit(e)
+            }}
+          />
+          {canSend || busy ? (
+            <button className="send-btn" aria-label="Send" disabled={!canSend}>
+              {busy ? <span className="spinner" /> : <ArrowUpIcon />}
+            </button>
+          ) : null}
         </div>
-      )}
-      <div className="composer-row">
-        <button type="button" className="icon-btn big" title="Send a photo" onClick={() => imageInput.current.click()}>
-          🖼️
-        </button>
-        <button type="button" className="icon-btn big" title="Attach a file" onClick={() => fileInput.current.click()}>
-          📎
-        </button>
-        <input ref={imageInput} type="file" accept="image/*,video/*" hidden onChange={pick} />
-        <input ref={fileInput} type="file" hidden onChange={pick} />
-        <textarea
-          ref={textRef}
-          rows={1}
-          placeholder="Write a message…"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onPaste={onPaste}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) submit(e)
-          }}
-        />
-        <button className="primary send" disabled={busy || (!text.trim() && !file)}>
-          {busy ? '…' : 'Send'}
-        </button>
       </div>
     </form>
   )
 }
 
-function Avatar({ name, small }) {
+function Avatar({ name }) {
   const hue = [...name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7)
   return (
-    <div className={`avatar ${small ? 'small' : ''}`} style={{ background: `hsl(${hue} 60% 45%)` }}>
+    <span
+      className="avatar"
+      style={{ background: `linear-gradient(180deg, hsl(${hue} 55% 68%), hsl(${hue} 50% 48%))` }}
+    >
       {name.slice(0, 1).toUpperCase()}
-    </div>
+    </span>
   )
 }
+
+// ---- icons ------------------------------------------------------------------
+
+const Chevron = () => (
+  <svg className="chevron" viewBox="0 0 8 14" aria-hidden="true">
+    <path d="M1 1l6 6-6 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+)
+const PlusIcon = () => (
+  <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+    <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+  </svg>
+)
+const ArrowUpIcon = () => (
+  <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+    <path d="M12 19V5M5.5 11.5L12 5l6.5 6.5" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+)
+const SmileIcon = () => (
+  <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+    <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="1.8" />
+    <path d="M8.5 14.5c1.8 2 5.2 2 7 0" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    <circle cx="9" cy="10" r="1.2" fill="currentColor" />
+    <circle cx="15" cy="10" r="1.2" fill="currentColor" />
+  </svg>
+)
+const FileIcon = () => (
+  <svg className="file-icon" viewBox="0 0 24 30" aria-hidden="true">
+    <path d="M3 1h12l8 8v18a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2z" fill="#fff" stroke="#c7c7cc" />
+    <path d="M15 1v6a2 2 0 0 0 2 2h6" fill="#e5e5ea" stroke="#c7c7cc" />
+  </svg>
+)
 
 // ---- helpers ----------------------------------------------------------------
 
@@ -566,29 +700,31 @@ function buildItems(messages) {
   let prev = null
   for (const msg of messages) {
     const d = new Date(msg.created_at)
-    const dayKey = d.toDateString()
-    if (!prev || new Date(prev.created_at).toDateString() !== dayKey) {
-      items.push({ type: 'day', key: `day-${dayKey}`, label: formatDay(d) })
-      prev = null
-    }
-    const compact = prev && prev.user_id === msg.user_id && d - new Date(prev.created_at) < GROUP_WINDOW_MS
-    items.push({ type: 'msg', msg, compact })
+    const gap = prev ? d - new Date(prev.created_at) : Infinity
+    const newDay = !prev || new Date(prev.created_at).toDateString() !== d.toDateString()
+    const stamp = newDay || gap > STAMP_GAP_MS
+    if (stamp) items.push({ type: 'stamp', key: `stamp-${msg.id}`, ...formatStamp(d) })
+    const first = stamp || prev.user_id !== msg.user_id || gap > GROUP_WINDOW_MS
+    items.push({ type: 'msg', msg, first })
     prev = msg
   }
+  items.forEach((item, i) => {
+    if (item.type !== 'msg') return
+    const next = items[i + 1]
+    item.last = !next || next.type !== 'msg' || next.first
+  })
   return items
 }
 
-function formatDay(d) {
+function formatStamp(d) {
+  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
   const today = new Date()
   const yesterday = new Date()
   yesterday.setDate(today.getDate() - 1)
-  if (d.toDateString() === today.toDateString()) return 'Today'
-  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday'
-  return d.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric', year: 'numeric' })
-}
-
-function formatTime(iso) {
-  return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  if (d.toDateString() === today.toDateString()) return { day: 'Today', time }
+  if (d.toDateString() === yesterday.toDateString()) return { day: 'Yesterday', time }
+  if (today - d < 6 * 24 * 60 * 60 * 1000) return { day: d.toLocaleDateString(undefined, { weekday: 'long' }), time }
+  return { day: d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }), time: `at ${time}` }
 }
 
 function formatSize(bytes) {
