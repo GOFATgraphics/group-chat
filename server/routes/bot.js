@@ -238,14 +238,17 @@ async function respond(bot, incoming, llm) {
         `or it just wraps up a topic, reply with exactly ${NO_REPLY} and nothing else. Always answer when ` +
         `someone mentions you by name, asks you something, or replies to one of your messages.`)
 
-  // Show "typing…" while Claude writes the reply (it lasts ~6 s per event).
+  // Show "typing…" while Claude writes the reply (it lasts ~6 s per event),
+  // in the group chat as well as in private chats, exactly like a human
+  // member typing. Previously this only ran in the group when the bot was
+  // named, so most bot replies arrived with no bubble at all. Now it runs
+  // for every delivery the bot processes, and stopTyping() below hides it
+  // again when the bot decides not to reply, just as a human deleting a
+  // draft hides their bubble.
   const typingTo = isDirect ? incoming.user_id : null
-  // In the group the bot often decides not to answer, so only show it typing
-  // there when it was named.
-  const named = new RegExp(`\\b${bot.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(incoming.content ?? '')
   const showTyping = () => broadcastTyping(bot.token, userId, typingTo).catch(() => {})
-  if (isDirect || named) showTyping()
-  const typingTimer = isDirect || named ? setInterval(showTyping, 4000) : null
+  showTyping()
+  const typingTimer = setInterval(showTyping, 4000)
 
   const request = {
     model: model(),
