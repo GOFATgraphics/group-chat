@@ -80,6 +80,14 @@ export default function Chat({ session }) {
   // quote a message from the conversation it is sent in.
   const [replyTo, setReplyTo] = useState(null)
   const [extraOriginals, setExtraOriginals] = useState({})
+  // Read receipts (ticks): message_id -> user ids that have read it.
+  // Only readers other than the sender ever get a row (the app never
+  // writes a row for the sender themselves), so a sender's ticks are
+  // computed from the other participants' rows only.
+  const [reads, setReads] = useState({})
+  // Messages already marked as read this session, so marking runs once
+  // per message even if the same page is reloaded by realtime updates.
+  const markedReadRef = useRef(new Set())
   const isOwnerRef = useRef(false)
   useEffect(() => {
     isOwnerRef.current = me?.username === 'mubarak'
@@ -124,6 +132,25 @@ export default function Chat({ session }) {
     })
   }, [])
 
+  // Same shape as loadReactions, for read receipts: message_id -> the
+  // user ids that have read that message. Buckets are reset for the
+  // loaded page, then filled from the rows that exist; a message with
+  // no rows (including every message sent before this feature) keeps an
+  // empty bucket, so its ticks correctly stay grey.
+  const loadReads = useCallback(async (ids) => {
+    if (!ids.length) return
+    const { data } = await supabase.from('message_reads').select('message_id, user_id').in('message_id', ids)
+    setReads((prev) => {
+      const next = { ...prev }
+      for (const id of ids) next[id] = []
+      for (const r of data ?? []) {
+        const bucket = next[r.message_id] ?? (next[r.message_id] = [])
+        if (!bucket.includes(r.user_id)) bucket.push(r.user_id)
+      }
+      return next
+    })
+  }, [])
+
   const profilesRef = useRef(profiles)
   profilesRef.current = profiles
 
@@ -160,6 +187,35 @@ export default function Chat({ session }) {
       )
     },
     [myId],
+  )
+
+  // ---- read receipts -------------------------------------------------------
+  // Mark other people's messages in the currently viewed conversation as
+  // read by me, once per message per session. Never in owner view: the
+  // owner is not a participant there, so viewing must not create a read
+  // row and must not change anyone's ticks. Own messages are never
+  // marked (a sender does not read their own message into blue ticks).
+  // A failed upsert (for example, before migration 0007 is applied) is
+  // ignored on purpose: it must never crash the chat or block messages.
+  const markAsRead = useCallback(
+    (rows) => {
+      const v = viewRef.current
+      if (!v || v.type === 'owner') return
+      const todo = (rows ?? []).filter(
+        (m) => m && m.user_id !== myId && isMessageForView(m, v) && !markedReadRef.current.has(m.id),
+      )
+      if (!todo.length) return
+      for (const m of todo) markedReadRef.current.add(m.id)
+      supabase
+        .from('message_reads')
+        .upsert(
+          todo.map((m) => ({ message_id: m.id, user_id: myId })),
+          { onConflict: 'message_id,user_id' },
+        )
+        .then(() => {})
+        .catch(() => {})
+    },
+    [myId, isMessageForView],
   )
 
   const dmPeerOf = useCallback(
@@ -667,6 +723,8 @@ export default function Chat({ session }) {
       setHasMore((msgRows ?? []).length === PAGE_SIZE)
       setLoading(false)
       loadReactions(rows.map((m) => m.id))
+      loadReads(rows.map((m) => m.id))
+      markAsRead(rows)
       signUrls(rows.map((m) => m.attachment_path))
     }
     load()
@@ -724,9 +782,17 @@ export default function Chat({ session }) {
         }
         if (m.user_id !== myId) playReceive()
         addMessage(m)
+        markAsRead([m])
       })
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, ({ old }) =>
         setMessages((prev) => prev.filter((m) => m.id !== old.id)),
+      )
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_reads' }, ({ new: r }) =>
+        setReads((prev) => {
+          const list = prev[r.message_id] ?? []
+          if (list.includes(r.user_id)) return prev
+          return { ...prev, [r.message_id]: [...list, r.user_id] }
+        }),
       )
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'reactions' }, ({ new: r }) =>
         applyReaction(r.message_id, r.user_id, r.emoji, true),
@@ -753,7 +819,7 @@ export default function Chat({ session }) {
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [myId, addMessage, applyReaction, dmPeerOf, addDmPeer, addOwnerPair, ensureProfile, isMessageForView, notify])
+  }, [myId, addMessage, applyReaction, dmPeerOf, addDmPeer, addOwnerPair, ensureProfile, isMessageForView, notify, markAsRead])
 
   async function loadOlder() {
     const oldest = messages[0]
@@ -773,6 +839,8 @@ export default function Chat({ session }) {
     setMessages((prev) => [...rows, ...prev])
     setHasMore((data ?? []).length === PAGE_SIZE)
     loadReactions(rows.map((m) => m.id))
+    loadReads(rows.map((m) => m.id))
+    markAsRead(rows)
     signUrls(rows.map((m) => m.attachment_path))
   }
 
@@ -954,6 +1022,9 @@ export default function Chat({ session }) {
   }
 
   const memberIds = Object.keys(profiles)
+  // Everyone else in the group, used only for the read-receipt rule:
+  // a group message is blue only once every one of these has read it.
+  const otherMemberIds = memberIds.filter((id) => id !== myId)
   const headerFaces = [...memberIds.filter((id) => id !== myId), myId].slice(0, 3)
   const peerName = peerId ? profiles[peerId] ?? '…' : null
   const ownerNameA = ownerA ? profiles[ownerA] ?? '…' : null
@@ -1059,6 +1130,16 @@ export default function Chat({ session }) {
               first={item.first}
               last={item.last}
               mine={item.msg.user_id === myId}
+              read={
+                !isOwnerView &&
+                item.msg.user_id === myId &&
+                (isGroup
+                  ? otherMemberIds.length > 0 &&
+                    otherMemberIds.every((id) => (reads[item.msg.id] ?? []).includes(id))
+                  : peerId
+                    ? (reads[item.msg.id] ?? []).includes(peerId)
+                    : false)
+              }
               readOnly={isOwnerView}
               replyOriginal={item.msg.reply_to_id ? originals.get(item.msg.reply_to_id) ?? null : undefined}
               onReply={() => startReply(item.msg)}
@@ -1339,6 +1420,7 @@ function Message({
   first,
   last,
   mine,
+  read = false,
   readOnly = false,
   highlightMentions = false,
   myId,
@@ -1602,6 +1684,16 @@ function Message({
             </>
           )}
         </div>
+        {mine && !readOnly && (
+          <div className="ticks" aria-label={read ? 'Read' : 'Sent'}>
+            <span className="ticks-time">
+              {new Date(msg.created_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
+            </span>
+            <span className={`ticks-marks ${read ? 'read' : ''}`} aria-hidden="true">
+              ✓✓
+            </span>
+          </div>
+        )}
       </div>
     </div>
   )

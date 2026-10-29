@@ -244,6 +244,22 @@ a { color: inherit; }
 }
 .row.mine .stack { align-items: flex-end; }
 
+/* ---- read receipts (ticks, own messages only) ---- */
+/* Grey (--muted) = sent, not yet read. Blue (--blue) = read. No new
+   colours: the ticks reuse the existing muted and blue tokens. The row
+   sits under the bubble, right-aligned, and is rendered only for the
+   sender's own messages, never for other people's, never in owner view. */
+.ticks {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.ticks-marks { letter-spacing: -2px; }
+.ticks-marks.read { color: var(--blue); }
+
 .sender {
   font-size: 11px;
   color: var(--muted);
