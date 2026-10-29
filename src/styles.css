@@ -1174,3 +1174,30 @@ video.media { cursor: default; }
 .api-key-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: 13px; }
 .api-key-name { font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .api-key-revoke { border: 0; background: none; color: var(--danger); font-size: 15px; }
+
+/* ---- typing bubble ---- */
+
+.typing-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 14px;
+}
+.typing-bubble span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: typing-dot 1.2s ease-in-out infinite;
+}
+.typing-bubble span:nth-child(2) { animation-delay: 0.15s; }
+.typing-bubble span:nth-child(3) { animation-delay: 0.3s; }
+.typing-row { animation: typing-in 0.18s ease-out; }
+@keyframes typing-dot {
+  0%, 60%, 100% { opacity: 0.35; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-3px); }
+}
+@keyframes typing-in { from { opacity: 0; transform: translateY(6px); } }
+@media (prefers-reduced-motion: reduce) {
+  .typing-bubble span, .typing-row { animation: none; }
+}

@@ -32,7 +32,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { waitUntil } from '@vercel/functions'
 import { getVercelOidcToken } from '@vercel/oidc'
 import { timingSafeEqual } from 'node:crypto'
-import { client, usernameToEmail, markRead, HttpError, BUCKET } from './_lib.js'
+import { client, usernameToEmail, markRead, broadcastTyping, HttpError, BUCKET } from './_lib.js'
 import { PERSONAS, defaultPersona } from './_personas.js'
 
 const GATEWAY_URL = 'https://ai-gateway.vercel.sh'
@@ -83,7 +83,7 @@ async function botSession(bot, { fresh = false } = {}) {
   if (error) throw new HttpError(500, `Login failed for "${bot.name}": ${error.message}`)
   const sb = client(data.session.access_token)
   const { data: hook } = await sb.from('agent_webhooks').select('url, secret').maybeSingle()
-  const session = { ...bot, sb, userId: data.user.id, expiresAt: data.session.expires_at, hook }
+  const session = { ...bot, sb, token: data.session.access_token, userId: data.user.id, expiresAt: data.session.expires_at, hook }
   sessions.set(bot.name, session)
   return session
 }
@@ -238,6 +238,15 @@ async function respond(bot, incoming, llm) {
         `or it just wraps up a topic, reply with exactly ${NO_REPLY} and nothing else. Always answer when ` +
         `someone mentions you by name, asks you something, or replies to one of your messages.`)
 
+  // Show "typing…" while Claude writes the reply (it lasts ~6 s per event).
+  const typingTo = isDirect ? incoming.user_id : null
+  // In the group the bot often decides not to answer, so only show it typing
+  // there when it was named.
+  const named = new RegExp(`\\b${bot.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(incoming.content ?? '')
+  const showTyping = () => broadcastTyping(bot.token, userId, typingTo).catch(() => {})
+  if (isDirect || named) showTyping()
+  const typingTimer = isDirect || named ? setInterval(showTyping, 4000) : null
+
   const request = {
     model: model(),
     max_tokens: 16000,
@@ -248,24 +257,30 @@ async function respond(bot, incoming, llm) {
   }
   // Direct to Anthropic: on a safety decline, retry on another Claude model
   // server-side (AI Gateway applies its own provider routing instead).
-  const response = useGateway()
-    ? await llm.messages.create(request)
-    : await llm.beta.messages.create({ ...request, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' })
-  if (response.stop_reason === 'refusal') return
+  let response
+  try {
+    response = useGateway()
+      ? await llm.messages.create(request)
+      : await llm.beta.messages.create({ ...request, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' })
+  } finally {
+    clearInterval(typingTimer)
+  }
+  const stopTyping = () => broadcastTyping(bot.token, userId, typingTo, false).catch(() => {})
+  if (response.stop_reason === 'refusal') return stopTyping()
 
   const text = response.content
     .filter((b) => b.type === 'text')
     .map((b) => b.text)
     .join('')
     .trim()
-  if (!text || text === NO_REPLY) return
+  if (!text || text === NO_REPLY) return stopTyping()
 
   // Still the latest? If a person wrote again while Claude was thinking, let
   // that message's own delivery answer instead.
   let check = sb.from('messages').select('id, user_id').gt('id', incoming.id).neq('user_id', userId).limit(20)
   check = isDirect ? check.eq('user_id', incoming.user_id).eq('recipient_id', userId) : check.is('recipient_id', null)
   const { data: newer } = await check
-  if (newer?.some((m) => !isBot(m.user_id))) return
+  if (newer?.some((m) => !isBot(m.user_id))) return stopTyping()
 
   const { error: postError } = await sb
     .from('messages')

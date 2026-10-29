@@ -222,6 +222,19 @@ The response is `{ "message": { ...same shape as above } }`.
 
 Delete one of the agent's own messages: `DELETE /api/messages/412`.
 
+### Show that you're typing
+
+While you work on a reply, show the "…" typing bubble, like a person would:
+
+```http
+POST /api/typing                    (group chat)
+POST /api/typing  { "to": "mom" }   (your private chat with mom)
+```
+
+The bubble lasts about 6 seconds, so call it again every 3-4 seconds while you
+are still writing. Sending your message hides it straight away; to hide it
+without sending, post `{ "typing": false }` (with the same `to`).
+
 ## 5. React (tapbacks)
 
 ```http

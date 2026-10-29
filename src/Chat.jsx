@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { supabase, BUCKET, AVATAR_BUCKET, avatarUrl } from './supabase.js'
 import Splash from './Splash.jsx'
 import ApiKeys from './ApiKeys.jsx'
+import { useTyping } from './typing.js'
 import { playPop, playReceive, playSend, setSoundsEnabled, soundsEnabled, unlockAudio } from './sounds.js'
 
 const PAGE_SIZE = 100
@@ -163,6 +164,8 @@ export default function Chat({ session }) {
   const isGroup = view.type === 'group'
   const peerId = view.type === 'dm' ? view.peerId : null
   const isOwnerView = view.type === 'owner'
+  const typing = useTyping(myId, isGroup ? null : peerId ?? undefined)
+  const clearTyping = typing.clear
   const ownerA = isOwnerView ? view.aId : null
   const ownerB = isOwnerView ? view.bId : null
   const viewRef = useRef(view)
@@ -542,13 +545,21 @@ export default function Chat({ session }) {
       setPushStatus('denied')
       return
     }
-    const vapidKey = import.meta.env.VITE_VAPID_PUBLIC_KEY
+    // The public VAPID key comes from the server, which creates the key pair
+    // the first time anyone turns push on (api/push/key.js). A key set at
+    // build time in VITE_VAPID_PUBLIC_KEY still takes precedence.
+    let vapidKey = import.meta.env.VITE_VAPID_PUBLIC_KEY
     if (!vapidKey) {
-      // No key is invented here. Until a real VAPID key pair is generated
-      // and the public key is set (see docs/web-push.md), push stays off.
-      setPushStatus('unconfigured')
-      setPushError('Push is not configured yet: the app needs a VAPID public key. No key was created.')
-      return
+      try {
+        const res = await fetch('/api/push/key')
+        const body = await res.json()
+        if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`)
+        vapidKey = body.publicKey
+      } catch (err) {
+        setPushStatus('unconfigured')
+        setPushError(`Push isn't available on this server yet: ${err.message}`)
+        return
+      }
     }
     try {
       const reg = await getPushRegistration()
@@ -739,6 +750,7 @@ export default function Chat({ session }) {
     const channel = supabase
       .channel('group-chat')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, ({ new: m }) => {
+        clearTyping(m.user_id)
         const peer = dmPeerOf(m)
         if (peer) {
           // A DM for a peer not currently being viewed still adds that peer
@@ -851,6 +863,12 @@ export default function Chat({ session }) {
     const el = listRef.current
     if (el && stickToBottom.current) el.scrollTop = el.scrollHeight
   }, [])
+
+  // A typing bubble appearing at the bottom keeps the view pinned there.
+  const typingCount = typing.typers.length
+  useLayoutEffect(() => {
+    if (typingCount) scrollToBottom()
+  }, [typingCount, scrollToBottom])
 
   useLayoutEffect(() => {
     const el = listRef.current
@@ -1161,6 +1179,23 @@ export default function Chat({ session }) {
             />
           ),
         )}
+        {typing.typers.map((id) => (
+          <div key={`typing-${id}`} className="row theirs first typing-row" aria-label={`${profiles[id] ?? 'Someone'} is typing`}>
+            <div className="row-avatar">
+              <Avatar name={profiles[id] ?? '?'} src={avatars[id]} />
+            </div>
+            <div className="stack">
+              {isGroup && <div className="sender">{profiles[id] ?? '…'}</div>}
+              <div className="pieces">
+                <div className="bubble tail typing-bubble">
+                  <span />
+                  <span />
+                  <span />
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
       </main>
 
       {error && (
@@ -1216,6 +1251,7 @@ export default function Chat({ session }) {
               .sort((a, b) => (profiles[a] ?? '').localeCompare(profiles[b] ?? ''))
               .map((id) => ({ id, username: profiles[id], avatar: avatars[id] }))}
             viewKey={isGroup ? 'group' : `dm:${peerId}`}
+            onTyping={typing.notify}
           />
         </>
       )}
@@ -1701,7 +1737,7 @@ function Message({
   )
 }
 
-function Composer({ onSend, placeholder = 'Message', enableMentions = false, members = [], viewKey = '' }) {
+function Composer({ onSend, placeholder = 'Message', enableMentions = false, members = [], viewKey = '', onTyping }) {
   const [text, setText] = useState('')
   const [file, setFile] = useState(null)
   const [preview, setPreview] = useState(null)
@@ -1797,6 +1833,7 @@ function Composer({ onSend, placeholder = 'Message', enableMentions = false, mem
     e?.preventDefault()
     if (!canSend) return
     setBusy(true)
+    onTyping?.(false)
     const ok = await onSend({ text: text.trim(), file })
     setBusy(false)
     if (ok) {
@@ -1941,6 +1978,7 @@ function Composer({ onSend, placeholder = 'Message', enableMentions = false, mem
             onChange={(e) => {
               setText(e.target.value)
               updateMention(e.target.value, e.target.selectionStart ?? e.target.value.length)
+              onTyping?.(e.target.value.trim().length > 0)
             }}
             onPaste={onPaste}
             onKeyDown={onComposerKeyDown}

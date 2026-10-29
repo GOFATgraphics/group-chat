@@ -61,7 +61,7 @@ export const hashKey = (key) => createHash('sha256').update(key).digest('hex')
 
 // Service-role client: used only to look up a key's owner and start a
 // session for them. All chat reads and writes use that member's session.
-function admin() {
+export function admin() {
   const secret = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY
   if (!secret) throw new HttpError(500, 'API keys are not enabled on this server: set SUPABASE_SERVICE_ROLE_KEY in Vercel')
   return createClient(SUPABASE_URL, secret, { auth: { persistSession: false, autoRefreshToken: false } })
@@ -211,4 +211,18 @@ export async function markRead(sb, userId, rows) {
   if (!unread.length) return
   const { error } = await sb.from('message_reads').upsert(unread, { onConflict: 'message_id,user_id', ignoreDuplicates: true })
   if (error) console.error('markRead', error.message)
+}
+
+// Shows (or hides) the "typing…" bubble for this member in a conversation,
+// via the same Realtime broadcast channel the app listens on (src/typing.js).
+// to: null for the group chat, or the recipient's user id.
+export async function broadcastTyping(token, userId, to, typing = true) {
+  const res = await fetch(`${SUPABASE_URL}/realtime/v1/api/broadcast`, {
+    method: 'POST',
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messages: [{ topic: 'typing', event: 'typing', payload: { user_id: userId, to: to ?? null, typing } }],
+    }),
+  })
+  if (!res.ok) throw new HttpError(502, `Typing broadcast failed (HTTP ${res.status})`)
 }

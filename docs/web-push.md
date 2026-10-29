@@ -1,11 +1,11 @@
 # Web push for Group Chat
 
 How a member gets a notification on their lock screen even when the app
-is closed. This document contains no secrets and no keys. Nothing here
-is a live backend: the sender described in section 4 is still to be
-built and deployed, so push cannot go live until sections 4-5 are done.
+is closed. This document contains no secrets and no keys. The sender is
+built (section 4) and sets itself up (section 5); push goes live once
+`SUPABASE_SERVICE_ROLE_KEY` is set in Vercel.
 
-## 1. What already exists in the app (local build only)
+## 1. What exists in the app
 
 - `public/sw.js`: the service worker. It handles `push` (shows a
   notification from the payload) and `notificationclick` (focuses an
@@ -17,7 +17,7 @@ built and deployed, so push cannot go live until sections 4-5 are done.
 - The Push toggle in the People sheet (next to Sounds and
   Notifications). Turning it on registers the service worker, asks for
   push permission only at that moment, creates a PushSubscription with
-  the VAPID public key from `VITE_VAPID_PUBLIC_KEY`, and stores the
+  the VAPID public key from `GET /api/push/key` (section 5), and stores the
   subscription in `push_subscriptions` (migration `0006`).
 - The in-app toast, the browser Notification while the tab is open, and
   the unread/title badge are separate from push and keep working
@@ -49,54 +49,36 @@ same preview the in-app toast shows (text truncated, or "sent a
 photo/file" for attachments). The service worker never fetches message
 content itself.
 
-## 4. Sending (to be built, not in this task)
+## 4. Sending (built)
 
-The intended route, in order:
-
-1. A database webhook on `messages` INSERT (Supabase Database Webhooks)
-   calls a server-side sender: a Supabase Edge Function or a Vercel
-   function. No sender function is shipped in this change, and no stub
-   that could send is included, so nothing can push until this is
-   built and deployed.
-2. The sender reads the new message's `user_id` and `recipient_id` and
-   works out the recipients, and only those recipients:
+1. Migration `0010_push_sender.sql` adds a trigger on `messages` INSERT
+   that POSTs each new message to the sender, `api/push` on Vercel, with
+   a shared secret. Until the sender is registered (step 3) the trigger
+   does nothing.
+2. The sender works out the recipients, and only those recipients:
    - Group message (`recipient_id` null): every member except the
      sender.
    - DM: the recipient only. Never any other member, and never the
-     sender.
-   - A DM between two other members: no push to the owner for that
-     message. The owner view is read-only monitoring inside the app;
-     it does not make the owner a recipient. (If the owner is a
-     participant in a DM, they get that DM's push as a participant,
-     not as owner.)
-3. For each recipient, the sender loads that recipient's rows from
-   `push_subscriptions` and sends a web-push message to each endpoint
-   with the payload in section 3, signed with the VAPID private key.
-4. On a `410 Gone` / `404 Not Found` response from a push service, the
-   sender deletes that subscription row: the device unsubscribed or the
-   subscription expired, and retrying it would be spam.
+     sender. A DM between two other members is never pushed to the
+     owner; the owner view stays read-only monitoring inside the app.
+3. For each recipient it loads their `push_subscriptions` rows and sends
+   a web push with the payload in section 3, signed with the VAPID key.
+   `410 Gone` / `404 Not Found` deletes that subscription row.
 
-## 5. Secrets and env values still needed before go-live
+## 5. Keys and setup (automatic)
 
-Nothing below exists yet, and nothing below may be committed to the
-repo or put in client code:
-
-- A VAPID key pair, generated once (for example with the `web-push`
-  library's `generateVAPIDKeys()` on a developer machine, never in the
-  app). The public key goes in the app's env as
-  `VITE_VAPID_PUBLIC_KEY` (Vercel env vars for the group-chat project,
-  all environments). Until it is set, the Push toggle reports "Push is
-  not configured yet" and stays off; no key is invented.
-- The private key goes only in the sender's server secret store
-  (Supabase Edge Function secrets, or Vercel env vars marked for the
-  server function only, never exposed to the browser). It must never
-  appear in the repo, in `public/`, or in any client bundle.
-- The `0006` migration must be applied to live Supabase before the
-  toggle can store a subscription; until then subscribing fails with
-  the database error shown in settings, and the subscription is
-  removed again so no orphan subscription is left behind.
-- The sender from section 4 must be built, deployed, and pointed at
-  by the database webhook, and tested end to end (see section 7).
+- The VAPID key pair is created by the server the first time anyone turns
+  push on: the app calls `GET /api/push/key`, which generates the pair
+  once, stores it in `push_config`, and registers this deployment's
+  production URL as the sender. `push_config` has row-level security on
+  and no policies, so only the server (service role) and the trigger can
+  read it; the private key never reaches the browser or the repo.
+- The only server setting needed is `SUPABASE_SERVICE_ROLE_KEY` in Vercel
+  (the same one API keys use). `VITE_VAPID_PUBLIC_KEY` is no longer
+  required; if it is set, the app uses it instead of asking the server,
+  so it must then match the stored pair.
+- Optional: `VAPID_SUBJECT` (a `mailto:` or `https:` contact for push
+  services); defaults to the production URL.
 
 ## 6. Lock-screen honesty, and the install steps
 
@@ -130,8 +112,8 @@ platform conditions the app cannot override:
 
 ## 7. Live-check list (parent to run after push goes live)
 
-1. Apply migration `0006`, set `VITE_VAPID_PUBLIC_KEY`, deploy the
-   sender, and wire the messages-INSERT webhook.
+1. Set `SUPABASE_SERVICE_ROLE_KEY` in Vercel and redeploy (migrations
+   `0006` and `0010` are already applied).
 2. On a test device, install the app (iOS) or open it (Android),
    turn on Push, and confirm a subscription row appears for that user
    only.
