@@ -26,6 +26,9 @@ export default function Chat({ session }) {
   const [error, setError] = useState('')
   const [pickerFor, setPickerFor] = useState(null)
   const [showMembers, setShowMembers] = useState(false)
+  const [view, setView] = useState({ type: 'group' })
+  const [showPanel, setShowPanel] = useState(false)
+  const [dmPeers, setDmPeers] = useState([])
   const [lightbox, setLightbox] = useState(null)
   const [sounds, setSounds] = useState(soundsEnabled)
 
@@ -60,6 +63,58 @@ export default function Chat({ session }) {
 
   const profilesRef = useRef(profiles)
   profilesRef.current = profiles
+
+  // ---- conversations -------------------------------------------------------
+  // view is { type: 'group' } or { type: 'dm', peerId }.
+  const isGroup = view.type === 'group'
+  const peerId = view.type === 'dm' ? view.peerId : null
+  const viewRef = useRef(view)
+  viewRef.current = view
+
+  const isMessageForView = useCallback(
+    (msg, v) => {
+      if (v.type === 'group') return msg.recipient_id == null
+      return (
+        (msg.user_id === myId && msg.recipient_id === v.peerId) ||
+        (msg.user_id === v.peerId && msg.recipient_id === myId)
+      )
+    },
+    [myId],
+  )
+
+  const dmPeerOf = useCallback(
+    (msg) => {
+      if (msg.recipient_id == null) return null
+      if (msg.user_id === myId) return msg.recipient_id
+      if (msg.recipient_id === myId) return msg.user_id
+      return null
+    },
+    [myId],
+  )
+
+  const addDmPeer = useCallback((id) => {
+    if (!id || id === myId) return
+    setDmPeers((prev) => (prev.includes(id) ? prev : [...prev, id]))
+  }, [myId])
+
+  function filterConversation(query, v) {
+    if (v.type === 'group') return query.is('recipient_id', null)
+    return query.or(
+      `and(user_id.eq.${myId},recipient_id.eq.${v.peerId}),and(user_id.eq.${v.peerId},recipient_id.eq.${myId})`,
+    )
+  }
+
+  function openDm(id) {
+    addDmPeer(id)
+    setView({ type: 'dm', peerId: id })
+    setShowMembers(false)
+    setShowPanel(false)
+  }
+
+  function openGroup() {
+    setView({ type: 'group' })
+    setShowPanel(false)
+  }
 
   const ensureProfile = useCallback(async (userId) => {
     if (profilesRef.current[userId]) return
@@ -102,19 +157,62 @@ export default function Chat({ session }) {
     let cancelled = false
 
     async function load() {
-      const [{ data: meRow }, { data: profileRows }, { data: msgRows, error: msgErr }] = await Promise.all([
+      const [{ data: meRow }, { data: profileRows }, { data: dmRows, error: dmErr }] = await Promise.all([
         supabase.from('profiles').select('id, username').eq('id', myId).maybeSingle(),
         supabase.from('profiles').select('id, username, avatar_path'),
-        supabase.from('messages').select('*').order('id', { ascending: false }).limit(PAGE_SIZE),
+        supabase
+          .from('messages')
+          .select('user_id, recipient_id')
+          .not('recipient_id', 'is', null)
+          .or(`user_id.eq.${myId},recipient_id.eq.${myId}`)
+          .limit(1000),
       ])
       if (cancelled) return
       setMe(meRow ?? null)
       if (!meRow) return setLoading(false)
-      if (msgErr) setError(msgErr.message)
-
-      const rows = (msgRows ?? []).reverse()
+      if (dmErr) setError(dmErr.message)
       setProfiles(Object.fromEntries((profileRows ?? []).map((p) => [p.id, p.username])))
       setAvatars(Object.fromEntries((profileRows ?? []).map((p) => [p.id, avatarUrl(p.avatar_path)])))
+      // Peers the user already has a DM conversation with, from message history.
+      const peers = new Set()
+      for (const row of dmRows ?? []) {
+        if (row.user_id === myId && row.recipient_id) peers.add(row.recipient_id)
+        else if (row.recipient_id === myId) peers.add(row.user_id)
+      }
+      setDmPeers([...peers])
+    }
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [myId])
+
+  // Escape closes the side panel, like tapping its backdrop or close button.
+  useEffect(() => {
+    if (!showPanel) return
+    const onKey = (e) => {
+      if (e.key === 'Escape') setShowPanel(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [showPanel])
+
+  // Load the currently selected conversation (group or one DM) from scratch.
+  useEffect(() => {
+    if (me === undefined || me === null) return
+    let cancelled = false
+    setLoading(true)
+    setMessages([])
+    setHasMore(false)
+    stickToBottom.current = true
+    async function load() {
+      const { data: msgRows, error: msgErr } = await filterConversation(
+        supabase.from('messages').select('*').order('id', { ascending: false }).limit(PAGE_SIZE),
+        view,
+      )
+      if (cancelled) return
+      if (msgErr) setError(msgErr.message)
+      const rows = (msgRows ?? []).reverse()
       setMessages(rows)
       setHasMore((msgRows ?? []).length === PAGE_SIZE)
       setLoading(false)
@@ -122,10 +220,30 @@ export default function Chat({ session }) {
       signUrls(rows.map((m) => m.attachment_path))
     }
     load()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [me, view])
 
+  useEffect(() => {
     const channel = supabase
       .channel('group-chat')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, ({ new: m }) => {
+        const peer = dmPeerOf(m)
+        if (peer) {
+          // A DM for a peer not currently being viewed still adds that peer
+          // to the side panel list, without leaking the message into the
+          // current view.
+          addDmPeer(peer)
+          ensureProfile(m.user_id)
+          if (!isMessageForView(m, viewRef.current)) {
+            if (m.user_id !== myId) playReceive()
+            return
+          }
+        } else if (!isMessageForView(m, viewRef.current)) {
+          return
+        }
         if (m.user_id !== myId) playReceive()
         addMessage(m)
       })
@@ -150,20 +268,22 @@ export default function Chat({ session }) {
       })
 
     return () => {
-      cancelled = true
       supabase.removeChannel(channel)
     }
-  }, [myId, addMessage, applyReaction, loadReactions, signUrls])
+  }, [myId, addMessage, applyReaction, dmPeerOf, addDmPeer, ensureProfile, isMessageForView])
 
   async function loadOlder() {
     const oldest = messages[0]
     if (!oldest) return
-    const { data } = await supabase
-      .from('messages')
-      .select('*')
-      .lt('id', oldest.id)
-      .order('id', { ascending: false })
-      .limit(PAGE_SIZE)
+    const { data } = await filterConversation(
+      supabase
+        .from('messages')
+        .select('*')
+        .lt('id', oldest.id)
+        .order('id', { ascending: false })
+        .limit(PAGE_SIZE),
+      view,
+    )
     const rows = (data ?? []).reverse()
     const el = listRef.current
     preserveScroll.current = el.scrollHeight - el.scrollTop
@@ -237,7 +357,7 @@ export default function Chat({ session }) {
     }
     const { data, error: insErr } = await supabase
       .from('messages')
-      .insert({ content: text || null, ...attachment })
+      .insert({ content: text || null, recipient_id: peerId, ...attachment })
       .select()
       .single()
     if (insErr) {
@@ -321,22 +441,51 @@ export default function Chat({ session }) {
 
   const memberIds = Object.keys(profiles)
   const headerFaces = [...memberIds.filter((id) => id !== myId), myId].slice(0, 3)
+  const peerName = peerId ? profiles[peerId] ?? '…' : null
+  const dmList = dmPeers
+    .filter((id) => profiles[id])
+    .sort((a, b) => (profiles[a] ?? '').localeCompare(profiles[b] ?? ''))
 
   return (
     <div className="chat">
       <header className="topbar">
-        <button className="topbar-center" onClick={() => setShowMembers(true)}>
-          <span className="group-avatar">
-            {headerFaces.map((id) => (
-              <Avatar key={id} name={profiles[id] ?? '?'} src={avatars[id]} />
-            ))}
-          </span>
-          <span className="people-pill">
-            {memberIds.length} People <Chevron />
-          </span>
-        </button>
+        {isGroup ? (
+          <button className="topbar-btn left" onClick={() => setShowPanel(true)} aria-label="Open chats">
+            ☰ Chats
+          </button>
+        ) : (
+          <>
+            <button className="topbar-btn left" onClick={openGroup} aria-label="Back to Group Chat">
+              ‹ Back
+            </button>
+            <button className="topbar-btn right" onClick={() => setShowPanel(true)} aria-label="Open chats">
+              ☰ Chats
+            </button>
+          </>
+        )}
+        {isGroup ? (
+          <button className="topbar-center" onClick={() => setShowMembers(true)}>
+            <span className="group-avatar">
+              {headerFaces.map((id) => (
+                <Avatar key={id} name={profiles[id] ?? '?'} src={avatars[id]} />
+              ))}
+            </span>
+            <span className="people-pill">
+              {memberIds.length} People <Chevron />
+            </span>
+          </button>
+        ) : (
+          <button className="topbar-center" onClick={() => setShowMembers(true)}>
+            <span className="group-avatar">
+              <Avatar name={peerName} src={avatars[peerId]} />
+            </span>
+            <span className="people-pill">{peerName}</span>
+          </button>
+        )}
         <div className="topbar-sub">
-          Group Chat{online.length > 0 && ` · ${online.length} online`}
+          {isGroup
+            ? `Group Chat${online.length > 0 ? ` · ${online.length} online` : ''}`
+            : `Private chat · only you and ${peerName}`}
         </div>
       </header>
 
@@ -350,7 +499,11 @@ export default function Chat({ session }) {
         {!loading && !messages.length && (
           <div className="empty">
             <img className="empty-logo" src="/logo.png" alt="" />
-            No messages yet. Say hi 👋
+            {isGroup ? (
+              <>No messages yet. Say hi 👋</>
+            ) : (
+              <>No messages yet. This is a private chat between you and {peerName}.</>
+            )}
           </div>
         )}
         {items.map((item) =>
@@ -389,7 +542,51 @@ export default function Chat({ session }) {
         </div>
       )}
 
-      <Composer onSend={send} />
+      <Composer onSend={send} placeholder={isGroup ? 'Message' : `Message ${peerName}`} />
+
+      {showPanel && (
+        <div className="panel-backdrop" onClick={() => setShowPanel(false)}>
+          <div className="panel" onClick={(e) => e.stopPropagation()}>
+            <div className="panel-head">
+              <span>Chats</span>
+              <button className="panel-close" onClick={() => setShowPanel(false)} aria-label="Close chats">
+                ✕
+              </button>
+            </div>
+            <button className={`dm-entry ${isGroup ? 'active' : ''}`} onClick={openGroup}>
+              <span className="group-avatar">
+                {headerFaces.map((id) => (
+                  <Avatar key={id} name={profiles[id] ?? '?'} src={avatars[id]} />
+                ))}
+              </span>
+              <span className="dm-name">Group Chat</span>
+              {online.length > 0 && <span className="dm-meta">{online.length} online</span>}
+            </button>
+            <div className="panel-section">Direct messages</div>
+            {dmList.length === 0 ? (
+              <div className="panel-empty muted">
+                No direct chats yet. Use Chat with in People to start one.
+              </div>
+            ) : (
+              <ul className="dm-list">
+                {dmList.map((id) => (
+                  <li key={id}>
+                    <button
+                      className={`dm-entry ${!isGroup && peerId === id ? 'active' : ''}`}
+                      aria-label={`Chat with ${profiles[id]}${online.includes(id) ? ' (online)' : ''}`}
+                      onClick={() => openDm(id)}
+                    >
+                      <Avatar name={profiles[id]} src={avatars[id]} />
+                      <span className="dm-name">{profiles[id]}</span>
+                      {online.includes(id) && <span className="online-dot" title="Online" />}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
 
       {showMembers && (
         <div className="sheet-backdrop" onClick={() => setShowMembers(false)}>
@@ -417,6 +614,11 @@ export default function Chat({ session }) {
                       {id === myId && <span className="muted"> (you)</span>}
                     </span>
                     {online.includes(id) && <span className="online-dot" title="Online" />}
+                    {id !== myId && (
+                      <button className="chat-with" onClick={() => openDm(id)}>
+                        Chat with
+                      </button>
+                    )}
                   </li>
                 ))}
             </ul>
@@ -613,7 +815,7 @@ function Message({
   )
 }
 
-function Composer({ onSend }) {
+function Composer({ onSend, placeholder = 'Message' }) {
   const [text, setText] = useState('')
   const [file, setFile] = useState(null)
   const [preview, setPreview] = useState(null)
@@ -718,7 +920,7 @@ function Composer({ onSend }) {
           <textarea
             ref={textRef}
             rows={1}
-            placeholder="Message"
+            placeholder={placeholder}
             value={text}
             onFocus={() => setMenu(false)}
             onChange={(e) => setText(e.target.value)}

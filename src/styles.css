@@ -737,6 +737,118 @@ video.media { cursor: default; }
 @keyframes fade { from { opacity: 0; } }
 @keyframes slide-up { from { transform: translateY(40px); opacity: 0; } }
 
+/* ---- chats side panel ---- */
+
+.topbar-btn {
+  position: absolute;
+  top: calc(12px + env(safe-area-inset-top));
+  border: 0;
+  background: var(--raised);
+  box-shadow: var(--shadow);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--blue);
+  z-index: 6;
+}
+.topbar-btn.left { left: 12px; }
+.topbar-btn.right { right: 12px; }
+
+.panel-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 24;
+  background: rgba(0, 0, 0, 0.35);
+  animation: fade 0.15s ease-out;
+}
+.panel {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(320px, 85vw);
+  overflow-y: auto;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+  padding: calc(16px + env(safe-area-inset-top)) 12px calc(16px + env(safe-area-inset-bottom));
+  animation: slide-in-left 0.2s ease-out;
+}
+@keyframes slide-in-left { from { transform: translateX(-100%); } }
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 4px 12px;
+  font-size: 20px;
+  font-weight: 700;
+}
+.panel-close {
+  border: 0;
+  background: var(--fill);
+  border-radius: 50%;
+  width: 30px;
+  height: 30px;
+  font-size: 14px;
+  color: var(--muted);
+}
+.panel-section {
+  margin: 18px 4px 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.dm-list { list-style: none; margin: 0; padding: 0; }
+.dm-entry {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  border: 0;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: none;
+  text-align: left;
+  font-size: 16px;
+}
+.dm-entry.active { background: var(--fill); }
+.dm-entry .group-avatar .avatar { width: 32px; height: 32px; font-size: 14px; }
+.dm-entry .avatar { width: 40px; height: 40px; font-size: 16px; }
+.dm-name { flex: 1; font-weight: 500; }
+.dm-meta { font-size: 13px; color: var(--muted); }
+.panel-empty { padding: 4px 12px 12px; font-size: 14px; }
+
+.chat-with {
+  margin-left: auto;
+  border: 0;
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: var(--fill);
+  color: var(--blue);
+  font-size: 14px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+/* Visible focus and disabled states for every new control. The existing
+   app only styles focus on the login input, so these are scoped to the DM
+   controls rather than restyling the whole app. */
+.topbar-btn:focus-visible,
+.dm-entry:focus-visible,
+.chat-with:focus-visible,
+.panel-close:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+.topbar-btn:disabled,
+.dm-entry:disabled,
+.chat-with:disabled,
+.panel-close:disabled {
+  opacity: 0.5;
+}
+
 /* ---- overlays ---- */
 
 .toast {
