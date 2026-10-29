@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { supabase, BUCKET, AVATAR_BUCKET, avatarUrl } from './supabase.js'
 import Splash from './Splash.jsx'
 import ApiKeys from './ApiKeys.jsx'
 import { useTyping } from './typing.js'
 import { VoicePlayer, VoiceRecorder, MicIcon, canRecordVoice, formatDuration } from './Voice.jsx'
 import MediaViewer from './MediaViewer.jsx'
+// The call screen (and the realtime SDK) only loads when a call starts.
+const CallScreen = lazy(() => import('./CallScreen.jsx'))
 import { prepareForUpload, uploadWithProgress, saveMedia, imageLinksIn, withoutMarkdownImages } from './media.js'
 import { playPop, playReceive, playSend, setSoundsEnabled, soundsEnabled, unlockAudio } from './sounds.js'
 
@@ -52,6 +54,8 @@ export default function Chat({ session }) {
   const [ownerPairs, setOwnerPairs] = useState([])
   const [lightbox, setLightbox] = useState(null) // { url, name, type } for the full-screen viewer
   const [uploadProgress, setUploadProgress] = useState({}) // draft id -> 0..1
+  const [aiIds, setAiIds] = useState(() => new Set()) // AI members (can be called)
+  const [callWith, setCallWith] = useState(null) // { id, username } during a live call
   const [sounds, setSounds] = useState(soundsEnabled)
   // Realtime notifications (in-app toast + optional browser Notification).
   // Stored separately from sounds: the sounds toggle controls sounds only,
@@ -306,6 +310,7 @@ export default function Chat({ session }) {
   )
 
   const previewOf = (m) => {
+    if (m.call_duration != null) return '📞 Voice call'
     if (m.content?.trim()) {
       const text = m.content.trim()
       return text.length > 80 ? `${text.slice(0, 80)}…` : text
@@ -364,6 +369,7 @@ export default function Chat({ session }) {
   // reply. Text is truncated; attachments get a type word, never a URL.
   const quotePreviewOf = (m) => {
     if (!m) return 'Original message not loaded'
+    if (m.call_duration != null) return 'voice call'
     if (m.content?.trim()) {
       const text = m.content.trim()
       return text.length > 60 ? `${text.slice(0, 60)}…` : text
@@ -639,13 +645,22 @@ export default function Chat({ session }) {
 
   const ensureProfile = useCallback(async (userId) => {
     if (profilesRef.current[userId]) return
-    const { data } = await supabase.from('profiles').select('id, username, avatar_path').eq('id', userId).single()
+    const { data } = await supabase.from('profiles').select('id, username, avatar_path, is_ai').eq('id', userId).single()
     if (data) applyProfile(data)
   }, [])
 
   const applyProfile = (row) => {
     setProfiles((p) => ({ ...p, [row.id]: row.username }))
     setAvatars((a) => ({ ...a, [row.id]: avatarUrl(row.avatar_path) }))
+    if (row.is_ai != null) {
+      setAiIds((prev) => {
+        if (prev.has(row.id) === row.is_ai) return prev
+        const next = new Set(prev)
+        if (row.is_ai) next.add(row.id)
+        else next.delete(row.id)
+        return next
+      })
+    }
   }
 
   const addMessage = useCallback(
@@ -697,7 +712,7 @@ export default function Chat({ session }) {
     async function load() {
       const [{ data: meRow }, { data: profileRows }, { data: dmRows, error: dmErr }] = await Promise.all([
         supabase.from('profiles').select('id, username').eq('id', myId).maybeSingle(),
-        supabase.from('profiles').select('id, username, avatar_path'),
+        supabase.from('profiles').select('id, username, avatar_path, is_ai'),
         supabase
           .from('messages')
           .select('user_id, recipient_id')
@@ -711,6 +726,7 @@ export default function Chat({ session }) {
       if (dmErr) setError(dmErr.message)
       setProfiles(Object.fromEntries((profileRows ?? []).map((p) => [p.id, p.username])))
       setAvatars(Object.fromEntries((profileRows ?? []).map((p) => [p.id, avatarUrl(p.avatar_path)])))
+      setAiIds(new Set((profileRows ?? []).filter((p) => p.is_ai).map((p) => p.id)))
       // Peers the user already has a DM conversation with, from message history.
       const peers = new Set()
       for (const row of dmRows ?? []) {
@@ -1152,6 +1168,25 @@ export default function Chat({ session }) {
     deliver({ ...msg, _status: 'sending' })
   }
 
+  // A finished call becomes a call card in the private chat; its text is the
+  // transcript, so the AI's text agent also knows what was said.
+  async function saveCall(peer, { duration, transcript }) {
+    setCallWith(null)
+    if (!peer || duration < 2) return
+    const { data, error: err } = await supabase
+      .from('messages')
+      .insert({
+        recipient_id: peer.id,
+        content: (transcript || '(no speech was recorded)').slice(0, 40000),
+        call_duration: duration,
+      })
+      .select()
+      .single()
+    if (err) return setError(`Couldn't save the call: ${err.message}`)
+    stickToBottom.current = true
+    addMessage(data)
+  }
+
   // Start a reply from a swipe or from the Reply action. Never in an
   // owner view, where the composer is hidden and read-only.
   function startReply(msg) {
@@ -1337,10 +1372,21 @@ export default function Chat({ session }) {
             <DotsIcon />
           </button>
         ) : (
+          <>
+          {peerId && aiIds.has(peerId) && (
+            <button
+              className="glass-btn right2"
+              onClick={() => setCallWith({ id: peerId, username: peerName })}
+              aria-label={`Call ${peerName}`}
+            >
+              <PhoneIcon />
+            </button>
+          )}
           <button className="glass-btn right" onClick={() => setShowPanel(true)} aria-label={hasUnread ? 'Open chats (unread messages)' : 'Open chats'}>
             <MenuIcon />
             {hasUnread && <span className="glass-dot" />}
           </button>
+          </>
         )}
         <button className="topbar-center" onClick={() => setShowMembers(true)}>
           <span className={`topbar-avatar ${isOwnerView ? 'pair' : ''}`}>
@@ -1705,6 +1751,16 @@ export default function Chat({ session }) {
       )}
 
       {lightbox && <MediaViewer item={lightbox} onClose={() => setLightbox(null)} />}
+      {callWith && (
+        <Suspense fallback={<div className="call-screen" />}>
+          <CallScreen
+            peer={callWith}
+            avatar={avatars[callWith.id]}
+            myName={me.username}
+            onEnded={(result) => saveCall(callWith, result)}
+          />
+        </Suspense>
+      )}
     </div>
   )
 }
@@ -1813,9 +1869,10 @@ function Message({
   const isVideo = msg.attachment_type?.startsWith('video/')
   const isMedia = msg.attachment_path && (isImage || isVideo)
   const isVoice = msg.attachment_path && msg.attachment_type?.startsWith('audio/')
+  const isCall = msg.call_duration != null
   const isFile = msg.attachment_path && !isMedia && !isVoice
   // An image link in the text (e.g. an AI's generated image) shows as a picture.
-  const linkedImages = useMemo(() => imageLinksIn(msg.content), [msg.content])
+  const linkedImages = useMemo(() => (msg.call_duration != null ? [] : imageLinksIn(msg.content)), [msg.content, msg.call_duration])
   const shownText = useMemo(() => withoutMarkdownImages(msg.content), [msg.content])
 
   const grouped = useMemo(() => {
@@ -1859,6 +1916,7 @@ function Message({
   // loaded, a non-clickable fallback when it is deleted or not loaded.
   // Tapping a loaded quote scrolls to the original in this view.
   const quoteOf = (m) => {
+    if (m.call_duration != null) return 'voice call'
     if (m.content?.trim()) {
       const text = m.content.trim()
       return text.length > 60 ? `${text.slice(0, 60)}…` : text
@@ -1948,7 +2006,8 @@ function Message({
               </span>
             </a>
           )}
-          {shownText && (
+          {isCall && <CallCard msg={msg} tail={tail(true)} />}
+          {shownText && !isCall && (
             <div className={`bubble ${tail(!linkedImages.length)}`} title={new Date(msg.created_at).toLocaleString()}>
               {renderMessageContent(shownText, highlightMentions ? profiles : null)}
             </div>
@@ -2078,6 +2137,52 @@ function Message({
             </div>
           ))}
       </div>
+    </div>
+  )
+}
+
+const PhoneIcon = () => (
+  <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true">
+    <path
+      d="M6.6 3.5h2.3l1.4 4.1-1.9 1.4a12 12 0 0 0 6.6 6.6l1.4-1.9 4.1 1.4v2.3c0 1.2-1 2.1-2.2 2A16.5 16.5 0 0 1 4.6 5.7c-.1-1.2.8-2.2 2-2.2z"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinejoin="round"
+    />
+  </svg>
+)
+
+// A finished voice call in the chat: who called, how long, and the transcript.
+function CallCard({ msg, tail }) {
+  const [open, setOpen] = useState(false)
+  const secs = Math.round(msg.call_duration)
+  const length = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`
+  return (
+    <div className={`bubble call-card ${tail}`}>
+      <div className="call-card-head">
+        <span className="call-card-icon">
+          <PhoneIcon />
+        </span>
+        <span className="call-card-info">
+          <span className="call-card-title">Voice call</span>
+          <span className="call-card-sub">{length}</span>
+        </span>
+      </div>
+      {msg.content && (
+        <>
+          <button
+            className="call-card-toggle"
+            onClick={(e) => {
+              e.stopPropagation()
+              setOpen((o) => !o)
+            }}
+          >
+            {open ? 'Hide transcript' : 'Show transcript'}
+          </button>
+          {open && <div className="call-card-transcript">{msg.content}</div>}
+        </>
+      )}
     </div>
   )
 }

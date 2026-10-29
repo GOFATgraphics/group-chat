@@ -1521,3 +1521,106 @@ video.media { cursor: default; }
 }
 .viewer-stage img.animate { transition: transform 0.18s ease-out; }
 .viewer-stage video { max-width: 100%; max-height: 100%; }
+
+/* ---- live calls with AI members ---- */
+
+.glass-btn.right2 { right: 72px; color: var(--green); }
+
+.call-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  padding: calc(56px + env(safe-area-inset-top)) 24px calc(40px + env(safe-area-inset-bottom));
+  color: #fff;
+  background: radial-gradient(120% 80% at 50% 0%, #2b3a55 0%, #12141c 55%, #07080c 100%);
+  animation: fade 0.2s ease-out;
+}
+.call-top { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; max-width: 520px; }
+.call-avatar {
+  width: 128px;
+  height: 128px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(180deg, #6a7aa8, #3b4a73);
+  font-size: 52px;
+  font-weight: 700;
+  box-shadow: 0 0 0 0 rgba(52, 199, 89, 0.55);
+  transition: box-shadow 0.2s;
+}
+.call-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.call-avatar.speaking { animation: call-pulse 1.4s ease-out infinite; }
+@keyframes call-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(52, 199, 89, 0.55); }
+  100% { box-shadow: 0 0 0 26px rgba(52, 199, 89, 0); }
+}
+.call-name { margin-top: 10px; font-size: 30px; font-weight: 600; letter-spacing: -0.01em; }
+.call-status { font-size: 17px; color: rgba(255, 255, 255, 0.7); font-variant-numeric: tabular-nums; }
+.call-error { margin-top: 8px; color: #ff8a80; font-size: 15px; }
+.call-caption {
+  margin-top: 18px;
+  font-size: 16px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.85);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.call-sound-hint {
+  border: 0;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 14px;
+}
+.call-controls { display: flex; align-items: flex-end; gap: 48px; }
+.call-btn {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  border: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.16);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+  color: #fff;
+  position: relative;
+}
+.call-btn span { position: absolute; top: calc(100% + 8px); font-size: 13px; white-space: nowrap; color: rgba(255, 255, 255, 0.8); }
+.call-btn.on { background: #fff; color: #111; }
+.call-btn.end { background: #ff3b30; }
+.call-btn:disabled { opacity: 0.45; }
+@media (prefers-reduced-motion: reduce) { .call-avatar.speaking { animation: none; box-shadow: 0 0 0 6px rgba(52, 199, 89, 0.5); } }
+
+.bubble.call-card { white-space: normal; min-width: 200px; }
+.call-card-head { display: flex; align-items: center; gap: 10px; }
+.call-card-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: rgba(127, 127, 127, 0.22);
+}
+.call-card-info { display: flex; flex-direction: column; }
+.call-card-title { font-weight: 600; }
+.call-card-sub { font-size: 13px; opacity: 0.75; font-variant-numeric: tabular-nums; }
+.call-card-toggle {
+  margin-top: 6px;
+  border: 0;
+  background: none;
+  color: inherit;
+  opacity: 0.85;
+  padding: 0;
+  font-size: 13px;
+  text-decoration: underline;
+}
+.call-card-transcript { margin-top: 6px; white-space: pre-wrap; font-size: 14px; line-height: 1.4; opacity: 0.92; }

@@ -179,6 +179,7 @@ export async function present(sb, rows) {
     reply_to_id: m.reply_to_id ?? null,
     text: m.content,
     kind: kindOf(m),
+    call_duration: m.call_duration ?? null,
     attachment: m.attachment_path
       ? {
           path: m.attachment_path,
@@ -199,6 +200,7 @@ export async function present(sb, rows) {
 // "text", "voice" (a voice note: transcribe attachment.url yourself), "photo",
 // "video" or "file".
 export function kindOf(m) {
+  if (m.call_duration != null) return 'call'
   const t = m.attachment_type ?? ''
   if (t.startsWith('audio/')) return 'voice'
   if (t.startsWith('image/')) return 'photo'

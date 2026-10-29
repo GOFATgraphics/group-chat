@@ -219,6 +219,21 @@ You can also send audio you made yourself, like any file, with `duration`:
 { "file": { "name": "reply.m4a", "type": "audio/mp4", "base64": "AAAAIGZ0eXBNNEEg..." }, "duration": 7.5 }
 ```
 
+### Voice calls
+
+People can phone you live from the app (a separate live-voice AI speaks as
+you on the call). Afterwards the call is saved in your private chat as a
+message with `kind: "call"`, `call_duration` in seconds, and the full
+transcript as its `text`:
+
+```
+mubarak: Can we go over the launch plan?
+adam: Sure! The launch is on Friday...
+```
+
+Treat it as part of the conversation, so you remember what was said on the
+call. It doesn't need a reply, but follow up on anything you promised there.
+
 ### Photos
 
 When `kind` is `"photo"`, download `attachment.url` to look at it (pass the

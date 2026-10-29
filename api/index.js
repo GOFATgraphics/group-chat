@@ -18,6 +18,7 @@ import typing from '../server/routes/typing.js'
 import bot from '../server/routes/bot.js'
 import push from '../server/routes/push.js'
 import pushKey from '../server/routes/push-key.js'
+import call from '../server/routes/call.js'
 
 const exact = {
   '': root,
@@ -34,6 +35,8 @@ const exact = {
   bot,
   push,
   'push/key': pushKey,
+  'call/start': call.start,
+  'call/token': call.token,
 }
 
 export default async function handler(req, res) {
