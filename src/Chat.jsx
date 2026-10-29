@@ -923,6 +923,20 @@ export default function Chat({ session }) {
 
   const items = useMemo(() => buildItems(messages), [messages])
 
+  // Originals for reply quotes: loaded messages first, then any older
+  // original fetched on demand. A missing original renders a fallback
+  // quote, never a broken link or a guess at its text.
+  // This hook MUST stay above the early returns below: it was previously
+  // below them, so the first render (me undefined, Splash) ran fewer hooks
+  // than the next render (me loaded), which React rejects with error #310
+  // "Rendered more hooks than during the previous render" and unmounts
+  // the whole chat. Hooks never run conditionally, in any order.
+  const originals = useMemo(() => {
+    const map = new Map(messages.map((m) => [m.id, m]))
+    for (const [id, row] of Object.entries(extraOriginals)) if (!map.has(Number(id))) map.set(Number(id), row)
+    return map
+  }, [messages, extraOriginals])
+
   if (me === undefined) return <Splash />
   if (me === null) {
     return (
@@ -951,15 +965,6 @@ export default function Chat({ session }) {
   const ownerPairList = ownerPairs
     .filter(([a, b]) => profiles[a] && profiles[b])
     .sort((p, q) => `${profiles[p[0]]} and ${profiles[p[1]]}`.localeCompare(`${profiles[q[0]]} and ${profiles[q[1]]}`))
-
-  // Originals for reply quotes: loaded messages first, then any older
-  // original fetched on demand. A missing original renders a fallback
-  // quote, never a broken link or a guess at its text.
-  const originals = useMemo(() => {
-    const map = new Map(messages.map((m) => [m.id, m]))
-    for (const [id, row] of Object.entries(extraOriginals)) if (!map.has(Number(id))) map.set(Number(id), row)
-    return map
-  }, [messages, extraOriginals])
 
   const noticeSender = notice ? profiles[notice.senderId] ?? 'Someone' : null
   const noticeLabel = notice
