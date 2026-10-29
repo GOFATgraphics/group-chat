@@ -1645,6 +1645,8 @@ function Composer({ onSend, placeholder = 'Message', enableMentions = false, mem
 
   // Members matching the typed query, prefix matches first, then the rest
   // alphabetically. An empty query lists everyone, in username order.
+  // Like the reference (WhatsApp-style), the first row is always "all"
+  // when it matches the query, for mentioning every member in the chat.
   const mentionOptions = useMemo(() => {
     if (!mention) return []
     const q = mention.query.toLowerCase()
@@ -1655,7 +1657,8 @@ function Composer({ onSend, placeholder = 'Message', enableMentions = false, mem
       if (aStarts !== bStarts) return aStarts ? -1 : 1
       return a.username.localeCompare(b.username)
     })
-    return matches
+    const all = 'all'.includes(q) ? [{ id: '__all__', username: 'all', avatar: null, all: true }] : []
+    return [...all, ...matches]
   }, [mention, members])
 
   // Recompute the picker from the caret position on every keystroke.
@@ -1693,22 +1696,9 @@ function Composer({ onSend, placeholder = 'Message', enableMentions = false, mem
     })
   }
 
-  // The tag button inserts '@' at the caret and opens the same picker
-  // that typing '@' opens, so touch users never need to find '@' on
-  // their keyboard.
-  function insertMentionTrigger() {
-    const el = textRef.current
-    const caret = el ? (el.selectionStart ?? text.length) : text.length
-    const next = `${text.slice(0, caret)}@${text.slice(caret)}`
-    setText(next)
-    setMention({ at: caret, query: '', active: 0 })
-    requestAnimationFrame(() => {
-      if (!el) return
-      el.focus()
-      el.setSelectionRange(caret + 1, caret + 1)
-    })
-  }
-
+  // Typing '@' in the message box opens the same picker, so there is
+  // no separate @ button in the composer: the reference shows the list
+  // appearing from typing '@' alone.
   async function submit(e) {
     e?.preventDefault()
     if (!canSend) return
@@ -1792,17 +1782,6 @@ function Composer({ onSend, placeholder = 'Message', enableMentions = false, mem
           </div>
         )}
       </div>
-      {enableMentions && (
-        <button
-          type="button"
-          className="circle-btn mention-btn"
-          aria-label="Mention a member"
-          title="Mention a member"
-          onClick={insertMentionTrigger}
-        >
-          @
-        </button>
-      )}
       <input ref={imageInput} type="file" accept="image/*,video/*" hidden onChange={pick} />
       <input ref={fileInput} type="file" hidden onChange={pick} />
 
@@ -1824,8 +1803,15 @@ function Composer({ onSend, placeholder = 'Message', enableMentions = false, mem
                 onClick={() => selectMention(m)}
                 onMouseEnter={() => setMention((prev) => (prev ? { ...prev, active: i } : prev))}
               >
-                <Avatar name={m.username} src={m.avatar} />
-                <span>@{m.username}</span>
+                {m.all ? (
+                  <span className="mention-all-icon" aria-hidden="true">👥</span>
+                ) : (
+                  <Avatar name={m.username} src={m.avatar} />
+                )}
+                <span className="mention-option-text">
+                  <span>{m.username}</span>
+                  {m.all && <span className="mention-option-sub">Mention all members in this chat</span>}
+                </span>
               </button>
             ))
           )}
@@ -2033,7 +2019,7 @@ function renderMessageContent(text, profilesMap) {
   // whole chat, so render nothing for it instead of crashing.
   if (typeof text !== 'string') return []
   const mentionNames = profilesMap
-    ? new Set(Object.values(profilesMap).map((u) => (u ?? '').toLowerCase()))
+    ? new Set([...Object.values(profilesMap).map((u) => (u ?? '').toLowerCase()), 'all'])
     : null
   const out = []
   let key = 0
