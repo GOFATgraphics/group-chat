@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { supabase, BUCKET, AVATAR_BUCKET, avatarUrl } from './supabase.js'
+import { playPop, playReceive, playSend, setSoundsEnabled, soundsEnabled, unlockAudio } from './sounds.js'
 
 const PAGE_SIZE = 100
 const MAX_FILE_BYTES = 25 * 1024 * 1024
@@ -25,6 +26,7 @@ export default function Chat({ session }) {
   const [pickerFor, setPickerFor] = useState(null)
   const [showMembers, setShowMembers] = useState(false)
   const [lightbox, setLightbox] = useState(null)
+  const [sounds, setSounds] = useState(soundsEnabled)
 
   const listRef = useRef(null)
   const stickToBottom = useRef(true)
@@ -122,7 +124,10 @@ export default function Chat({ session }) {
 
     const channel = supabase
       .channel('group-chat')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, ({ new: m }) => addMessage(m))
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, ({ new: m }) => {
+        if (m.user_id !== myId) playReceive()
+        addMessage(m)
+      })
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, ({ old }) =>
         setMessages((prev) => prev.filter((m) => m.id !== old.id)),
       )
@@ -185,6 +190,19 @@ export default function Chat({ session }) {
     }
   }, [messages, scrollToBottom])
 
+  // Audio can only start after a user gesture; keep the last messages in view
+  // when the keyboard opens or the window resizes.
+  useEffect(() => {
+    window.addEventListener('pointerdown', unlockAudio)
+    window.addEventListener('keydown', unlockAudio)
+    window.addEventListener('app-viewport', scrollToBottom)
+    return () => {
+      window.removeEventListener('pointerdown', unlockAudio)
+      window.removeEventListener('keydown', unlockAudio)
+      window.removeEventListener('app-viewport', scrollToBottom)
+    }
+  }, [scrollToBottom])
+
   function onScroll() {
     const el = listRef.current
     stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120
@@ -227,6 +245,7 @@ export default function Chat({ session }) {
       return false
     }
     stickToBottom.current = true
+    playSend()
     addMessage(data)
     return true
   }
@@ -234,6 +253,7 @@ export default function Chat({ session }) {
   async function toggleReaction(messageId, emoji) {
     const mine = (reactions[messageId] ?? []).some((r) => r.user_id === myId && r.emoji === emoji)
     applyReaction(messageId, myId, emoji, !mine)
+    if (!mine) playPop()
     const { error: err } = mine
       ? await supabase.from('reactions').delete().match({ message_id: messageId, user_id: myId, emoji })
       : await supabase.from('reactions').insert({ message_id: messageId, emoji })
@@ -399,6 +419,22 @@ export default function Chat({ session }) {
                   </li>
                 ))}
             </ul>
+            <label className="setting-row">
+              <span>Sounds</span>
+              <input
+                type="checkbox"
+                className="switch"
+                checked={sounds}
+                onChange={(e) => {
+                  setSoundsEnabled(e.target.checked)
+                  setSounds(e.target.checked)
+                  if (e.target.checked) {
+                    unlockAudio()
+                    playReceive()
+                  }
+                }}
+              />
+            </label>
             <button className="sheet-signout" onClick={() => supabase.auth.signOut()}>
               Sign out
             </button>
@@ -691,7 +727,12 @@ function Composer({ onSend }) {
             }}
           />
           {canSend || busy ? (
-            <button className="send-btn" aria-label="Send" disabled={!canSend}>
+            <button
+              className="send-btn"
+              aria-label="Send"
+              disabled={!canSend}
+              onPointerDown={(e) => e.preventDefault()}
+            >
               {busy ? <span className="spinner" /> : <ArrowUpIcon />}
             </button>
           ) : null}
