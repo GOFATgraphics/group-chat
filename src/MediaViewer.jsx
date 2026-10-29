@@ -127,11 +127,11 @@ export default function MediaViewer({ item, onClose }) {
         </button>
         <span className="viewer-name">{item.name}</span>
         {canShareFiles() && (
-          <button className="viewer-btn" disabled={busy} onClick={() => run(() => shareMedia(item.url, item.name))}>
+          <button className="viewer-btn" disabled={busy} onClick={() => run(() => shareMedia(item.url, item.name, 'image'))}>
             Share
           </button>
         )}
-        <button className="viewer-btn" disabled={busy} onClick={() => run(() => saveMedia(item.url, item.name))}>
+        <button className="viewer-btn" disabled={busy} onClick={() => run(() => saveMedia(item.url, item.name, item.type === 'video' ? 'video' : 'image'))}>
           Save
         </button>
       </div>

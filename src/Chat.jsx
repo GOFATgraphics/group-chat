@@ -2018,7 +2018,7 @@ function Message({
                   <button
                     onClick={() => {
                       onClosePicker()
-                      saveMedia(url, msg.attachment_name ?? 'download')
+                      saveMedia(url, msg.attachment_name ?? 'download', msg.attachment_type ?? '')
                     }}
                   >
                     Save
