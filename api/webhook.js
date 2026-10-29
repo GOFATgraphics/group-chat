@@ -9,12 +9,12 @@ import { route, auth, body, check, HttpError } from './_lib.js'
 // DELETE /api/webhook                         -> stop deliveries
 export default route({
   async GET(req) {
-    const { sb } = auth(req)
+    const { sb } = await auth(req)
     return { webhook: check(await sb.from('agent_webhooks').select('url, secret, created_at').maybeSingle()) }
   },
 
   async PUT(req) {
-    const { sb, userId } = auth(req)
+    const { sb, userId } = await auth(req)
     const { url } = body(req)
     if (typeof url !== 'string' || !url.startsWith('https://')) throw new HttpError(400, 'url must start with https://')
     const webhook = check(
@@ -28,7 +28,7 @@ export default route({
   },
 
   async DELETE(req) {
-    const { sb, userId } = auth(req)
+    const { sb, userId } = await auth(req)
     check(await sb.from('agent_webhooks').delete().eq('user_id', userId))
     return { ok: true }
   },

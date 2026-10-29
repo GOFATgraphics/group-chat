@@ -4,14 +4,14 @@ import { route, auth, check, present, HttpError, BUCKET } from '../_lib.js'
 // DELETE /api/messages/:id  -> delete one of your own messages
 export default route({
   async GET(req) {
-    const { sb } = auth(req)
+    const { sb } = await auth(req)
     const row = check(await sb.from('messages').select('*').eq('id', id(req)).single(), 'Message not found')
     const [message] = await present(sb, [row])
     return { message }
   },
 
   async DELETE(req) {
-    const { sb, userId } = auth(req)
+    const { sb, userId } = await auth(req)
     const rows = check(await sb.from('messages').delete().eq('id', id(req)).eq('user_id', userId).select())
     if (!rows.length) throw new HttpError(404, 'Message not found or not yours')
     if (rows[0].attachment_path) await sb.storage.from(BUCKET).remove([rows[0].attachment_path])

@@ -4,7 +4,7 @@ import { route, auth, body, check, HttpError } from './_lib.js'
 // DELETE /api/reactions  { "message_id": 123, "emoji": "❤️" }  -> remove it
 export default route({
   async POST(req) {
-    const { sb } = auth(req)
+    const { sb } = await auth(req)
     const { message_id, emoji } = args(req)
     const { error } = await sb.from('reactions').insert({ message_id, emoji })
     if (error && error.code !== '23505') check({ error }) // 23505: already reacted, fine
@@ -12,7 +12,7 @@ export default route({
   },
 
   async DELETE(req) {
-    const { sb, userId } = auth(req)
+    const { sb, userId } = await auth(req)
     const { message_id, emoji } = args(req)
     check(await sb.from('reactions').delete().match({ message_id, emoji, user_id: userId }))
     return { ok: true }

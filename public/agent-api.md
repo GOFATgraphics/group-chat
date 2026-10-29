@@ -1,58 +1,64 @@
-# Agent API
+# Group Chat API for AI agents
 
-A small HTTP API so a bot or AI agent can take part in the group chat with its
-own username and password, just like a person. It is served by the same Vercel
-deployment as the app, under `/api`.
+If you are an AI agent and someone gave you a Group Chat **API key** (it starts
+with `gck_`), this page is everything you need. The key lets you act as one
+member of the chat: read the conversation, send messages, photos and files,
+react, and get new messages delivered to you instantly.
 
 ```
-BASE = https://<your-app>.vercel.app/api
+BASE = https://<the site you got this page from>/api
+Authorization: Bearer gck_...
 ```
 
-The agent is a normal chat member. Create its login in the Supabase SQL Editor:
+Send the key on every request. It does not expire; the member who created it
+can revoke it at any time (calls then return **401**). Treat it like a password.
 
-```sql
-select public.create_chat_user('assistant', 'a-long-random-password');
-```
+**Set yourself up in three steps:**
 
-Its messages, photos, files and reactions show up like anyone else's. It can talk
-in the group chat and in private 1-to-1 conversations, and it only ever sees what
-a person with the same login would see: the group chat and its own private
-messages, never other members' private conversations.
+1. Check the key: `GET /api`. The response shows `authenticated_as`, the member
+   you speak as.
+2. Choose how to hear new messages (section 2): a webhook if you have a public
+   HTTPS URL, otherwise long-polling.
+3. Reply with `POST /api/messages` (section 4), in the same conversation the
+   message came from.
 
-## 1. Log in
+You only ever see what that member would see in the app: the group chat and
+their own private messages, never other members' private conversations. What
+you send appears under their name, exactly as if they had typed it.
+
+## 1. Check the key
 
 ```http
-POST /api/login
-Content-Type: application/json
-
-{ "username": "assistant", "password": "a-long-random-password" }
+GET /api
+Authorization: Bearer gck_...
 ```
 
 ```json
 {
-  "access_token": "eyJ...",
-  "refresh_token": "v1.abc...",
-  "expires_at": 1793300000,
-  "user": { "id": "b0c1...", "username": "assistant" }
+  "name": "Group Chat API",
+  "docs": "https://<site>/agent-api.md",
+  "auth": "Authorization: Bearer <API key>",
+  "authenticated_as": { "id": "b0c1...", "username": "adam" }
 }
 ```
 
-Send the access token on every other call:
+### Getting a key (for people)
 
-```
-Authorization: Bearer <access_token>
-```
+In the app, tap **N People** at the top, then **API keys → Create key**. The key
+is shown once, together with a short message to paste to your AI. An admin can
+also create one for any member in the Supabase SQL Editor:
 
-It lasts about an hour (`expires_at` is a Unix timestamp). Before it runs out, or
-when any call returns **401**, swap the refresh token for a new pair:
-
-```http
-POST /api/refresh
-{ "refresh_token": "v1.abc..." }
+```sql
+select public.create_api_key('adam', 'Adam''s agent');
 ```
 
-Each refresh token works once, so always keep the newest one. If refreshing
-fails, just log in again.
+### Alternative: username and password
+
+Instead of a key, an agent can log in with `POST /api/login`
+`{ "username": "...", "password": "..." }` and send the returned
+`access_token` as the bearer token. It expires after about an hour: swap the
+`refresh_token` for a new pair with `POST /api/refresh` `{ "refresh_token": "..." }`
+(each refresh token works once). API keys avoid all of this.
 
 ## 2. Hear new messages instantly
 
@@ -65,7 +71,7 @@ Register the URL once:
 
 ```http
 PUT /api/webhook
-Authorization: Bearer <access_token>
+Authorization: Bearer gck_...
 { "url": "https://my-agent.example.com/chat-webhook" }
 ```
 
@@ -118,7 +124,7 @@ Ask for messages after the last id you have seen and let the request wait:
 
 ```http
 GET /api/messages?after_id=412&wait=25&from_others=1
-Authorization: Bearer <access_token>
+Authorization: Bearer gck_...
 ```
 
 The call returns **the moment** a new message arrives (about 0.3 s), or with an
@@ -241,7 +247,7 @@ Errors are JSON, for example `{ "error": "Access token expired. Call POST /api/r
 | Status | Meaning |
 | --- | --- |
 | 400 | Bad input (missing text, bad URL, …) |
-| 401 | Missing, expired or invalid token, or wrong password; refresh or log in again |
+| 401 | Missing, invalid or revoked API key (or an expired login token) |
 | 403 | Not allowed (for example, the account is not a chat member) |
 | 404 | Message, member or file not found, or not yours to delete |
 | 413 | File over 25 MB |
@@ -253,33 +259,21 @@ No public URL needed. Replace `reply_to()` with your AI call.
 ```python
 import time, requests
 
-BASE = "https://<your-app>.vercel.app/api"
-USERNAME, PASSWORD = "assistant", "a-long-random-password"
+BASE = "https://<the-site>/api"
+KEY = "gck_..."  # the API key you were given
 
 s = requests.Session()
-
-def login():
-    r = s.post(f"{BASE}/login", json={"username": USERNAME, "password": PASSWORD})
-    r.raise_for_status()
-    tokens = r.json()
-    s.headers["Authorization"] = f"Bearer {tokens['access_token']}"
-    return tokens
+s.headers["Authorization"] = f"Bearer {KEY}"
 
 def call(method, path, **kw):
-    global tokens
     r = s.request(method, f"{BASE}{path}", timeout=35, **kw)
-    if r.status_code == 401:  # token expired: refresh (or log in) and retry once
-        rr = s.post(f"{BASE}/refresh", json={"refresh_token": tokens["refresh_token"]})
-        tokens = rr.json() if rr.ok else login()
-        s.headers["Authorization"] = f"Bearer {tokens['access_token']}"
-        r = s.request(method, f"{BASE}{path}", timeout=35, **kw)
     r.raise_for_status()
     return r.json()
 
 def reply_to(message):
     return f"You said: {message['text']}"  # <- call your AI model here
 
-tokens = login()
+me = call("GET", "")["authenticated_as"]
 history = call("GET", "/messages")["messages"]
 last_id = history[-1]["id"] if history else 0
 

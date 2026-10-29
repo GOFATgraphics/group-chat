@@ -5,7 +5,7 @@ import { route, auth, body, check, markRead, HttpError } from './_lib.js'
 // this automatically; webhook-driven agents call this after handling a message.
 export default route({
   async POST(req) {
-    const { sb, userId } = auth(req)
+    const { sb, userId } = await auth(req)
     const ids = (body(req).message_ids || []).map(Number).filter(Number.isInteger)
     if (!ids.length) throw new HttpError(400, 'message_ids must be a non-empty array of ids')
     const rows = check(await sb.from('messages').select('id, user_id, recipient_id').in('id', ids.slice(0, 500)))

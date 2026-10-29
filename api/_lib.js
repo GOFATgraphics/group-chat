@@ -2,6 +2,7 @@
 // Every request acts as the signed-in chat user via their Supabase access
 // token, so the same row-level security rules as the web app apply.
 
+import { createHash } from 'node:crypto'
 import { createClient } from '@supabase/supabase-js'
 
 export const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
@@ -26,21 +27,86 @@ export function client(token) {
   })
 }
 
-// Reads the bearer token and the user id inside it. The signature is checked
-// by Supabase on every query, so decoding locally only saves a round trip.
-export function auth(req) {
+// Who is calling? Accepts either
+//   - a personal API key ("gck_..."), created in the app or with
+//     public.create_api_key(), which never expires until revoked; or
+//   - a Supabase access token from POST /api/login.
+// Either way the request then runs as that member under the normal
+// row-level security rules.
+export async function auth(req) {
   const header = req.headers.authorization || ''
   const token = header.startsWith('Bearer ') ? header.slice(7).trim() : ''
-  if (!token) throw new HttpError(401, 'Missing "Authorization: Bearer <access_token>" header. Get one from POST /api/login.')
+  if (!token) {
+    throw new HttpError(401, 'Missing "Authorization: Bearer <API key>" header. Create a key in the app (People → API keys).')
+  }
+  if (token.startsWith(API_KEY_PREFIX)) return keySession(token)
+
   let claims
   try {
     claims = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString())
   } catch {
-    throw new HttpError(401, 'Malformed access token')
+    throw new HttpError(401, 'Invalid API key or access token')
   }
-  if (!claims.sub) throw new HttpError(401, 'Malformed access token')
+  if (!claims.sub) throw new HttpError(401, 'Invalid API key or access token')
   if (claims.exp && claims.exp * 1000 < Date.now()) throw new HttpError(401, 'Access token expired. Call POST /api/refresh.')
   return { token, userId: claims.sub, sb: client(token) }
+}
+
+// ---- personal API keys ------------------------------------------------------
+
+export const API_KEY_PREFIX = 'gck_'
+const LAST_USED_EVERY_MS = 5 * 60 * 1000
+
+export const hashKey = (key) => createHash('sha256').update(key).digest('hex')
+
+// Service-role client: used only to look up a key's owner and start a
+// session for them. All chat reads and writes use that member's session.
+function admin() {
+  const secret = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SECRET_KEY
+  if (!secret) throw new HttpError(500, 'API keys are not enabled on this server: set SUPABASE_SERVICE_ROLE_KEY in Vercel')
+  return createClient(SUPABASE_URL, secret, { auth: { persistSession: false, autoRefreshToken: false } })
+}
+
+// Sessions per key hash, reused while this function instance stays warm.
+const keySessions = new Map()
+
+async function keySession(key) {
+  const hash = hashKey(key)
+  const cached = keySessions.get(hash)
+
+  // Checked on every request, so revoking a key cuts it off immediately.
+  const adm = admin()
+  const { data: row, error } = await adm
+    .from('api_keys')
+    .select('id, user_id, revoked_at')
+    .eq('key_hash', hash)
+    .maybeSingle()
+  if (error) throw new HttpError(500, error.message)
+  if (!row || row.revoked_at) {
+    keySessions.delete(hash)
+    throw new HttpError(401, 'Invalid or revoked API key')
+  }
+  if (!cached || Date.now() - cached.usedAt > LAST_USED_EVERY_MS) {
+    await adm.from('api_keys').update({ last_used_at: new Date().toISOString() }).eq('id', row.id)
+    if (cached) cached.usedAt = Date.now()
+  }
+  if (cached && cached.expiresAt - 60 > Date.now() / 1000) return cached.session
+
+  // Start a session for the key's owner without their password: generate a
+  // one-time sign-in token server-side (nothing is emailed) and redeem it.
+  const { data: user, error: userError } = await adm.auth.admin.getUserById(row.user_id)
+  if (userError || !user?.user?.email) throw new HttpError(401, 'API key owner no longer exists')
+  const { data: link, error: linkError } = await adm.auth.admin.generateLink({ type: 'magiclink', email: user.user.email })
+  if (linkError) throw new HttpError(500, `Could not start a session: ${linkError.message}`)
+  const { data: otp, error: otpError } = await client().auth.verifyOtp({
+    type: 'email',
+    token_hash: link.properties.hashed_token,
+  })
+  if (otpError || !otp.session) throw new HttpError(500, `Could not start a session: ${otpError?.message ?? 'no session'}`)
+
+  const session = { token: otp.session.access_token, userId: row.user_id, sb: client(otp.session.access_token), viaKey: true }
+  keySessions.set(hash, { session, expiresAt: otp.session.expires_at, usedAt: Date.now() })
+  return session
 }
 
 // Wraps a handler with CORS, method routing and uniform JSON errors.

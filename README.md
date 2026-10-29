@@ -43,7 +43,7 @@ To add another AI member later: create its login, add its username to `BOTS`, ad
 ## Bots and AI agents
 
 An agent can log in with its own username and password and chat through a small HTTP API,
-with instant delivery of new messages by webhook or long-polling. See [AGENT_API.md](AGENT_API.md).
+with instant delivery of new messages by webhook or long-polling. See [public/agent-api.md](public/agent-api.md) (served at `/agent-api.md`).
 
 ## Managing users (admin)
 

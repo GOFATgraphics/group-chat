@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { supabase, BUCKET, AVATAR_BUCKET, avatarUrl } from './supabase.js'
 import Splash from './Splash.jsx'
+import ApiKeys from './ApiKeys.jsx'
 import { playPop, playReceive, playSend, setSoundsEnabled, soundsEnabled, unlockAudio } from './sounds.js'
 
 const PAGE_SIZE = 100
@@ -1399,6 +1400,7 @@ export default function Chat({ session }) {
             {notificationPermission === 'unsupported' && (
               <p className="setting-note muted">This browser does not support browser notifications. The in-app notice still works.</p>
             )}
+            <ApiKeys username={me.username} />
             <button className="sheet-signout" onClick={() => supabase.auth.signOut()}>
               Sign out
             </button>

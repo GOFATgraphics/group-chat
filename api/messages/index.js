@@ -26,7 +26,7 @@ const POLL_MS = 300
 //   { "text": "caption", "file_url": "https://...", "file_name": "report.pdf" }
 export default route({
   async GET(req) {
-    const { sb, userId } = auth(req)
+    const { sb, userId } = await auth(req)
     const q = req.query
     const limit = clamp(Number(q.limit) || 50, 1, 200)
     const fromOthers = q.from_others === '1' || q.from_others === 'true'
@@ -70,7 +70,7 @@ export default route({
   },
 
   async POST(req) {
-    const { sb, userId } = auth(req)
+    const { sb, userId } = await auth(req)
     const b = body(req)
     const text = typeof b.text === 'string' ? b.text.trim() : ''
     const recipientId = b.to ? await userIdFor(sb, b.to) : null
