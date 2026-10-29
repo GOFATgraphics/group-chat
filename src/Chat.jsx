@@ -644,7 +644,22 @@ export default function Chat({ session }) {
 
   const addMessage = useCallback(
     (msg) => {
-      setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]))
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === msg.id)) return prev
+        // Your own message arriving over realtime before its save finished:
+        // it replaces the "sending" bubble in place instead of doubling it.
+        const pending = prev.findIndex(
+          (m) =>
+            m._status &&
+            m.user_id === msg.user_id &&
+            (m.content ?? null) === (msg.content ?? null) &&
+            (m.recipient_id ?? null) === (msg.recipient_id ?? null),
+        )
+        if (pending === -1) return [...prev, msg]
+        const next = prev.slice()
+        next[pending] = msg
+        return next
+      })
       setReactions((prev) => (prev[msg.id] ? prev : { ...prev, [msg.id]: [] }))
       ensureProfile(msg.user_id)
       if (msg.attachment_path) signUrls([msg.attachment_path])
@@ -1012,6 +1027,31 @@ export default function Chat({ session }) {
     // the second line of defence if send is ever called from that view.
     if (viewRef.current.type === 'owner') return false
     setError('')
+    // A reply only quotes a message from the conversation being sent in.
+    // replyTo is cleared on every view change, so this check is a second
+    // line: if the quoted message is no longer in this view, send plain.
+    const replyToId =
+      replyTo && messages.some((m) => m.id === replyTo.id && !m._status) ? replyTo.id : null
+
+    // Text: show it straight away, save in the background (deliver below).
+    if (!file) {
+      const draft = {
+        id: `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        user_id: myId,
+        recipient_id: peerId,
+        reply_to_id: replyToId,
+        content: text || null,
+        created_at: new Date().toISOString(),
+        _status: 'sending',
+      }
+      stickToBottom.current = true
+      setMessages((prev) => [...prev, draft])
+      setReplyTo(null)
+      playSend()
+      deliver(draft)
+      return true
+    }
+
     let attachment = {}
     if (file) {
       if (file.size > MAX_FILE_BYTES) {
@@ -1034,10 +1074,6 @@ export default function Chat({ session }) {
         attachment_size: file.size,
       }
     }
-    // A reply only quotes a message from the conversation being sent in.
-    // replyTo is cleared on every view change, so this check is a second
-    // line: if the quoted message is no longer in this view, send plain.
-    const replyToId = replyTo && messages.some((m) => m.id === replyTo.id) ? replyTo.id : null
     const { data, error: insErr } = await supabase
       .from('messages')
       .insert({ content: text || null, recipient_id: peerId, reply_to_id: replyToId, ...attachment })
@@ -1053,6 +1089,29 @@ export default function Chat({ session }) {
     addMessage(data)
     setReplyTo(null)
     return true
+  }
+
+  // Saves an optimistic text message. On success the temporary bubble becomes
+  // the real message (or is dropped if realtime already delivered it); on
+  // failure it stays, marked "Not delivered", with Tap to retry.
+  async function deliver(draft) {
+    const { data, error: insErr } = await supabase
+      .from('messages')
+      .insert({ content: draft.content, recipient_id: draft.recipient_id, reply_to_id: draft.reply_to_id })
+      .select()
+      .single()
+    setMessages((prev) => {
+      if (insErr || !data) return prev.map((m) => (m.id === draft.id ? { ...m, _status: 'failed' } : m))
+      return prev.some((m) => m.id === data.id)
+        ? prev.filter((m) => m.id !== draft.id)
+        : prev.map((m) => (m.id === draft.id ? data : m))
+    })
+    if (data) setReactions((prev) => (prev[data.id] ? prev : { ...prev, [data.id]: [] }))
+  }
+
+  function retrySend(msg) {
+    setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, _status: 'sending' } : m)))
+    deliver(msg)
   }
 
   // Start a reply from a swipe or from the Reply action. Never in an
@@ -1158,6 +1217,8 @@ export default function Chat({ session }) {
   }
 
   function readStatus(msg) {
+    if (msg._status === 'sending') return { label: 'Sending…' }
+    if (msg._status === 'failed') return { label: 'Not delivered', failed: true }
     const readers = (reads[msg.id] ?? []).filter((id) => id !== myId)
     const times = readTimes[msg.id] ?? {}
     const latest = readers
@@ -1296,8 +1357,21 @@ export default function Chat({ session }) {
               }
               readOnly={isOwnerView}
               status={!isOwnerView && item.msg.id === lastOwnId ? readStatus(item.msg) : null}
+              tickState={
+                item.msg._status ??
+                (isGroup
+                  ? otherMemberIds.length > 0 && otherMemberIds.every((id) => (reads[item.msg.id] ?? []).includes(id))
+                    ? 'read'
+                    : (reads[item.msg.id] ?? []).some((id) => id !== myId)
+                      ? 'partial'
+                      : 'sent'
+                  : peerId && (reads[item.msg.id] ?? []).includes(peerId)
+                    ? 'read'
+                    : 'sent')
+              }
+              onRetry={() => retrySend(item.msg)}
               replyOriginal={item.msg.reply_to_id ? originals.get(item.msg.reply_to_id) ?? null : undefined}
-              onReply={() => startReply(item.msg)}
+              onReply={() => !item.msg._status && startReply(item.msg)}
               highlightMentions={isGroup}
               myId={myId}
               username={profiles[item.msg.user_id] ?? '…'}
@@ -1306,7 +1380,7 @@ export default function Chat({ session }) {
               reactions={reactions[item.msg.id] ?? []}
               url={urls[item.msg.attachment_path]}
               pickerOpen={pickerFor === item.msg.id}
-              onOpenPicker={() => setPickerFor(item.msg.id)}
+              onOpenPicker={() => !item.msg._status && setPickerFor(item.msg.id)}
               onClosePicker={() => setPickerFor(null)}
               onReact={(emoji) => toggleReaction(item.msg.id, emoji)}
               onDelete={() => deleteMessage(item.msg)}
@@ -1613,9 +1687,14 @@ function Message({
   replyOriginal,
   onReply,
   status = null,
+  tickState = 'sent',
+  onRetry,
 }) {
   const pressTimer = useRef(null)
   const [copied, setCopied] = useState(false)
+  // Time and ticks show under the last message of each run; tapping any
+  // other message reveals its own.
+  const [revealed, setRevealed] = useState(false)
 
   // Copy from the long-press menu (on phones the bubble text itself can't be
   // selected, because a long press opens the menu).
@@ -1748,7 +1827,7 @@ function Message({
   return (
     <div
       id={`msg-${msg.id}`}
-      className={`row ${mine ? 'mine' : 'theirs'} ${first ? 'first' : ''} ${grouped.length ? 'has-tapback' : ''}`}
+      className={`row ${mine ? 'mine' : 'theirs'} ${first ? 'first' : ''} ${grouped.length ? 'has-tapback' : ''} ${msg._status ? `is-${msg._status}` : ''}`}
     >
       {!mine && <div className="row-avatar">{last && <Avatar name={username} src={avatar} />}</div>}
       <div className="stack">
@@ -1768,7 +1847,10 @@ function Message({
         <div
           className="pieces"
           style={dragX ? { transform: `translateX(${dragX}px)` } : undefined}
-          onClick={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation()
+            if (e.detail === 1) setRevealed((r) => !r)
+          }}
           {...gestures}
           {...swipeHandlers}
         >
@@ -1889,25 +1971,60 @@ function Message({
             </>
           )}
         </div>
-        <div className="ticks" aria-label={mine && !readOnly ? (read ? 'Read' : 'Delivered') : undefined}>
-          {copied && <span className="copied-flash">Copied</span>}
-          <span className="ticks-time">
-            {new Date(msg.created_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
-          </span>
-          {mine && !readOnly && (
-            <span className={`ticks-marks ${read ? 'read' : ''}`} aria-hidden="true">
-              ✓✓
+        {(last || revealed || copied || msg._status) && (
+          <div className="ticks">
+            {copied && <span className="copied-flash">Copied</span>}
+            <span className="ticks-time">
+              {new Date(msg.created_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
             </span>
-          )}
-        </div>
-        {status && (
-          <div className={`read-status ${status.read ? 'read' : ''}`}>
-            <b>{status.label}</b>
-            {status.time ? ` ${status.time}` : ''}
+            {mine && !readOnly && <Ticks state={tickState} />}
           </div>
         )}
+        {status &&
+          (status.failed ? (
+            <button className="read-status failed" onClick={onRetry}>
+              <b>Not delivered</b> · Tap to retry
+            </button>
+          ) : (
+            <div className={`read-status ${status.read ? 'read' : ''}`}>
+              <b>{status.label}</b>
+              {status.time ? ` ${status.time}` : ''}
+            </div>
+          ))}
       </div>
     </div>
+  )
+}
+
+// Message ticks, drawn as icons:
+//   sending: clock · sent: one grey check · partial (group, some read): two
+//   grey checks · read: two blue checks · failed: red "!"
+const TICK_LABELS = { sending: 'Sending', sent: 'Sent', partial: 'Read by some', read: 'Read', failed: 'Not delivered' }
+function Ticks({ state }) {
+  const label = TICK_LABELS[state] ?? 'Sent'
+  if (state === 'failed') {
+    return (
+      <span className="tick tick-failed" role="img" aria-label={label}>
+        !
+      </span>
+    )
+  }
+  return (
+    <svg className={`tick tick-${state}`} viewBox="0 0 18 12" role="img" aria-label={label}>
+      {state === 'sending' ? (
+        <>
+          <circle cx="9" cy="6" r="4.6" fill="none" stroke="currentColor" strokeWidth="1.4" />
+          <path d="M9 3.6V6l1.6 1.2" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        </>
+      ) : (
+        <>
+          <path d="M1.5 6.6 4.6 9.6 11 2.4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          {state !== 'sent' && (
+            <path d="M7.4 9.6 13.8 2.4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          )}
+        </>
+      )}
+    </svg>
   )
 }
 

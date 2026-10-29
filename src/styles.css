@@ -257,8 +257,24 @@ a { color: inherit; }
   color: var(--muted);
 }
 .row.mine .ticks { justify-content: flex-end; }
-.ticks-marks { letter-spacing: -2px; }
-.ticks-marks.read { color: var(--blue); }
+.tick { width: 17px; height: 11px; flex-shrink: 0; color: var(--muted); }
+.tick-read { color: var(--blue); }
+.tick-sending { width: 12px; height: 12px; }
+.tick-failed {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  background: var(--danger);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+/* Sending: the bubble shows at once, slightly faded until it is saved. */
+.row.is-sending .pieces { opacity: 0.65; transition: opacity 0.2s; }
+.row.is-failed .bubble { box-shadow: 0 0 0 1.5px var(--danger); }
 .copied-flash {
   padding: 1px 7px;
   border-radius: 999px;
@@ -277,6 +293,16 @@ a { color: inherit; }
 }
 .read-status b { font-weight: 600; }
 .read-status.read b { color: var(--blue); }
+button.read-status.failed {
+  display: block;
+  margin-left: auto;
+  border: 0;
+  background: none;
+  padding: 2px 6px;
+  color: var(--danger);
+  cursor: pointer;
+}
+button.read-status.failed b { color: var(--danger); }
 
 .sender {
   font-size: 11px;
