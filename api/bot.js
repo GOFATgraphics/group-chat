@@ -10,22 +10,34 @@
 // function's production URL as every configured bot's webhook and reports
 // the setup status.
 //
+// Claude is reached one of two ways:
+//   - Vercel AI Gateway (default): no key needed. On a Vercel deployment the
+//     function authenticates with Vercel's built-in OIDC token and usage is
+//     billed to the Vercel team as AI Gateway credits.
+//   - Anthropic directly: set ANTHROPIC_API_KEY.
+//
 // Environment variables (Vercel → Settings → Environment Variables):
-//   ANTHROPIC_API_KEY         Claude API key
 //   BOTS                      comma-separated chat usernames, e.g. adam,ali
 //   BOT_PASSWORD_<USERNAME>   each bot's chat password, e.g. BOT_PASSWORD_ADAM
 //   BOT_PERSONA_<USERNAME>    optional, overrides the text in api/_personas.js
-//   BOT_MODEL                 optional, default claude-opus-5-5
+//   BOT_MODEL                 optional, default Claude Opus 5.5
+//                             (anthropic/claude-opus-5.5 via AI Gateway, which also
+//                             offers other providers' models, e.g. google/...)
+//   ANTHROPIC_API_KEY         optional, call Anthropic directly instead of AI Gateway
+//   AI_GATEWAY_API_KEY        optional, an AI Gateway key instead of the OIDC token
 //   BOT_EFFORT                optional: low | medium | high, default low (fastest)
 //   (BOT_USERNAME + BOT_PASSWORD, the single-bot form, still work too.)
 
 import Anthropic from '@anthropic-ai/sdk'
 import { waitUntil } from '@vercel/functions'
+import { getVercelOidcToken } from '@vercel/oidc'
 import { timingSafeEqual } from 'node:crypto'
 import { client, usernameToEmail, markRead, HttpError, BUCKET } from './_lib.js'
 import { PERSONAS, defaultPersona } from './_personas.js'
 
-const MODEL = process.env.BOT_MODEL || 'claude-opus-5-5'
+const GATEWAY_URL = 'https://ai-gateway.vercel.sh'
+const useGateway = () => !process.env.ANTHROPIC_API_KEY
+const model = () => process.env.BOT_MODEL || (useGateway() ? 'anthropic/claude-opus-5.5' : 'claude-opus-5-5')
 const EFFORT = process.env.BOT_EFFORT || 'low'
 const HISTORY = 40
 const NO_REPLY = 'NO_REPLY'
@@ -33,7 +45,14 @@ const NO_REPLY = 'NO_REPLY'
 // all from bots, so two AI members can never keep a conversation going alone.
 const MAX_BOT_STREAK = 4
 
-const anthropic = new Anthropic()
+// Called while the incoming request is in scope: the OIDC token is read from
+// the request context and must not be cached.
+async function llmClient() {
+  if (!useGateway()) return new Anthropic()
+  const apiKey = process.env.AI_GATEWAY_API_KEY || (await getVercelOidcToken().catch(() => ''))
+  if (!apiKey) throw new HttpError(500, 'No AI credentials: deploy on Vercel (OIDC), or set AI_GATEWAY_API_KEY or ANTHROPIC_API_KEY')
+  return new Anthropic({ apiKey, baseURL: GATEWAY_URL })
+}
 
 const envKey = (name) => name.toUpperCase().replace(/[^A-Z0-9]/g, '_')
 
@@ -100,7 +119,8 @@ export default async function handler(req, res) {
     if (req.body?.type !== 'message.created' || !message?.id) return res.status(400).json({ error: 'Unexpected payload' })
 
     // Acknowledge immediately (Supabase waits at most 5 s), then do the work.
-    waitUntil(respond(bot, message).catch((err) => console.error(`${bot.name} reply failed`, err)))
+    const llm = await llmClient()
+    waitUntil(respond(bot, message, llm).catch((err) => console.error(`${bot.name} reply failed`, err)))
     return res.status(202).json({ ok: true, bot: bot.name })
   } catch (err) {
     console.error(err)
@@ -127,17 +147,22 @@ async function setup() {
       }
     }),
   )
-  const anthropicKey = Boolean(process.env.ANTHROPIC_API_KEY)
+  let ai
+  try {
+    await llmClient()
+    ai = { ok: true, via: useGateway() ? 'Vercel AI Gateway' : 'Anthropic API key', model: model() }
+  } catch (err) {
+    ai = { ok: false, error: err.message }
+  }
   return {
-    model: MODEL,
-    anthropic_key: anthropicKey,
+    ai,
     bots,
-    ready: anthropicKey && bots.length > 0 && bots.every((b) => b.ok),
+    ready: ai.ok && bots.length > 0 && bots.every((b) => b.ok),
     ...(url ? {} : { note: 'Not a Vercel production deployment; webhooks left unchanged' }),
   }
 }
 
-async function respond(bot, incoming) {
+async function respond(bot, incoming, llm) {
   const { sb, userId } = bot
   const isDirect = Boolean(incoming.recipient_id)
 
@@ -213,15 +238,19 @@ async function respond(bot, incoming) {
         `or it just wraps up a topic, reply with exactly ${NO_REPLY} and nothing else. Always answer when ` +
         `someone mentions you by name, asks you something, or replies to one of your messages.`)
 
-  const response = await anthropic.beta.messages.create({
-    model: MODEL,
+  const request = {
+    model: model(),
     max_tokens: 16000,
+    thinking: { type: 'adaptive' },
     output_config: { effort: EFFORT },
-    betas: ['server-side-fallback-2026-07-01'],
-    fallbacks: 'default',
     system,
     messages: [{ role: 'user', content }],
-  })
+  }
+  // Direct to Anthropic: on a safety decline, retry on another Claude model
+  // server-side (AI Gateway applies its own provider routing instead).
+  const response = useGateway()
+    ? await llm.messages.create(request)
+    : await llm.beta.messages.create({ ...request, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' })
   if (response.stop_reason === 'refusal') return
 
   const text = response.content

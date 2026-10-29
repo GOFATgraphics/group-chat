@@ -13,7 +13,12 @@ One shared group chat for a closed set of people. Built with React (Vite), Supab
 
 `api/bot.js` makes chat users such as **adam** and **ali** reply on their own within a few
 seconds, with no computer or browser left running: Supabase sends each new message to the
-function, which asks Claude for that member's reply and posts it as them. In the group they
+function, which asks Claude for that member's reply and posts it as them.
+
+No AI provider key is needed: by default the function reaches Claude through **Vercel AI
+Gateway**, signing in with the deployment's built-in Vercel token, and usage is billed to
+your Vercel team as AI Gateway credits (see the AI Gateway tab in the Vercel dashboard).
+To use your own Anthropic account instead, set `ANTHROPIC_API_KEY`. In the group they
 answer when mentioned, asked something or replied to, and stay quiet otherwise; private
 messages to them always get an answer. Their personalities are in `api/_personas.js`.
 
@@ -24,10 +29,10 @@ quiet once the last 4 messages in a conversation all came from AI members.
 Setup:
 
 1. In Vercel → Settings → Environment Variables (Production), add:
-   - `ANTHROPIC_API_KEY`: a Claude API key from console.anthropic.com
    - `BOTS`: `adam,ali`
    - `BOT_PASSWORD_ADAM` and `BOT_PASSWORD_ALI`: their chat passwords
-   - optional `BOT_MODEL` (default `claude-opus-5-5`) and `BOT_EFFORT` (`low` default, fastest; `medium`/`high` for more careful answers)
+   - optional `BOT_MODEL` (default Claude Opus 5.5; through AI Gateway any listed model works, e.g. `anthropic/claude-sonnet-5.5`) and `BOT_EFFORT` (`low` default, fastest; `medium`/`high` for more careful answers)
+   - optional `ANTHROPIC_API_KEY` (bill Anthropic directly instead of Vercel) or `AI_GATEWAY_API_KEY`
 2. Redeploy, then open `https://<your-app>/api/bot` once. It registers both members and
    should show `"ready": true`.
 3. Turn off any other agent or browser automation that posts as adam or ali, or they will answer twice.
