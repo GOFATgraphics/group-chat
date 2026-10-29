@@ -446,12 +446,51 @@ video.media { cursor: default; }
 /* ---- composer ---- */
 
 .composer {
+  position: relative;
   display: flex;
   align-items: flex-end;
   gap: 10px;
   padding: 6px 12px calc(8px + env(safe-area-inset-bottom));
   background: var(--bg);
 }
+
+/* ---- @mention picker (group chat only) ---- */
+
+.mention-btn { font-size: 20px; font-weight: 600; }
+.mention-picker {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(100% + 8px);
+  z-index: 6;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: 16px;
+  background: var(--raised);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18), 0 0 1px rgba(0, 0, 0, 0.2);
+}
+.mention-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  border: 0;
+  background: none;
+  padding: 6px 10px;
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 16px;
+  text-align: left;
+}
+.mention-option.active, .mention-option:hover { background: var(--fill); }
+.mention-empty { padding: 10px; color: var(--muted); font-size: 15px; }
+
+/* A mention in a sent message: highlighted, non-interactive. In an own
+   (blue) bubble it stays white so it remains readable on the blue. */
+.mention { color: var(--blue); font-weight: 600; }
+.row.mine .mention { color: #fff; text-decoration: underline; text-underline-offset: 2px; }
 /* The keyboard covers the home indicator, so drop the safe-area padding. */
 .keyboard-open .composer { padding-bottom: 6px; }
 
@@ -850,7 +889,14 @@ video.media { cursor: default; }
 .topbar-btn:focus-visible,
 .dm-entry:focus-visible,
 .chat-with:focus-visible,
-.panel-close:focus-visible {
+.panel-close:focus-visible,
+.notice-main:focus-visible,
+.notice-close:focus-visible,
+.reply-preview-cancel:focus-visible,
+.quote:focus-visible,
+.mention-btn:focus-visible,
+.mention-option:focus-visible,
+.reply-hint:focus-visible {
   outline: 2px solid var(--blue);
   outline-offset: 2px;
 }
@@ -860,6 +906,154 @@ video.media { cursor: default; }
 .panel-close:disabled {
   opacity: 0.5;
 }
+
+/* ---- realtime notifications ---- */
+
+.notice-toast {
+  position: absolute;
+  top: calc(104px + env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: min(420px, calc(100% - 32px));
+  padding: 6px;
+  border-radius: 16px;
+  background: var(--raised);
+  box-shadow: var(--shadow);
+  animation: slide-up 0.2s ease-out;
+}
+.notice-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  padding: 4px;
+  text-align: left;
+}
+.notice-main .avatar { width: 36px; height: 36px; font-size: 15px; }
+.notice-text { display: flex; flex-direction: column; min-width: 0; }
+.notice-sender { font-size: 13px; font-weight: 600; }
+.notice-preview {
+  font-size: 14px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.notice-close {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--fill);
+  color: var(--muted);
+  font-size: 12px;
+}
+.unread-badge {
+  flex-shrink: 0;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--blue);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+.setting-note { margin: 8px 14px 0; font-size: 13px; }
+
+/* ---- swipe-to-reply ---- */
+
+.pieces { touch-action: pan-y; }
+.swipe-reply-hint {
+  position: absolute;
+  left: -28px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 18px;
+}
+.reply-hint {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  display: none;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  padding: 4px;
+  border-radius: 50%;
+  font-size: 18px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.row.theirs .reply-hint { left: -32px; }
+.row.mine .reply-hint { right: -32px; }
+@media (hover: hover) {
+  .reply-hint { display: block; }
+  .row:hover .reply-hint { opacity: 1; }
+  .reply-hint:hover { color: var(--text); }
+}
+.reply-hint:focus-visible { display: block; opacity: 1; }
+.quote {
+  align-self: flex-start;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border: 0;
+  border-left: 3px solid var(--blue);
+  border-radius: 12px;
+  background: var(--fill);
+  padding: 6px 10px;
+  margin-bottom: 2px;
+  text-align: left;
+  cursor: pointer;
+}
+.row.mine .quote { align-self: flex-end; }
+.quote-missing { cursor: default; }
+.quote-sender { font-size: 12px; font-weight: 600; }
+.quote-text {
+  font-size: 13px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+.reply-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 12px 2px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--fill);
+}
+.reply-preview-text { display: flex; flex-direction: column; flex: 1; min-width: 0; font-size: 13px; }
+.reply-preview-text span { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reply-preview-cancel {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 12px;
+}
+.msg-menu button { color: var(--text); }
+.msg-menu button.danger { color: var(--danger); }
 
 /* ---- overlays ---- */
 

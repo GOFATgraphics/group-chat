@@ -26,12 +26,67 @@ export default function Chat({ session }) {
   const [error, setError] = useState('')
   const [pickerFor, setPickerFor] = useState(null)
   const [showMembers, setShowMembers] = useState(false)
-  const [view, setView] = useState({ type: 'group' })
+  // A push notification that opens the app carries the conversation in
+  // the URL (?view=dm&peer=… or ?view=owner&a=…&b=…), so a cold start
+  // from a lock-screen tap lands in the right conversation, not just the
+  // group chat. Panel navigation does not rewrite the URL.
+  const [view, setView] = useState(() => {
+    try {
+      const params = new URLSearchParams(window.location.search)
+      if (params.get('view') === 'dm' && params.get('peer')) return { type: 'dm', peerId: params.get('peer') }
+      if (params.get('view') === 'owner' && params.get('a') && params.get('b')) {
+        return { type: 'owner', aId: params.get('a'), bId: params.get('b') }
+      }
+    } catch {
+      // ignore a malformed URL and start in the group chat
+    }
+    return { type: 'group' }
+  })
   const [showPanel, setShowPanel] = useState(false)
   const [dmPeers, setDmPeers] = useState([])
   const [ownerPairs, setOwnerPairs] = useState([])
   const [lightbox, setLightbox] = useState(null)
   const [sounds, setSounds] = useState(soundsEnabled)
+  // Realtime notifications (in-app toast + optional browser Notification).
+  // Stored separately from sounds: the sounds toggle controls sounds only,
+  // this toggle controls browser notifications only, and the in-app toast
+  // still appears even when browser notifications are off.
+  const [browserNotifications, setBrowserNotifications] = useState(() => {
+    try {
+      return localStorage.getItem('chat-notifications') === 'on'
+    } catch {
+      return false
+    }
+  })
+  const [notificationPermission, setNotificationPermission] = useState(() =>
+    typeof Notification === 'undefined' ? 'unsupported' : Notification.permission,
+  )
+  // Web push (lock-screen notifications): a separate opt-in from the
+  // browser Notification toggle above. The service worker is registered
+  // on load so an existing subscription can be detected, but permission
+  // is never requested until the user turns this on, and no key is ever
+  // invented: without VITE_VAPID_PUBLIC_KEY the toggle reports that push
+  // is not configured yet and stays off.
+  const [pushSubscribed, setPushSubscribed] = useState(false)
+  const [pushStatus, setPushStatus] = useState('unknown')
+  const [pushError, setPushError] = useState('')
+  const [notice, setNotice] = useState(null)
+  const [unread, setUnread] = useState({})
+  const browserNotificationsRef = useRef(browserNotifications)
+  browserNotificationsRef.current = browserNotifications
+  const noticeTimer = useRef(null)
+  // Swipe-to-reply target: the message being quoted in the composer.
+  // Cleared whenever the conversation changes, so a reply can only ever
+  // quote a message from the conversation it is sent in.
+  const [replyTo, setReplyTo] = useState(null)
+  const [extraOriginals, setExtraOriginals] = useState({})
+  const isOwnerRef = useRef(false)
+  useEffect(() => {
+    isOwnerRef.current = me?.username === 'mubarak'
+  }, [me])
+  useEffect(() => {
+    setReplyTo(null)
+  }, [view])
 
   const listRef = useRef(null)
   const stickToBottom = useRef(true)
@@ -126,6 +181,318 @@ export default function Chat({ session }) {
     },
     [myId],
   )
+
+  // ---- realtime notifications --------------------------------------------
+  // Unread keys: 'group', 'dm:<peerId>', 'owner:<a>|<b>'. The key, not the
+  // message, is what the panel badge and the document title count, so a
+  // message in the currently viewed conversation never creates a count.
+  const viewKey = (v) => {
+    if (v.type === 'group') return 'group'
+    if (v.type === 'owner') return `owner:${[v.aId, v.bId].sort().join('|')}`
+    return `dm:${v.peerId}`
+  }
+
+  const clearUnread = useCallback((key) => {
+    setUnread((prev) => {
+      if (!prev[key]) return prev
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
+  }, [])
+
+  // Target view and label for a message that is NOT in the current view.
+  // Group: everyone. DM: only the two participants, enforced by RLS, so
+  // this branch is only reached for the viewer's own DMs. Other-member DM:
+  // only the owner, labelled as an owner view, never as a participant DM.
+  const notifyTarget = useCallback(
+    (m) => {
+      if (m.recipient_id == null) return { key: 'group', view: { type: 'group' }, label: 'Group Chat', owner: false }
+      if (m.user_id !== myId && m.recipient_id !== myId) {
+        const [a, b] = [m.user_id, m.recipient_id].sort()
+        return { key: `owner:${a}|${b}`, view: { type: 'owner', aId: a, bId: b }, label: null, owner: true }
+      }
+      const peer = m.user_id === myId ? m.recipient_id : m.user_id
+      return { key: `dm:${peer}`, view: { type: 'dm', peerId: peer }, label: null, owner: false }
+    },
+    [myId],
+  )
+
+  const previewOf = (m) => {
+    if (m.content?.trim()) {
+      const text = m.content.trim()
+      return text.length > 80 ? `${text.slice(0, 80)}…` : text
+    }
+    if (m.attachment_path) {
+      if (m.attachment_type?.startsWith('image/')) return 'sent a photo'
+      if (m.attachment_type?.startsWith('video/')) return 'sent a video'
+      return 'sent a file'
+    }
+    return 'sent a message'
+  }
+
+  const openTarget = useCallback(
+    (target) => {
+      clearUnread(target.key)
+      setNotice(null)
+      setView(target.view)
+      setShowMembers(false)
+      setShowPanel(false)
+    },
+    [clearUnread],
+  )
+
+  // The single place a realtime arrival becomes a notification. Own
+  // messages and messages in the currently viewed conversation never reach
+  // here from the realtime handler, so they get no toast and no count.
+  // The toast replaces any previous toast (latest wins, never a stack).
+  const notify = useCallback(
+    (m) => {
+      const target = notifyTarget(m)
+      const preview = previewOf(m)
+      setUnread((prev) => ({ ...prev, [target.key]: (prev[target.key] ?? 0) + 1 }))
+      setNotice({ key: target.key, view: target.view, senderId: m.user_id, preview, owner: target.owner })
+      if (browserNotificationsRef.current && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+        const sender = profilesRef.current[m.user_id] ?? 'Someone'
+        const convo = target.owner ? 'Owner view' : target.label ?? profilesRef.current[target.view.peerId] ?? 'Private chat'
+        const n = new Notification(`${sender} · ${convo}`, { body: preview, tag: target.key })
+        n.onclick = () => {
+          window.focus()
+          openTarget(target)
+          n.close()
+        }
+      }
+    },
+    [notifyTarget, openTarget],
+  )
+
+  // Short preview used for a reply quote, in the composer and on a sent
+  // reply. Text is truncated; attachments get a type word, never a URL.
+  const quotePreviewOf = (m) => {
+    if (!m) return 'Original message not loaded'
+    if (m.content?.trim()) {
+      const text = m.content.trim()
+      return text.length > 60 ? `${text.slice(0, 60)}…` : text
+    }
+    if (m.attachment_path) {
+      if (m.attachment_type?.startsWith('image/')) return 'photo'
+      if (m.attachment_type?.startsWith('video/')) return 'video'
+      return 'file'
+    }
+    return 'message'
+  }
+
+  // Originals for replies whose quoted message is not in the currently
+  // loaded page (older than the page, or a reply that arrived by realtime
+  // before its original was loaded). Fetched one at a time through the
+  // normal RLS read path, so a viewer only ever sees originals they can
+  // already read in this conversation.
+  useEffect(() => {
+    const known = new Set(messages.map((m) => m.id))
+    const missing = [...new Set(messages.filter((m) => m.reply_to_id && !known.has(m.reply_to_id)).map((m) => m.reply_to_id))]
+      .filter((id) => !extraOriginals[id])
+    if (!missing.length) return
+    let cancelled = false
+    supabase
+      .from('messages')
+      .select('*')
+      .in('id', missing)
+      .then(({ data }) => {
+        if (cancelled) return
+        setExtraOriginals((prev) => {
+          const next = { ...prev }
+          for (const row of data ?? []) next[row.id] = row
+          return next
+        })
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages])
+
+  // A conversation's unread count clears when it is opened, and the current
+  // conversation's count clears again when the tab regains focus.
+  useEffect(() => {
+    clearUnread(viewKey(view))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view])
+
+  useEffect(() => {
+    const onFocus = () => {
+      if (!document.hidden) clearUnread(viewKey(viewRef.current))
+    }
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onFocus)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onFocus)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Document title carries the total unread count, so a hidden tab still
+  // shows at a glance that something arrived.
+  const totalUnread = Object.values(unread).reduce((sum, n) => sum + n, 0)
+  useEffect(() => {
+    document.title = totalUnread > 0 ? `(${totalUnread}) Group Chat` : 'Group Chat'
+    return () => {
+      document.title = 'Group Chat'
+    }
+  }, [totalUnread])
+
+  // The toast auto-dismisses after a few seconds; a close button dismisses
+  // it immediately (see render). Restart the timer on every new notice.
+  useEffect(() => {
+    if (!notice) return
+    if (noticeTimer.current) clearTimeout(noticeTimer.current)
+    noticeTimer.current = setTimeout(() => setNotice(null), 5000)
+    return () => clearTimeout(noticeTimer.current)
+  }, [notice])
+
+  async function toggleBrowserNotifications(on) {
+    if (!on) {
+      setBrowserNotifications(false)
+      try {
+        localStorage.setItem('chat-notifications', 'off')
+      } catch {
+        // storage unavailable; the toggle just won't persist
+      }
+      return
+    }
+    // Permission is requested only when the user turns this on, never on
+    // page load, and never again after a denial: a denied toggle simply
+    // stays off and the in-app toast keeps working.
+    if (typeof Notification === 'undefined') {
+      setNotificationPermission('unsupported')
+      setError('Browser notifications are not supported here. The in-app notice still works.')
+      return
+    }
+    let permission = Notification.permission
+    if (permission === 'default') permission = await Notification.requestPermission()
+    setNotificationPermission(permission)
+    if (permission !== 'granted') return
+    setBrowserNotifications(true)
+    try {
+      localStorage.setItem('chat-notifications', 'on')
+    } catch {
+      // storage unavailable; the toggle just won't persist
+    }
+  }
+
+  // ---- web push ----------------------------------------------------------
+  // VAPID public keys are base64url; the Push API needs the raw bytes.
+  function urlBase64ToUint8Array(base64) {
+    const padding = '='.repeat((4 - (base64.length % 4)) % 4)
+    const raw = window.atob(base64.replace(/-/g, '+').replace(/_/g, '/') + padding)
+    return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)))
+  }
+
+  async function getPushRegistration() {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return null
+    return navigator.serviceWorker.register('/sw.js')
+  }
+
+  // Detect an existing subscription on load, without asking for anything:
+  // permission is only requested from the toggle below.
+  useEffect(() => {
+    let cancelled = false
+    getPushRegistration()
+      .then((reg) => reg?.pushManager.getSubscription())
+      .then((sub) => {
+        if (cancelled) return
+        if (sub) {
+          setPushSubscribed(true)
+          setPushStatus('on')
+        } else {
+          setPushStatus('off')
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setPushStatus('unsupported')
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // A notification tap on an already-open app focuses it and tells it to
+  // open the conversation, instead of opening a second tab.
+  useEffect(() => {
+    const onServiceWorkerMessage = (e) => {
+      const v = e.data?.view
+      if (e.data?.type !== 'open-conversation' || !v) return
+      if (v.type === 'group') setView({ type: 'group' })
+      else if (v.type === 'dm' && v.peerId) setView({ type: 'dm', peerId: v.peerId })
+      else if (v.type === 'owner' && v.aId && v.bId && isOwnerRef.current) {
+        setView({ type: 'owner', aId: v.aId, bId: v.bId })
+      }
+      setShowPanel(false)
+    }
+    navigator.serviceWorker?.addEventListener('message', onServiceWorkerMessage)
+    return () => navigator.serviceWorker?.removeEventListener('message', onServiceWorkerMessage)
+  }, [])
+
+  async function togglePush(on) {
+    setPushError('')
+    if (!on) {
+      try {
+        const reg = await getPushRegistration()
+        const sub = await reg?.pushManager.getSubscription()
+        if (sub) {
+          await supabase.from('push_subscriptions').delete().eq('endpoint', sub.endpoint)
+          await sub.unsubscribe()
+        }
+      } catch (err) {
+        setPushError(err.message)
+      }
+      setPushSubscribed(false)
+      setPushStatus('off')
+      return
+    }
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || typeof Notification === 'undefined') {
+      setPushStatus('unsupported')
+      setPushError('This browser does not support web push. The in-app notice still works.')
+      return
+    }
+    let permission = Notification.permission
+    if (permission === 'default') permission = await Notification.requestPermission()
+    setNotificationPermission(permission)
+    if (permission !== 'granted') {
+      setPushStatus('denied')
+      return
+    }
+    const vapidKey = import.meta.env.VITE_VAPID_PUBLIC_KEY
+    if (!vapidKey) {
+      // No key is invented here. Until a real VAPID key pair is generated
+      // and the public key is set (see docs/web-push.md), push stays off.
+      setPushStatus('unconfigured')
+      setPushError('Push is not configured yet: the app needs a VAPID public key. No key was created.')
+      return
+    }
+    try {
+      const reg = await getPushRegistration()
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(vapidKey),
+      })
+      const json = sub.toJSON()
+      const { error: dbErr } = await supabase.from('push_subscriptions').upsert(
+        { user_id: myId, endpoint: sub.endpoint, keys: json.keys },
+        { onConflict: 'endpoint' },
+      )
+      if (dbErr) {
+        await sub.unsubscribe()
+        throw dbErr
+      }
+      setPushSubscribed(true)
+      setPushStatus('on')
+    } catch (err) {
+      setPushStatus('error')
+      setPushError(err.message)
+    }
+  }
 
   function filterConversation(query, v) {
     if (v.type === 'group') return query.is('recipient_id', null)
@@ -295,17 +662,23 @@ export default function Chat({ session }) {
         if (peer) {
           // A DM for a peer not currently being viewed still adds that peer
           // to the side panel list, without leaking the message into the
-          // current view.
+          // current view. If it is from someone else, it also becomes a
+          // realtime notification (toast, unread count, optional browser
+          // notification) for that DM. Own messages never notify.
           addDmPeer(peer)
           ensureProfile(m.user_id)
           if (!isMessageForView(m, viewRef.current)) {
-            if (m.user_id !== myId) playReceive()
+            if (m.user_id !== myId) {
+              playReceive()
+              notify(m)
+            }
             return
           }
         } else if (m.recipient_id != null) {
           // A DM between two other members: it belongs in the owner's
           // list only, never in the group view or a participant's DM view,
-          // and it never names the owner as a participant.
+          // and it never names the owner as a participant. The owner, and
+          // only the owner, gets a notification labelled as an owner view.
           if (viewRef.current.type === 'owner' && isMessageForView(m, viewRef.current)) {
             playReceive()
             addMessage(m)
@@ -313,8 +686,18 @@ export default function Chat({ session }) {
           }
           addOwnerPair(m.user_id, m.recipient_id)
           ensureProfile(m.user_id)
+          if (isOwnerRef.current && m.user_id !== myId) {
+            playReceive()
+            notify(m)
+          }
           return
         } else if (!isMessageForView(m, viewRef.current)) {
+          // A group message arriving while another conversation is viewed:
+          // it is not added to the current view, but it does notify.
+          if (m.user_id !== myId) {
+            playReceive()
+            notify(m)
+          }
           return
         }
         if (m.user_id !== myId) playReceive()
@@ -343,7 +726,7 @@ export default function Chat({ session }) {
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [myId, addMessage, applyReaction, dmPeerOf, addDmPeer, addOwnerPair, ensureProfile, isMessageForView])
+  }, [myId, addMessage, applyReaction, dmPeerOf, addDmPeer, addOwnerPair, ensureProfile, isMessageForView, notify])
 
   async function loadOlder() {
     const oldest = messages[0]
@@ -431,9 +814,13 @@ export default function Chat({ session }) {
         attachment_size: file.size,
       }
     }
+    // A reply only quotes a message from the conversation being sent in.
+    // replyTo is cleared on every view change, so this check is a second
+    // line: if the quoted message is no longer in this view, send plain.
+    const replyToId = replyTo && messages.some((m) => m.id === replyTo.id) ? replyTo.id : null
     const { data, error: insErr } = await supabase
       .from('messages')
-      .insert({ content: text || null, recipient_id: peerId, ...attachment })
+      .insert({ content: text || null, recipient_id: peerId, reply_to_id: replyToId, ...attachment })
       .select()
       .single()
     if (insErr) {
@@ -444,7 +831,15 @@ export default function Chat({ session }) {
     stickToBottom.current = true
     playSend()
     addMessage(data)
+    setReplyTo(null)
     return true
+  }
+
+  // Start a reply from a swipe or from the Reply action. Never in an
+  // owner view, where the composer is hidden and read-only.
+  function startReply(msg) {
+    if (isOwnerView) return
+    setReplyTo(msg)
   }
 
   async function toggleReaction(messageId, emoji) {
@@ -529,6 +924,24 @@ export default function Chat({ session }) {
   const ownerPairList = ownerPairs
     .filter(([a, b]) => profiles[a] && profiles[b])
     .sort((p, q) => `${profiles[p[0]]} and ${profiles[p[1]]}`.localeCompare(`${profiles[q[0]]} and ${profiles[q[1]]}`))
+
+  // Originals for reply quotes: loaded messages first, then any older
+  // original fetched on demand. A missing original renders a fallback
+  // quote, never a broken link or a guess at its text.
+  const originals = useMemo(() => {
+    const map = new Map(messages.map((m) => [m.id, m]))
+    for (const [id, row] of Object.entries(extraOriginals)) if (!map.has(Number(id))) map.set(Number(id), row)
+    return map
+  }, [messages, extraOriginals])
+
+  const noticeSender = notice ? profiles[notice.senderId] ?? 'Someone' : null
+  const noticeLabel = notice
+    ? notice.owner
+      ? `Owner view · ${profiles[notice.view.aId] ?? '…'} and ${profiles[notice.view.bId] ?? '…'}`
+      : notice.view.type === 'group'
+        ? 'Group Chat'
+        : profiles[notice.view.peerId] ?? 'Private chat'
+    : null
 
   return (
     <div className="chat">
@@ -615,6 +1028,9 @@ export default function Chat({ session }) {
               last={item.last}
               mine={item.msg.user_id === myId}
               readOnly={isOwnerView}
+              replyOriginal={item.msg.reply_to_id ? originals.get(item.msg.reply_to_id) ?? null : undefined}
+              onReply={() => startReply(item.msg)}
+              highlightMentions={isGroup}
               myId={myId}
               username={profiles[item.msg.user_id] ?? '…'}
               avatar={avatars[item.msg.user_id]}
@@ -639,12 +1055,55 @@ export default function Chat({ session }) {
         </div>
       )}
 
+      {notice && (
+        <div className="notice-toast" role="status" aria-live="polite">
+          <button
+            className="notice-main"
+            onClick={() => openTarget({ key: notice.key, view: notice.view })}
+            aria-label={`Open ${noticeLabel}, new message from ${noticeSender}`}
+          >
+            <Avatar name={noticeSender} src={avatars[notice.senderId]} />
+            <span className="notice-text">
+              <span className="notice-sender">
+                {noticeSender} · {noticeLabel}
+              </span>
+              <span className="notice-preview">{notice.preview}</span>
+            </span>
+          </button>
+          <button className="notice-close" onClick={() => setNotice(null)} aria-label="Dismiss notification">
+            ✕
+          </button>
+        </div>
+      )}
+
       {isOwnerView ? (
         <div className="owner-readonly" role="note">
           Read-only owner view · you cannot send, react, or delete here.
         </div>
       ) : (
-        <Composer onSend={send} placeholder={isGroup ? 'Message' : `Message ${peerName}`} />
+        <>
+          {replyTo && (
+            <div className="reply-preview" role="note">
+              <span className="reply-preview-text">
+                <b>Replying to {profiles[replyTo.user_id] ?? '…'}</b>
+                <span>{quotePreviewOf(replyTo)}</span>
+              </span>
+              <button className="reply-preview-cancel" onClick={() => setReplyTo(null)} aria-label="Cancel reply">
+                ✕
+              </button>
+            </div>
+          )}
+          <Composer
+            onSend={send}
+            placeholder={isGroup ? 'Message' : `Message ${peerName}`}
+            enableMentions={isGroup}
+            members={memberIds
+              .slice()
+              .sort((a, b) => (profiles[a] ?? '').localeCompare(profiles[b] ?? ''))
+              .map((id) => ({ id, username: profiles[id], avatar: avatars[id] }))}
+            viewKey={isGroup ? 'group' : `dm:${peerId}`}
+          />
+        </>
       )}
 
       {showPanel && (
@@ -663,6 +1122,11 @@ export default function Chat({ session }) {
                 ))}
               </span>
               <span className="dm-name">Group Chat</span>
+              {unread.group > 0 && (
+                <span className="unread-badge" aria-label={`${unread.group} unread`}>
+                  {unread.group > 99 ? '99+' : unread.group}
+                </span>
+              )}
               {online.length > 0 && <span className="dm-meta">{online.length} online</span>}
             </button>
             <div className="panel-section">Direct messages</div>
@@ -676,11 +1140,16 @@ export default function Chat({ session }) {
                   <li key={id}>
                     <button
                       className={`dm-entry ${!isGroup && peerId === id ? 'active' : ''}`}
-                      aria-label={`Chat with ${profiles[id]}${online.includes(id) ? ' (online)' : ''}`}
+                      aria-label={`Chat with ${profiles[id]}${online.includes(id) ? ' (online)' : ''}${unread[`dm:${id}`] > 0 ? `, ${unread[`dm:${id}`]} unread` : ''}`}
                       onClick={() => openDm(id)}
                     >
                       <Avatar name={profiles[id]} src={avatars[id]} />
                       <span className="dm-name">{profiles[id]}</span>
+                      {unread[`dm:${id}`] > 0 && (
+                        <span className="unread-badge" aria-label={`${unread[`dm:${id}`]} unread`}>
+                          {unread[`dm:${id}`] > 99 ? '99+' : unread[`dm:${id}`]}
+                        </span>
+                      )}
                       {online.includes(id) && <span className="online-dot" title="Online" />}
                     </button>
                   </li>
@@ -710,6 +1179,11 @@ export default function Chat({ session }) {
                               <Avatar name={profiles[b]} src={avatars[b]} />
                             </span>
                             <span className="dm-name">{label}</span>
+                            {unread[`owner:${pairKey(a, b)}`] > 0 && (
+                              <span className="unread-badge" aria-label={`${unread[`owner:${pairKey(a, b)}`]} unread`}>
+                                {unread[`owner:${pairKey(a, b)}`] > 99 ? '99+' : unread[`owner:${pairKey(a, b)}`]}
+                              </span>
+                            )}
                           </button>
                         </li>
                       )
@@ -772,6 +1246,46 @@ export default function Chat({ session }) {
                 }}
               />
             </label>
+            <label className="setting-row">
+              <span>Notifications</span>
+              <input
+                type="checkbox"
+                className="switch"
+                checked={browserNotifications && notificationPermission === 'granted'}
+                onChange={(e) => toggleBrowserNotifications(e.target.checked)}
+              />
+            </label>
+            {notificationPermission === 'denied' && (
+              <p className="setting-note muted">
+                Browser notifications are blocked in your browser settings. The in-app notice still works.
+              </p>
+            )}
+            <label className="setting-row">
+              <span>Push notifications</span>
+              <input
+                type="checkbox"
+                className="switch"
+                checked={pushSubscribed}
+                onChange={(e) => togglePush(e.target.checked)}
+              />
+            </label>
+            <p className="setting-note muted">
+              Push notifications can reach you even when the app is closed, including on your lock screen. On iPhone, that only works if the app is
+              installed to your home screen first. See the note below the toggle if push is off.
+            </p>
+            {pushStatus === 'unconfigured' && <p className="setting-note muted">{pushError}</p>}
+            {pushStatus === 'denied' && (
+              <p className="setting-note muted">
+                Push permission was not granted. The in-app notice still works.
+              </p>
+            )}
+            {pushStatus === 'error' && pushError && <p className="setting-note muted">{pushError}</p>}
+            {pushStatus === 'unsupported' && (
+              <p className="setting-note muted">This browser does not support web push. The in-app notice still works.</p>
+            )}
+            {notificationPermission === 'unsupported' && (
+              <p className="setting-note muted">This browser does not support browser notifications. The in-app notice still works.</p>
+            )}
             <button className="sheet-signout" onClick={() => supabase.auth.signOut()}>
               Sign out
             </button>
@@ -794,6 +1308,7 @@ function Message({
   last,
   mine,
   readOnly = false,
+  highlightMentions = false,
   myId,
   username,
   avatar,
@@ -807,8 +1322,58 @@ function Message({
   onDelete,
   onOpenImage,
   onMediaLoad,
+  replyOriginal,
+  onReply,
 }) {
   const pressTimer = useRef(null)
+  // Swipe-to-reply: a rightward drag on touch. The threshold and the
+  // horizontal-dominance check are the accidental-swipe guards: a small
+  // drag does nothing, and a mostly vertical drag (scrolling) never
+  // triggers a reply. touch-action: pan-y in CSS keeps vertical scrolling
+  // working while the horizontal drag is tracked here.
+  const swipeStart = useRef(null)
+  const swipeFired = useRef(false)
+  const [dragX, setDragX] = useState(0)
+  const SWIPE_THRESHOLD = 60
+  const swipeHandlers = readOnly
+    ? {}
+    : {
+        onPointerDown: (e) => {
+          if (e.pointerType === 'mouse') return
+          swipeStart.current = { x: e.clientX, y: e.clientY }
+          swipeFired.current = false
+          // Swipe handlers replace the long-press gesture handlers on this
+          // element, so start the tapback long-press timer here too.
+          pressTimer.current = setTimeout(onOpenPicker, LONG_PRESS_MS)
+        },
+        onPointerMove: (e) => {
+          const start = swipeStart.current
+          if (!start || swipeFired.current) return
+          const dx = e.clientX - start.x
+          const dy = e.clientY - start.y
+          if (dx <= 0 || Math.abs(dy) > Math.abs(dx) * 0.7) {
+            setDragX(0)
+            return
+          }
+          setDragX(Math.min(dx, 64))
+          if (dx >= SWIPE_THRESHOLD) {
+            swipeFired.current = true
+            clearTimeout(pressTimer.current)
+            setDragX(0)
+            onReply?.()
+          }
+        },
+        onPointerUp: () => {
+          clearTimeout(pressTimer.current)
+          swipeStart.current = null
+          setDragX(0)
+        },
+        onPointerCancel: () => {
+          clearTimeout(pressTimer.current)
+          swipeStart.current = null
+          setDragX(0)
+        },
+      }
   const isImage = msg.attachment_type?.startsWith('image/')
   const isVideo = msg.attachment_type?.startsWith('video/')
   const isMedia = msg.attachment_path && (isImage || isVideo)
@@ -851,14 +1416,54 @@ function Message({
 
   const tail = (isLastPiece) => (last && isLastPiece ? 'tail' : '')
 
+  // Quote for a reply: the original's sender and short preview when it is
+  // loaded, a non-clickable fallback when it is deleted or not loaded.
+  // Tapping a loaded quote scrolls to the original in this view.
+  const quoteOf = (m) => {
+    if (m.content?.trim()) {
+      const text = m.content.trim()
+      return text.length > 60 ? `${text.slice(0, 60)}…` : text
+    }
+    if (m.attachment_path) {
+      if (m.attachment_type?.startsWith('image/')) return 'photo'
+      if (m.attachment_type?.startsWith('video/')) return 'video'
+      return 'file'
+    }
+    return 'message'
+  }
+  const scrollToOriginal = () => {
+    if (!replyOriginal) return
+    document.getElementById(`msg-${replyOriginal.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+
   return (
     <div
+      id={`msg-${msg.id}`}
       className={`row ${mine ? 'mine' : 'theirs'} ${first ? 'first' : ''} ${grouped.length ? 'has-tapback' : ''}`}
     >
       {!mine && <div className="row-avatar">{last && <Avatar name={username} src={avatar} />}</div>}
       <div className="stack">
         {!mine && first && <div className="sender">{username}</div>}
-        <div className="pieces" onClick={(e) => e.stopPropagation()} {...gestures}>
+        {msg.reply_to_id && (
+          replyOriginal ? (
+            <button className="quote" onClick={scrollToOriginal} title="Go to original message">
+              <span className="quote-sender">{profiles[replyOriginal.user_id] ?? '…'}</span>
+              <span className="quote-text">{quoteOf(replyOriginal)}</span>
+            </button>
+          ) : (
+            <div className="quote quote-missing" role="note">
+              <span className="quote-text">Original message not loaded</span>
+            </div>
+          )
+        )}
+        <div
+          className="pieces"
+          style={dragX ? { transform: `translateX(${dragX}px)` } : undefined}
+          onClick={(e) => e.stopPropagation()}
+          {...gestures}
+          {...swipeHandlers}
+        >
+          {dragX > 20 && <span className="swipe-reply-hint" aria-hidden="true">↩</span>}
           {isMedia &&
             (url ? (
               isImage ? (
@@ -891,7 +1496,7 @@ function Message({
           )}
           {msg.content && (
             <div className={`bubble ${tail(true)}`} title={new Date(msg.created_at).toLocaleString()}>
-              {linkify(msg.content)}
+              {renderMessageContent(msg.content, highlightMentions ? profiles : null)}
             </div>
           )}
 
@@ -916,6 +1521,12 @@ function Message({
             </button>
           )}
 
+          {!readOnly && (
+            <button className="reply-hint" title="Reply" aria-label="Reply to this message" onClick={onReply}>
+              ↩
+            </button>
+          )}
+
           {pickerOpen && !readOnly && (
             <>
               <div className="tapback-bar">
@@ -935,9 +1546,18 @@ function Message({
                   )
                 })}
               </div>
-              {mine && (
-                <div className="msg-menu">
+              <div className="msg-menu">
+                <button
+                  onClick={() => {
+                    onClosePicker()
+                    onReply?.()
+                  }}
+                >
+                  Reply
+                </button>
+                {mine && (
                   <button
+                    className="danger"
                     onClick={() => {
                       onClosePicker()
                       onDelete()
@@ -945,8 +1565,8 @@ function Message({
                   >
                     Delete
                   </button>
-                </div>
-              )}
+                )}
+              </div>
             </>
           )}
         </div>
@@ -955,12 +1575,16 @@ function Message({
   )
 }
 
-function Composer({ onSend, placeholder = 'Message' }) {
+function Composer({ onSend, placeholder = 'Message', enableMentions = false, members = [], viewKey = '' }) {
   const [text, setText] = useState('')
   const [file, setFile] = useState(null)
   const [preview, setPreview] = useState(null)
   const [busy, setBusy] = useState(false)
   const [menu, setMenu] = useState(false)
+  // Mention picker state, group chat only. `at` is the index of the '@'
+  // being typed, `query` is the text after it, `active` is the keyboard
+  // highlight. Null means no picker is open.
+  const [mention, setMention] = useState(null)
   const imageInput = useRef(null)
   const fileInput = useRef(null)
   const textRef = useRef(null)
@@ -974,11 +1598,84 @@ function Composer({ onSend, placeholder = 'Message' }) {
 
   useEffect(() => {
     const el = textRef.current
+    if (!el) return
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 140)}px`
   }, [text])
 
+  // The picker belongs to one conversation: changing conversation closes
+  // it, so a mention started in the group chat never leaks into a DM.
+  useEffect(() => {
+    setMention(null)
+  }, [viewKey])
+
   const canSend = !busy && (text.trim() || file)
+
+  // Members matching the typed query, prefix matches first, then the rest
+  // alphabetically. An empty query lists everyone, in username order.
+  const mentionOptions = useMemo(() => {
+    if (!mention) return []
+    const q = mention.query.toLowerCase()
+    const matches = members.filter((m) => m.username && m.username.toLowerCase().includes(q))
+    matches.sort((a, b) => {
+      const aStarts = a.username.toLowerCase().startsWith(q)
+      const bStarts = b.username.toLowerCase().startsWith(q)
+      if (aStarts !== bStarts) return aStarts ? -1 : 1
+      return a.username.localeCompare(b.username)
+    })
+    return matches
+  }, [mention, members])
+
+  // Recompute the picker from the caret position on every keystroke.
+  // Only a '@' at the start or after whitespace starts a mention, and
+  // only word characters after it are part of the query, so an email
+  // address or a '@' in the middle of a word never opens the picker.
+  // Deleting the '@' (or moving the caret away) closes it.
+  function updateMention(value, caret) {
+    if (!enableMentions) {
+      setMention(null)
+      return
+    }
+    const before = value.slice(0, caret)
+    const match = /(?:^|\s)@([A-Za-z0-9_.-]*)$/.exec(before)
+    if (!match) {
+      setMention(null)
+      return
+    }
+    setMention({ at: before.lastIndexOf('@'), query: match[1], active: 0 })
+  }
+
+  function selectMention(member) {
+    if (!mention) return
+    const end = mention.at + 1 + mention.query.length
+    const after = text.slice(end)
+    const next = `${text.slice(0, mention.at)}@${member.username}${after.startsWith(' ') ? '' : ' '}${after}`
+    setText(next)
+    setMention(null)
+    const caret = mention.at + 1 + member.username.length + 1
+    requestAnimationFrame(() => {
+      const el = textRef.current
+      if (!el) return
+      el.focus()
+      el.setSelectionRange(caret, caret)
+    })
+  }
+
+  // The tag button inserts '@' at the caret and opens the same picker
+  // that typing '@' opens, so touch users never need to find '@' on
+  // their keyboard.
+  function insertMentionTrigger() {
+    const el = textRef.current
+    const caret = el ? (el.selectionStart ?? text.length) : text.length
+    const next = `${text.slice(0, caret)}@${text.slice(caret)}`
+    setText(next)
+    setMention({ at: caret, query: '', active: 0 })
+    requestAnimationFrame(() => {
+      if (!el) return
+      el.focus()
+      el.setSelectionRange(caret + 1, caret + 1)
+    })
+  }
 
   async function submit(e) {
     e?.preventDefault()
@@ -989,6 +1686,7 @@ function Composer({ onSend, placeholder = 'Message' }) {
     if (ok) {
       setText('')
       setFile(null)
+      setMention(null)
       textRef.current?.focus()
     }
   }
@@ -1006,6 +1704,34 @@ function Composer({ onSend, placeholder = 'Message' }) {
       e.preventDefault()
       setFile(f)
     }
+  }
+
+  function onComposerKeyDown(e) {
+    if (!mention || !enableMentions) {
+      if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) submit(e)
+      return
+    }
+    if (e.key === 'ArrowDown' && mentionOptions.length) {
+      e.preventDefault()
+      setMention((m) => ({ ...m, active: (m.active + 1) % mentionOptions.length }))
+      return
+    }
+    if (e.key === 'ArrowUp' && mentionOptions.length) {
+      e.preventDefault()
+      setMention((m) => ({ ...m, active: (m.active - 1 + mentionOptions.length) % mentionOptions.length }))
+      return
+    }
+    if ((e.key === 'Enter' || e.key === 'Tab') && mentionOptions.length) {
+      e.preventDefault()
+      selectMention(mentionOptions[mention.active] ?? mentionOptions[0])
+      return
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      setMention(null)
+      return
+    }
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) submit(e)
   }
 
   return (
@@ -1034,8 +1760,45 @@ function Composer({ onSend, placeholder = 'Message' }) {
           </div>
         )}
       </div>
+      {enableMentions && (
+        <button
+          type="button"
+          className="circle-btn mention-btn"
+          aria-label="Mention a member"
+          title="Mention a member"
+          onClick={insertMentionTrigger}
+        >
+          @
+        </button>
+      )}
       <input ref={imageInput} type="file" accept="image/*,video/*" hidden onChange={pick} />
       <input ref={fileInput} type="file" hidden onChange={pick} />
+
+      {enableMentions && mention && (
+        <div className="mention-picker" role="listbox" aria-label="Mention a member">
+          {mentionOptions.length === 0 ? (
+            <div className="mention-empty" role="status">
+              No member matches @{mention.query}
+            </div>
+          ) : (
+            mentionOptions.map((m, i) => (
+              <button
+                key={m.id}
+                type="button"
+                role="option"
+                aria-selected={i === mention.active}
+                className={`mention-option ${i === mention.active ? 'active' : ''}`}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => selectMention(m)}
+                onMouseEnter={() => setMention((prev) => (prev ? { ...prev, active: i } : prev))}
+              >
+                <Avatar name={m.username} src={m.avatar} />
+                <span>@{m.username}</span>
+              </button>
+            ))
+          )}
+        </div>
+      )}
 
       <div className={`input-pill ${file ? 'with-file' : ''}`}>
         {file && (
@@ -1063,11 +1826,12 @@ function Composer({ onSend, placeholder = 'Message' }) {
             placeholder={placeholder}
             value={text}
             onFocus={() => setMenu(false)}
-            onChange={(e) => setText(e.target.value)}
-            onPaste={onPaste}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) submit(e)
+            onChange={(e) => {
+              setText(e.target.value)
+              updateMention(e.target.value, e.target.selectionStart ?? e.target.value.length)
             }}
+            onPaste={onPaste}
+            onKeyDown={onComposerKeyDown}
           />
           {canSend || busy ? (
             <button
@@ -1221,14 +1985,47 @@ function formatSize(bytes) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
+// Render a sent message: links stay links, and, in the group chat only,
+// @name tokens that match a real member render as a highlighted mention.
+// A mention is non-interactive in this build (no popover, no filtering),
+// it changes nothing about who can read the message, and it is stored as
+// plain text in the existing content column, so no migration is needed.
+// An @name that matches nobody renders as ordinary text, never a guess.
+function renderMessageContent(text, profilesMap) {
+  const mentionNames = profilesMap
+    ? new Set(Object.values(profilesMap).map((u) => (u ?? '').toLowerCase()))
+    : null
+  const out = []
+  let key = 0
+  for (const part of text.split(/(https?:\/\/[^\s]+)/g)) {
+    if (/^https?:\/\//.test(part)) {
+      out.push(
+        <a key={key++} href={part} target="_blank" rel="noreferrer">
+          {part}
+        </a>,
+      )
+      continue
+    }
+    if (!mentionNames) {
+      out.push(part)
+      continue
+    }
+    for (const seg of part.split(/(@[A-Za-z][A-Za-z0-9_.-]*)/g)) {
+      if (!seg) continue
+      if (seg.startsWith('@') && mentionNames.has(seg.slice(1).toLowerCase())) {
+        out.push(
+          <span key={key++} className="mention">
+            {seg}
+          </span>,
+        )
+      } else {
+        out.push(seg)
+      }
+    }
+  }
+  return out
+}
+
 function linkify(text) {
-  return text.split(/(https?:\/\/[^\s]+)/g).map((part, i) =>
-    /^https?:\/\//.test(part) ? (
-      <a key={i} href={part} target="_blank" rel="noreferrer">
-        {part}
-      </a>
-    ) : (
-      part
-    ),
-  )
+  return renderMessageContent(text, null)
 }
