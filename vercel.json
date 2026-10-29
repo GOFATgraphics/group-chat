@@ -1,0 +1,6 @@
+{
+  "functions": {
+    "api/bot.js": { "maxDuration": 60 },
+    "api/messages/index.js": { "maxDuration": 30 }
+  }
+}

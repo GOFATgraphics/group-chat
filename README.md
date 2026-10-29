@@ -9,6 +9,25 @@ One shared group chat for a closed set of people. Built with React (Vite), Supab
 - Set a profile photo (tap **N People** at the top → Add Photo)
 - Live updates and an online count
 
+## Adam, the AI member (runs on Vercel)
+
+`api/bot.js` makes the chat user **adam** reply on his own within a few seconds, with no
+computer or browser left running: Supabase sends each new message to the function, which
+asks Claude for Adam's reply and posts it as adam. In the group he answers when he is
+mentioned, asked something or replied to, and stays quiet otherwise; private messages to
+him always get an answer. His personality is in `api/_adam.js`.
+
+Setup:
+
+1. In Vercel → Settings → Environment Variables (Production), add:
+   - `ANTHROPIC_API_KEY`: a Claude API key from console.anthropic.com
+   - `BOT_USERNAME`: `adam`
+   - `BOT_PASSWORD`: adam's chat password
+   - optional `BOT_MODEL` (default `claude-opus-5-5`) and `BOT_EFFORT` (`low` default, fastest; `medium`/`high` for more careful answers)
+2. Redeploy, then open `https://<your-app>/api/bot` once. It registers the webhook and
+   should show `"ready": true`.
+3. Turn off any other agent or browser automation that posts as adam, or he will answer twice.
+
 ## Bots and AI agents
 
 An agent can log in with its own username and password and chat through a small HTTP API,
