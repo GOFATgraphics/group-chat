@@ -832,6 +832,18 @@ video.media { cursor: default; }
   flex-shrink: 0;
 }
 
+/* Read-only notice shown instead of the composer in an owner view.
+   Reuses existing tokens only: --fill, --muted, 12px card radius, 14px type. */
+.owner-readonly {
+  padding: 14px 16px calc(14px + env(safe-area-inset-bottom));
+  margin: 12px;
+  border-radius: 12px;
+  background: var(--fill);
+  color: var(--muted);
+  font-size: 14px;
+  text-align: center;
+}
+
 /* Visible focus and disabled states for every new control. The existing
    app only styles focus on the login input, so these are scoped to the DM
    controls rather than restyling the whole app. */

@@ -29,6 +29,7 @@ export default function Chat({ session }) {
   const [view, setView] = useState({ type: 'group' })
   const [showPanel, setShowPanel] = useState(false)
   const [dmPeers, setDmPeers] = useState([])
+  const [ownerPairs, setOwnerPairs] = useState([])
   const [lightbox, setLightbox] = useState(null)
   const [sounds, setSounds] = useState(soundsEnabled)
 
@@ -65,15 +66,32 @@ export default function Chat({ session }) {
   profilesRef.current = profiles
 
   // ---- conversations -------------------------------------------------------
-  // view is { type: 'group' } or { type: 'dm', peerId }.
+  // view is { type: 'group' }, { type: 'dm', peerId }, or
+  // { type: 'owner', aId, bId } for a read-only owner view of a private
+  // chat between two other members. The owner never appears as a
+  // participant in an owner view.
   const isGroup = view.type === 'group'
   const peerId = view.type === 'dm' ? view.peerId : null
+  const isOwnerView = view.type === 'owner'
+  const ownerA = isOwnerView ? view.aId : null
+  const ownerB = isOwnerView ? view.bId : null
   const viewRef = useRef(view)
   viewRef.current = view
+
+  // The owner is detected by profile username, never by a hardcoded UUID.
+  const isOwner = me?.username === 'mubarak'
+
+  const pairKey = (a, b) => [a, b].sort().join('|')
 
   const isMessageForView = useCallback(
     (msg, v) => {
       if (v.type === 'group') return msg.recipient_id == null
+      if (v.type === 'owner') {
+        return (
+          (msg.user_id === v.aId && msg.recipient_id === v.bId) ||
+          (msg.user_id === v.bId && msg.recipient_id === v.aId)
+        )
+      }
       return (
         (msg.user_id === myId && msg.recipient_id === v.peerId) ||
         (msg.user_id === v.peerId && msg.recipient_id === myId)
@@ -97,8 +115,25 @@ export default function Chat({ session }) {
     setDmPeers((prev) => (prev.includes(id) ? prev : [...prev, id]))
   }, [myId])
 
+  // Owner pairs are private chats between two other members. Pairs that
+  // include the owner are already listed under Direct messages, so they
+  // are not duplicated here.
+  const addOwnerPair = useCallback(
+    (a, b) => {
+      if (!a || !b || a === b || a === myId || b === myId) return
+      const key = pairKey(a, b)
+      setOwnerPairs((prev) => (prev.some((p) => pairKey(p[0], p[1]) === key) ? prev : [...prev, [a, b].sort()]))
+    },
+    [myId],
+  )
+
   function filterConversation(query, v) {
     if (v.type === 'group') return query.is('recipient_id', null)
+    if (v.type === 'owner') {
+      return query.or(
+        `and(user_id.eq.${v.aId},recipient_id.eq.${v.bId}),and(user_id.eq.${v.bId},recipient_id.eq.${v.aId})`,
+      )
+    }
     return query.or(
       `and(user_id.eq.${myId},recipient_id.eq.${v.peerId}),and(user_id.eq.${v.peerId},recipient_id.eq.${myId})`,
     )
@@ -107,6 +142,13 @@ export default function Chat({ session }) {
   function openDm(id) {
     addDmPeer(id)
     setView({ type: 'dm', peerId: id })
+    setShowMembers(false)
+    setShowPanel(false)
+  }
+
+  function openOwner(a, b) {
+    const [first, second] = [a, b].sort()
+    setView({ type: 'owner', aId: first, bId: second })
     setShowMembers(false)
     setShowPanel(false)
   }
@@ -180,6 +222,25 @@ export default function Chat({ session }) {
         else if (row.recipient_id === myId) peers.add(row.user_id)
       }
       setDmPeers([...peers])
+      // Owner only: every private-chat pair between other members, from
+      // message history the owner can read once migration 0004 is applied.
+      // Before that migration, this query is still limited by the 0003
+      // policies, so it simply returns the owner's own pairs, which are
+      // filtered out below and never shown in the owner section.
+      if (meRow?.username === 'mubarak') {
+        const { data: allDmRows } = await supabase
+          .from('messages')
+          .select('user_id, recipient_id')
+          .not('recipient_id', 'is', null)
+          .limit(1000)
+        const pairs = new Map()
+        for (const row of allDmRows ?? []) {
+          if (!row.user_id || !row.recipient_id || row.user_id === row.recipient_id) continue
+          if (row.user_id === myId || row.recipient_id === myId) continue
+          pairs.set(pairKey(row.user_id, row.recipient_id), [row.user_id, row.recipient_id].sort())
+        }
+        setOwnerPairs([...pairs.values()])
+      }
     }
     load()
     return () => {
@@ -241,6 +302,18 @@ export default function Chat({ session }) {
             if (m.user_id !== myId) playReceive()
             return
           }
+        } else if (m.recipient_id != null) {
+          // A DM between two other members: it belongs in the owner's
+          // list only, never in the group view or a participant's DM view,
+          // and it never names the owner as a participant.
+          if (viewRef.current.type === 'owner' && isMessageForView(m, viewRef.current)) {
+            playReceive()
+            addMessage(m)
+            return
+          }
+          addOwnerPair(m.user_id, m.recipient_id)
+          ensureProfile(m.user_id)
+          return
         } else if (!isMessageForView(m, viewRef.current)) {
           return
         }
@@ -270,7 +343,7 @@ export default function Chat({ session }) {
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [myId, addMessage, applyReaction, dmPeerOf, addDmPeer, ensureProfile, isMessageForView])
+  }, [myId, addMessage, applyReaction, dmPeerOf, addDmPeer, addOwnerPair, ensureProfile, isMessageForView])
 
   async function loadOlder() {
     const oldest = messages[0]
@@ -332,6 +405,9 @@ export default function Chat({ session }) {
   // ---- actions -------------------------------------------------------------
 
   async function send({ text, file }) {
+    // Owner view is read-only; the composer is hidden there, and this is
+    // the second line of defence if send is ever called from that view.
+    if (viewRef.current.type === 'owner') return false
     setError('')
     let attachment = {}
     if (file) {
@@ -372,6 +448,7 @@ export default function Chat({ session }) {
   }
 
   async function toggleReaction(messageId, emoji) {
+    if (viewRef.current.type === 'owner') return
     const mine = (reactions[messageId] ?? []).some((r) => r.user_id === myId && r.emoji === emoji)
     applyReaction(messageId, myId, emoji, !mine)
     if (!mine) playPop()
@@ -412,6 +489,7 @@ export default function Chat({ session }) {
   }
 
   async function deleteMessage(msg) {
+    if (viewRef.current.type === 'owner') return
     if (!window.confirm('Delete this message for everyone?')) return
     const { error: err } = await supabase.from('messages').delete().eq('id', msg.id)
     if (err) return setError(err.message)
@@ -442,9 +520,15 @@ export default function Chat({ session }) {
   const memberIds = Object.keys(profiles)
   const headerFaces = [...memberIds.filter((id) => id !== myId), myId].slice(0, 3)
   const peerName = peerId ? profiles[peerId] ?? '…' : null
+  const ownerNameA = ownerA ? profiles[ownerA] ?? '…' : null
+  const ownerNameB = ownerB ? profiles[ownerB] ?? '…' : null
+  const ownerPairLabel = isOwnerView ? `${ownerNameA} and ${ownerNameB}` : null
   const dmList = dmPeers
     .filter((id) => profiles[id])
     .sort((a, b) => (profiles[a] ?? '').localeCompare(profiles[b] ?? ''))
+  const ownerPairList = ownerPairs
+    .filter(([a, b]) => profiles[a] && profiles[b])
+    .sort((p, q) => `${profiles[p[0]]} and ${profiles[p[1]]}`.localeCompare(`${profiles[q[0]]} and ${profiles[q[1]]}`))
 
   return (
     <div className="chat">
@@ -474,6 +558,14 @@ export default function Chat({ session }) {
               {memberIds.length} People <Chevron />
             </span>
           </button>
+        ) : isOwnerView ? (
+          <button className="topbar-center" onClick={() => setShowMembers(true)}>
+            <span className="group-avatar">
+              <Avatar name={ownerNameA} src={avatars[ownerA]} />
+              <Avatar name={ownerNameB} src={avatars[ownerB]} />
+            </span>
+            <span className="people-pill">{ownerPairLabel}</span>
+          </button>
         ) : (
           <button className="topbar-center" onClick={() => setShowMembers(true)}>
             <span className="group-avatar">
@@ -485,7 +577,9 @@ export default function Chat({ session }) {
         <div className="topbar-sub">
           {isGroup
             ? `Group Chat${online.length > 0 ? ` · ${online.length} online` : ''}`
-            : `Private chat · only you and ${peerName}`}
+            : isOwnerView
+              ? `Owner view · ${ownerPairLabel}`
+              : `Private chat · only you and ${peerName}`}
         </div>
       </header>
 
@@ -501,6 +595,8 @@ export default function Chat({ session }) {
             <img className="empty-logo" src="/logo.png" alt="" />
             {isGroup ? (
               <>No messages yet. Say hi 👋</>
+            ) : isOwnerView ? (
+              <>No messages in this private chat between {ownerPairLabel}.</>
             ) : (
               <>No messages yet. This is a private chat between you and {peerName}.</>
             )}
@@ -518,6 +614,7 @@ export default function Chat({ session }) {
               first={item.first}
               last={item.last}
               mine={item.msg.user_id === myId}
+              readOnly={isOwnerView}
               myId={myId}
               username={profiles[item.msg.user_id] ?? '…'}
               avatar={avatars[item.msg.user_id]}
@@ -542,7 +639,13 @@ export default function Chat({ session }) {
         </div>
       )}
 
-      <Composer onSend={send} placeholder={isGroup ? 'Message' : `Message ${peerName}`} />
+      {isOwnerView ? (
+        <div className="owner-readonly" role="note">
+          Read-only owner view · you cannot send, react, or delete here.
+        </div>
+      ) : (
+        <Composer onSend={send} placeholder={isGroup ? 'Message' : `Message ${peerName}`} />
+      )}
 
       {showPanel && (
         <div className="panel-backdrop" onClick={() => setShowPanel(false)}>
@@ -583,6 +686,37 @@ export default function Chat({ session }) {
                   </li>
                 ))}
               </ul>
+            )}
+            {isOwner && (
+              <>
+                <div className="panel-section">Owner view</div>
+                {ownerPairList.length === 0 ? (
+                  <div className="panel-empty muted">
+                    No private chats between other members yet.
+                  </div>
+                ) : (
+                  <ul className="dm-list">
+                    {ownerPairList.map(([a, b]) => {
+                      const label = `${profiles[a]} and ${profiles[b]}`
+                      return (
+                        <li key={pairKey(a, b)}>
+                          <button
+                            className={`dm-entry ${isOwnerView && ownerA === a && ownerB === b ? 'active' : ''}`}
+                            aria-label={`Owner view: ${label}`}
+                            onClick={() => openOwner(a, b)}
+                          >
+                            <span className="group-avatar">
+                              <Avatar name={profiles[a]} src={avatars[a]} />
+                              <Avatar name={profiles[b]} src={avatars[b]} />
+                            </span>
+                            <span className="dm-name">{label}</span>
+                          </button>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -659,6 +793,7 @@ function Message({
   first,
   last,
   mine,
+  readOnly = false,
   myId,
   username,
   avatar,
@@ -690,7 +825,10 @@ function Message({
   const iReacted = reactions.some((r) => r.user_id === myId)
 
   // Long-press on touch, right-click or double-click on desktop opens tapbacks.
-  const gestures = {
+  // In a read-only owner view, no gesture opens the reaction picker.
+  const gestures = readOnly
+    ? {}
+    : {
     onPointerDown: (e) => {
       if (e.pointerType === 'mouse') return
       pressTimer.current = setTimeout(onOpenPicker, LONG_PRESS_MS)
@@ -763,7 +901,7 @@ function Message({
               title={grouped
                 .map(([e, users]) => `${e} ${users.map((u) => (u === myId ? 'You' : profiles[u] ?? '…')).join(', ')}`)
                 .join('\n')}
-              onClick={onOpenPicker}
+              onClick={readOnly ? undefined : onOpenPicker}
             >
               {grouped.slice(0, 3).map(([e]) => (
                 <span key={e}>{e}</span>
@@ -772,11 +910,13 @@ function Message({
             </button>
           )}
 
-          <button className="react-hint" title="React" onClick={onOpenPicker}>
-            <SmileIcon />
-          </button>
+          {!readOnly && (
+            <button className="react-hint" title="React" onClick={onOpenPicker}>
+              <SmileIcon />
+            </button>
+          )}
 
-          {pickerOpen && (
+          {pickerOpen && !readOnly && (
             <>
               <div className="tapback-bar">
                 {TAPBACKS.map((e) => {
