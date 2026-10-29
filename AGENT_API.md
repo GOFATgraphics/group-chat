@@ -14,7 +14,10 @@ The agent is a normal chat member. Create its login in the Supabase SQL Editor:
 select public.create_chat_user('assistant', 'a-long-random-password');
 ```
 
-Its messages, photos, files and reactions show up for everyone like anyone else's.
+Its messages, photos, files and reactions show up like anyone else's. It can talk
+in the group chat and in private 1-to-1 conversations, and it only ever sees what
+a person with the same login would see: the group chat and its own private
+messages, never other members' private conversations.
 
 ## 1. Log in
 
@@ -70,8 +73,9 @@ Authorization: Bearer <access_token>
 { "webhook": { "url": "https://my-agent.example.com/chat-webhook", "secret": "9f2c..." } }
 ```
 
-From then on, every new message from **someone else** is POSTed to that URL
-straight from the database, with no polling:
+From then on, every new message the agent may read (any group message, and
+private messages sent **to the agent**) is POSTed to that URL straight from the
+database, with no polling. Its own messages are never sent back to it.
 
 ```http
 POST /chat-webhook
@@ -82,8 +86,11 @@ Content-Type: application/json
   "type": "message.created",
   "message": {
     "id": 412,
+    "conversation": "group",
     "user_id": "a1b2...",
     "username": "mom",
+    "recipient_id": null,
+    "reply_to_id": null,
     "content": "Can someone check the form?",
     "attachment_path": "a1b2.../1793...-form.pdf",
     "attachment_name": "form.pdf",
@@ -97,7 +104,11 @@ Content-Type: application/json
 - Reject calls whose `Authorization` header is not `Bearer <your secret>`.
 - Answer with any 2xx quickly (do the AI work after responding, or in the
   background). Deliveries time out after 5 seconds and are not retried.
+- `conversation` is `"group"` or `"direct"` (a private message to the agent; reply
+  privately with `"to": "<username>"`).
 - To download an attachment, call `GET /api/file?path=<attachment_path>`.
+- Webhook deliveries don't mark messages as read; call `POST /api/read` (below)
+  so the sender's ticks turn blue.
 - `GET /api/webhook` shows the current URL and secret; `DELETE /api/webhook` stops deliveries.
   Changing the URL with `PUT` keeps the same secret.
 
@@ -116,11 +127,24 @@ empty list after 25 seconds. Call it again in a loop with the newest id.
 ## 3. Read messages
 
 ```http
-GET /api/messages                 latest 50, oldest first
-GET /api/messages?limit=200       up to 200
-GET /api/messages?before_id=300   older history (page backwards)
-GET /api/messages?after_id=412    only newer than 412
-GET /api/messages/412             one message
+GET /api/messages                       latest 50 from the group chat and the agent's private chats, oldest first
+GET /api/messages?conversation=group    group chat only
+GET /api/messages?with=mom              only the private chat with "mom"
+GET /api/messages?limit=200             up to 200
+GET /api/messages?before_id=300         older history (page backwards)
+GET /api/messages?after_id=412          only newer than 412
+GET /api/messages/412                   one message
+```
+
+These can be combined, e.g. `?with=mom&after_id=412&wait=25`.
+
+Fetching messages marks the ones the agent received as **read**, so senders
+see blue ticks exactly as if a person had opened the chat. Add `mark_read=0`
+to just peek. With a webhook, mark them yourself:
+
+```http
+POST /api/read
+{ "message_ids": [412, 413] }
 ```
 
 ```json
@@ -128,8 +152,12 @@ GET /api/messages/412             one message
   "messages": [
     {
       "id": 412,
+      "conversation": "group",
       "user_id": "a1b2...",
       "username": "mom",
+      "recipient_id": null,
+      "recipient_username": null,
+      "reply_to_id": null,
       "text": "Can someone check the form?",
       "attachment": {
         "path": "a1b2.../1793...-form.pdf",
@@ -149,11 +177,26 @@ GET /api/messages/412             one message
 
 ## 4. Send
 
-Text:
+Text to the group:
 
 ```http
 POST /api/messages
 { "text": "On it! I'll review the form now." }
+```
+
+A private message (only that person sees it):
+
+```json
+{ "text": "Sent you the details privately", "to": "mom" }
+```
+
+A quoted reply (shows the original above the answer, like swipe-to-reply in the
+app). The quoted message must be in the same conversation, so for a private
+reply include `to` as well:
+
+```json
+{ "text": "Yes, done!", "reply_to_id": 412 }
+{ "text": "Yes, done!", "reply_to_id": 415, "to": "mom" }
 ```
 
 A photo or file you have as bytes (keep it under about 3 MB because of Vercel's request size limit):
@@ -200,7 +243,7 @@ Errors are JSON, for example `{ "error": "Access token expired. Call POST /api/r
 | 400 | Bad input (missing text, bad URL, …) |
 | 401 | Missing, expired or invalid token, or wrong password; refresh or log in again |
 | 403 | Not allowed (for example, the account is not a chat member) |
-| 404 | Message or file not found, or not yours to delete |
+| 404 | Message, member or file not found, or not yours to delete |
 | 413 | File over 25 MB |
 
 ## Example: a fast reply loop in Python
@@ -249,7 +292,10 @@ while True:
     for m in new:
         last_id = max(last_id, m["id"])
         if m["text"]:
-            call("POST", "/messages", json={"text": reply_to(m)})
+            answer = {"text": reply_to(m), "reply_to_id": m["id"]}
+            if m["conversation"] == "direct":
+                answer["to"] = m["username"]  # answer privately
+            call("POST", "/messages", json=answer)
 ```
 
 ## Example: webhook receiver (Node)
@@ -266,6 +312,8 @@ app.post('/chat-webhook', (req, res) => {
   res.sendStatus(200) // acknowledge first, then think
   const { message } = req.body
   handle(message) // call your AI, then POST /api/messages with the reply
+  // (add "to": message.username when message.conversation === 'direct')
+  // and POST /api/read { message_ids: [message.id] } for the blue ticks
 })
 
 app.listen(3000)

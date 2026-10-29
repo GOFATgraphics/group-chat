@@ -1,20 +1,29 @@
-import { route, auth, body, check, present, sleep, HttpError, BUCKET, MAX_FILE_BYTES } from '../_lib.js'
+import {
+  route, auth, body, check, present, markRead, userIdFor, sleep, HttpError, BUCKET, MAX_FILE_BYTES,
+} from '../_lib.js'
 
 const MAX_WAIT_SECONDS = 25
 const POLL_MS = 300
 
 // GET /api/messages
-//   ?after_id=123      only messages newer than this id (oldest first)
-//   ?before_id=123     page backwards through history
-//   ?limit=50          1-200, default 50
-//   ?wait=25           with after_id: hold the request open up to N seconds
-//                      until a new message arrives (long-polling)
-//   ?from_others=1     ignore your own messages (useful with wait)
+//   Which conversation (default: the group chat plus your own direct messages):
+//   ?conversation=group   group chat only
+//   ?with=<username>      only your direct messages with that member
+//   Paging:
+//   ?after_id=123         only messages newer than this id (oldest first)
+//   ?before_id=123        page backwards through history
+//   ?limit=50             1-200, default 50
+//   ?wait=25              with after_id: hold the request open up to N seconds
+//                         until a new message arrives (long-polling)
+//   ?from_others=1        ignore your own messages (useful with wait)
+//   ?mark_read=0          don't record read receipts (default: mark as read)
 //
 // POST /api/messages
-//   { "text": "hi" }
-//   { "text": "optional caption", "file": { "name": "a.png", "type": "image/png", "base64": "..." } }
-//   { "text": "optional caption", "file_url": "https://...", "file_name": "report.pdf" }
+//   { "text": "hi" }                                   to the group
+//   { "text": "hi", "to": "<username>" }               private message
+//   { "text": "yes!", "reply_to_id": 123 }             quoted reply
+//   { "text": "caption", "file": { "name": "a.png", "type": "image/png", "base64": "..." } }
+//   { "text": "caption", "file_url": "https://...", "file_name": "report.pdf" }
 export default route({
   async GET(req) {
     const { sb, userId } = auth(req)
@@ -22,30 +31,62 @@ export default route({
     const limit = clamp(Number(q.limit) || 50, 1, 200)
     const fromOthers = q.from_others === '1' || q.from_others === 'true'
     const wait = clamp(Number(q.wait) || 0, 0, MAX_WAIT_SECONDS)
+    const shouldMarkRead = q.mark_read !== '0' && q.mark_read !== 'false'
 
+    // Built once; a fresh query is made from it on every poll.
+    let scope
+    if (q.with) {
+      const peer = await userIdFor(sb, q.with)
+      scope = (query) =>
+        query.or(`and(user_id.eq.${userId},recipient_id.eq.${peer}),and(user_id.eq.${peer},recipient_id.eq.${userId})`)
+    } else if (q.conversation === 'group') {
+      scope = (query) => query.is('recipient_id', null)
+    } else {
+      scope = (query) => query.or(`recipient_id.is.null,recipient_id.eq.${userId},user_id.eq.${userId}`)
+    }
+    const base = () => {
+      let query = scope(sb.from('messages').select('*'))
+      if (fromOthers) query = query.neq('user_id', userId)
+      return query
+    }
+
+    let rows
     if (q.after_id != null) {
       const afterId = Number(q.after_id)
       const deadline = Date.now() + wait * 1000
       for (;;) {
-        let query = sb.from('messages').select('*').gt('id', afterId).order('id').limit(limit)
-        if (fromOthers) query = query.neq('user_id', userId)
-        const rows = check(await query)
-        if (rows.length || Date.now() >= deadline) return { messages: await present(sb, rows) }
+        rows = check(await base().gt('id', afterId).order('id').limit(limit))
+        if (rows.length || Date.now() >= deadline) break
         await sleep(POLL_MS)
       }
+    } else {
+      let query = base().order('id', { ascending: false }).limit(limit)
+      if (q.before_id != null) query = query.lt('id', Number(q.before_id))
+      rows = check(await query).reverse()
     }
 
-    let query = sb.from('messages').select('*').order('id', { ascending: false }).limit(limit)
-    if (q.before_id != null) query = query.lt('id', Number(q.before_id))
-    if (fromOthers) query = query.neq('user_id', userId)
-    const rows = check(await query).reverse()
-    return { messages: await present(sb, rows) }
+    const [messages] = await Promise.all([present(sb, rows), shouldMarkRead ? markRead(sb, userId, rows) : null])
+    return { messages }
   },
 
   async POST(req) {
     const { sb, userId } = auth(req)
     const b = body(req)
     const text = typeof b.text === 'string' ? b.text.trim() : ''
+    const recipientId = b.to ? await userIdFor(sb, b.to) : null
+    if (recipientId === userId) throw new HttpError(400, "You can't send a private message to yourself")
+    const replyToId = b.reply_to_id != null ? Number(b.reply_to_id) : null
+    if (replyToId != null) {
+      // The quoted message must be one you can see, in the same conversation.
+      const original = check(
+        await sb.from('messages').select('user_id, recipient_id').eq('id', replyToId).maybeSingle(),
+      )
+      if (!original) throw new HttpError(404, 'reply_to_id: message not found')
+      const sameConversation = recipientId
+        ? [original.user_id, original.recipient_id].sort().join() === [userId, recipientId].sort().join()
+        : !original.recipient_id
+      if (!sameConversation) throw new HttpError(400, 'reply_to_id must be a message in the same conversation')
+    }
     const file = await readFile(b)
     if (!text && !file) throw new HttpError(400, 'Send "text", "file" or "file_url"')
 
@@ -65,7 +106,7 @@ export default route({
 
     const { data, error } = await sb
       .from('messages')
-      .insert({ content: text || null, ...attachment })
+      .insert({ content: text || null, recipient_id: recipientId, reply_to_id: replyToId, ...attachment })
       .select()
       .single()
     if (error) {

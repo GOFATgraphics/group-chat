@@ -1,6 +1,8 @@
--- Webhooks for bots/AI agents: every new message is POSTed to each registered
--- URL (except the author's own) right after it is saved, so an agent can reply
--- without polling. Delivery is async via pg_net and never slows down posting.
+-- Webhooks for bots/AI agents: each new message an agent may read is POSTed to
+-- its registered URL right after it is saved, so it can reply without polling.
+-- Group messages go to every agent; a direct message only to its recipient.
+-- Never to the author, and never other members' private conversations.
+-- Delivery is async via pg_net and never slows down posting.
 
 create extension if not exists pg_net with schema extensions;
 
@@ -33,8 +35,11 @@ begin
     'type', 'message.created',
     'message', jsonb_build_object(
       'id', new.id,
+      'conversation', case when new.recipient_id is null then 'group' else 'direct' end,
       'user_id', new.user_id,
       'username', (select username from public.profiles where id = new.user_id),
+      'recipient_id', new.recipient_id,
+      'reply_to_id', new.reply_to_id,
       'content', new.content,
       'attachment_path', new.attachment_path,
       'attachment_name', new.attachment_name,
@@ -44,7 +49,11 @@ begin
     )
   );
 
-  for hook in select url, secret from public.agent_webhooks where user_id <> new.user_id loop
+  for hook in
+    select url, secret from public.agent_webhooks
+    where user_id <> new.user_id
+      and (new.recipient_id is null or user_id = new.recipient_id)
+  loop
     perform net.http_post(
       url := hook.url,
       body := payload,

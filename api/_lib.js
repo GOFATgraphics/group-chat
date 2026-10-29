@@ -105,8 +105,12 @@ export async function present(sb, rows) {
   const urls = Object.fromEntries(signed.map((s) => [s.path, s.signedUrl]))
   return rows.map((m) => ({
     id: m.id,
+    conversation: m.recipient_id ? 'direct' : 'group',
     user_id: m.user_id,
     username: names[m.user_id] ?? null,
+    recipient_id: m.recipient_id ?? null,
+    recipient_username: m.recipient_id ? names[m.recipient_id] ?? null : null,
+    reply_to_id: m.reply_to_id ?? null,
     text: m.content,
     attachment: m.attachment_path
       ? {
@@ -125,3 +129,20 @@ export async function present(sb, rows) {
 }
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+export async function userIdFor(sb, username) {
+  const rows = check(await sb.from('profiles').select('id').eq('username', String(username).trim().toLowerCase()))
+  if (!rows.length) throw new HttpError(404, `No member named "${username}"`)
+  return rows[0].id
+}
+
+// Record read receipts (the ticks other members see) for messages the agent
+// has received: group messages and direct messages sent to it.
+export async function markRead(sb, userId, rows) {
+  const unread = rows
+    .filter((m) => m.user_id !== userId && (!m.recipient_id || m.recipient_id === userId))
+    .map((m) => ({ message_id: m.id, user_id: userId }))
+  if (!unread.length) return
+  const { error } = await sb.from('message_reads').upsert(unread, { onConflict: 'message_id,user_id', ignoreDuplicates: true })
+  if (error) console.error('markRead', error.message)
+}
