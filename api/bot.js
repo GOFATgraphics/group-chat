@@ -1,54 +1,72 @@
-// Adam, the chat's AI member, running entirely on Vercel.
+// The chat's AI members (e.g. adam and ali), running entirely on Vercel.
 //
-// Supabase POSTs every new message Adam may read (group messages and private
-// messages to Adam; see the agent_webhooks migration) to this function. It
-// acknowledges at once, then asks Claude for a reply and posts it as Adam, so
-// a reply lands a few seconds after the message.
+// Supabase POSTs every new message a bot may read (group messages and private
+// messages to that bot; see the agent_webhooks migration) to this function,
+// once per bot, each with that bot's own secret. The secret tells us which
+// bot the delivery is for. We acknowledge at once, then ask Claude for that
+// bot's reply and post it as the bot, so replies land within seconds.
 //
 // GET /api/bot (open it once in a browser after deploying) registers this
-// function's production URL as Adam's webhook and reports the setup status.
+// function's production URL as every configured bot's webhook and reports
+// the setup status.
 //
 // Environment variables (Vercel → Settings → Environment Variables):
-//   ANTHROPIC_API_KEY   Claude API key
-//   BOT_USERNAME        chat username the bot posts as (e.g. adam)
-//   BOT_PASSWORD        that user's password
-//   BOT_MODEL           optional, default claude-opus-5-5
-//   BOT_EFFORT          optional: low | medium | high, default low (fastest)
-//   BOT_PERSONA         optional, overrides the text in api/_adam.js
+//   ANTHROPIC_API_KEY         Claude API key
+//   BOTS                      comma-separated chat usernames, e.g. adam,ali
+//   BOT_PASSWORD_<USERNAME>   each bot's chat password, e.g. BOT_PASSWORD_ADAM
+//   BOT_PERSONA_<USERNAME>    optional, overrides the text in api/_personas.js
+//   BOT_MODEL                 optional, default claude-opus-5-5
+//   BOT_EFFORT                optional: low | medium | high, default low (fastest)
+//   (BOT_USERNAME + BOT_PASSWORD, the single-bot form, still work too.)
 
 import Anthropic from '@anthropic-ai/sdk'
 import { waitUntil } from '@vercel/functions'
 import { timingSafeEqual } from 'node:crypto'
 import { client, usernameToEmail, markRead, HttpError, BUCKET } from './_lib.js'
-import { PERSONA } from './_adam.js'
+import { PERSONAS, defaultPersona } from './_personas.js'
 
 const MODEL = process.env.BOT_MODEL || 'claude-opus-5-5'
 const EFFORT = process.env.BOT_EFFORT || 'low'
 const HISTORY = 40
 const NO_REPLY = 'NO_REPLY'
+// Bots stay quiet when this many messages in a row in a conversation are
+// all from bots, so two AI members can never keep a conversation going alone.
+const MAX_BOT_STREAK = 4
 
 const anthropic = new Anthropic()
 
-// Bot session, reused while this function instance stays warm.
-let cached = null
+const envKey = (name) => name.toUpperCase().replace(/[^A-Z0-9]/g, '_')
 
-async function botSession() {
-  if (cached && cached.expiresAt - 60 > Date.now() / 1000) return cached
-  const username = process.env.BOT_USERNAME
-  const password = process.env.BOT_PASSWORD
-  if (!username || !password) throw new HttpError(500, 'Set BOT_USERNAME and BOT_PASSWORD in Vercel')
-  const { data, error } = await client().auth.signInWithPassword({ email: usernameToEmail(username), password })
-  if (error) throw new HttpError(500, `Bot login failed for "${username}": ${error.message}`)
+function configuredBots() {
+  const names = new Set(
+    (process.env.BOTS || '')
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean),
+  )
+  const legacy = process.env.BOT_USERNAME?.trim().toLowerCase()
+  if (legacy) names.add(legacy)
+  return [...names].map((name) => ({
+    name,
+    password: process.env[`BOT_PASSWORD_${envKey(name)}`] || (name === legacy ? process.env.BOT_PASSWORD : undefined),
+    persona: process.env[`BOT_PERSONA_${envKey(name)}`] || PERSONAS[name] || defaultPersona(name),
+  }))
+}
+
+// Bot sessions, reused while this function instance stays warm.
+const sessions = new Map()
+
+async function botSession(bot, { fresh = false } = {}) {
+  const hit = sessions.get(bot.name)
+  if (!fresh && hit && hit.expiresAt - 60 > Date.now() / 1000) return hit
+  if (!bot.password) throw new HttpError(500, `Set BOT_PASSWORD_${envKey(bot.name)} in Vercel`)
+  const { data, error } = await client().auth.signInWithPassword({ email: usernameToEmail(bot.name), password: bot.password })
+  if (error) throw new HttpError(500, `Login failed for "${bot.name}": ${error.message}`)
   const sb = client(data.session.access_token)
   const { data: hook } = await sb.from('agent_webhooks').select('url, secret').maybeSingle()
-  cached = {
-    sb,
-    userId: data.user.id,
-    username: username.trim().toLowerCase(),
-    expiresAt: data.session.expires_at,
-    hook,
-  }
-  return cached
+  const session = { ...bot, sb, userId: data.user.id, expiresAt: data.session.expires_at, hook }
+  sessions.set(bot.name, session)
+  return session
 }
 
 function secretMatches(header, secret) {
@@ -58,57 +76,72 @@ function secretMatches(header, secret) {
   return a.length === b.length && timingSafeEqual(a, b)
 }
 
+// Which bot is this delivery for? Checked against each bot's webhook secret.
+async function botFor(header) {
+  const bots = configuredBots()
+  for (const fresh of [false, true]) {
+    const all = await Promise.all(bots.map((b) => botSession(b, { fresh })))
+    const match = all.find((s) => secretMatches(header, s.hook?.secret))
+    if (match) return match
+  }
+  return null
+}
+
 export default async function handler(req, res) {
   try {
     if (req.method === 'GET') return res.status(200).json(await setup())
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
+    if (!configuredBots().length) return res.status(500).json({ error: 'Set BOTS in Vercel, e.g. adam,ali' })
 
-    let bot = await botSession()
-    if (!secretMatches(req.headers.authorization, bot.hook?.secret)) {
-      // The secret may have changed since this instance cached it.
-      cached = null
-      bot = await botSession()
-      if (!secretMatches(req.headers.authorization, bot.hook?.secret)) return res.status(401).json({ error: 'Bad secret' })
-    }
+    const bot = await botFor(req.headers.authorization)
+    if (!bot) return res.status(401).json({ error: 'Bad secret' })
 
     const message = req.body?.message
     if (req.body?.type !== 'message.created' || !message?.id) return res.status(400).json({ error: 'Unexpected payload' })
 
     // Acknowledge immediately (Supabase waits at most 5 s), then do the work.
-    waitUntil(respond(bot, message).catch((err) => console.error('bot reply failed', err)))
-    return res.status(202).json({ ok: true })
+    waitUntil(respond(bot, message).catch((err) => console.error(`${bot.name} reply failed`, err)))
+    return res.status(202).json({ ok: true, bot: bot.name })
   } catch (err) {
     console.error(err)
     return res.status(err.status || 500).json({ error: err.message })
   }
 }
 
-// Points Adam's webhook at this deployment's production URL.
+// Points every bot's webhook at this deployment's production URL.
 async function setup() {
-  const status = {
-    bot: process.env.BOT_USERNAME || null,
-    model: MODEL,
-    anthropic_key: Boolean(process.env.ANTHROPIC_API_KEY),
-  }
-  const bot = await botSession()
   const host = process.env.VERCEL_PROJECT_PRODUCTION_URL
-  if (!host) return { ...status, webhook: bot.hook?.url ?? null, note: 'Not a Vercel production deployment; webhook left unchanged' }
-  const url = `https://${host}/api/bot`
-  if (bot.hook?.url !== url) {
-    const { error } = await bot.sb
-      .from('agent_webhooks')
-      .upsert({ user_id: bot.userId, url }, { onConflict: 'user_id' })
-    if (error) throw new HttpError(500, `Could not register webhook: ${error.message}`)
-    cached = null
+  const url = host ? `https://${host}/api/bot` : null
+  const bots = await Promise.all(
+    configuredBots().map(async (b) => {
+      try {
+        const s = await botSession(b)
+        if (url && s.hook?.url !== url) {
+          const { error } = await s.sb.from('agent_webhooks').upsert({ user_id: s.userId, url }, { onConflict: 'user_id' })
+          if (error) throw new Error(`Could not register webhook: ${error.message}`)
+          await botSession(b, { fresh: true })
+        }
+        return { name: b.name, webhook: url ?? s.hook?.url ?? null, ok: true }
+      } catch (err) {
+        return { name: b.name, ok: false, error: err.message }
+      }
+    }),
+  )
+  const anthropicKey = Boolean(process.env.ANTHROPIC_API_KEY)
+  return {
+    model: MODEL,
+    anthropic_key: anthropicKey,
+    bots,
+    ready: anthropicKey && bots.length > 0 && bots.every((b) => b.ok),
+    ...(url ? {} : { note: 'Not a Vercel production deployment; webhooks left unchanged' }),
   }
-  return { ...status, webhook: url, ready: status.anthropic_key }
 }
 
 async function respond(bot, incoming) {
   const { sb, userId } = bot
   const isDirect = Boolean(incoming.recipient_id)
 
-  // The conversation this message belongs to, as Adam can see it.
+  // The conversation this message belongs to, as this bot can see it.
   let query = sb.from('messages').select('*').order('id', { ascending: false }).limit(HISTORY)
   query = isDirect
     ? query.or(
@@ -122,14 +155,25 @@ async function respond(bot, incoming) {
   if (error) throw error
   const history = rows.reverse()
   const names = Object.fromEntries((profiles ?? []).map((p) => [p.id, p.username]))
-  const nameOf = (id) => (id === userId ? `${names[id] ?? bot.username} (you)` : names[id] ?? 'someone')
+  const botNames = new Set(configuredBots().map((b) => b.name))
+  const isBot = (id) => botNames.has(names[id])
+  const nameOf = (id) => (id === userId ? `${bot.name} (you)` : names[id] ?? 'someone')
 
   await markRead(sb, userId, history)
 
-  // A newer message in the same conversation will trigger its own reply with
-  // fuller context, so skip this one instead of answering twice.
-  const newestFromOthers = history.filter((m) => m.user_id !== userId).at(-1)
-  if (newestFromOthers && newestFromOthers.id > incoming.id) return
+  // Loop guards between AI members.
+  if (isBot(incoming.user_id)) {
+    if (isDirect) return
+    const mentioned = new RegExp(`\\b${bot.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(incoming.content ?? '')
+    if (!mentioned) return
+  }
+  const tail = history.slice(-MAX_BOT_STREAK)
+  if (tail.length === MAX_BOT_STREAK && tail.every((m) => isBot(m.user_id))) return
+
+  // A newer message from a person will trigger its own reply with fuller
+  // context, so skip this one instead of answering twice.
+  const newestFromPeople = history.filter((m) => m.user_id !== userId && !isBot(m.user_id)).at(-1)
+  if (newestFromPeople && newestFromPeople.id > incoming.id) return
 
   const transcript = history
     .map((m) => {
@@ -155,17 +199,19 @@ async function respond(bot, incoming) {
   })
 
   const members = Object.values(names).join(', ')
+  const otherBots = [...botNames].filter((n) => n !== bot.name)
   const system =
-    `${process.env.BOT_PERSONA || PERSONA}\n\n` +
-    `Your username in the chat is "${bot.username}". The members are: ${members}.\n` +
+    `${bot.persona}\n\n` +
+    `Your username in the chat is "${bot.name}". The members are: ${members}.\n` +
+    (otherBots.length ? `${otherBots.join(', ')} ${otherBots.length > 1 ? 'are' : 'is'} also an AI member like you; don't drag them into back-and-forth chatter.\n` : '') +
     `Each request shows the recent conversation, one message per line as "[#id] name: text". ` +
     `Reply with only the text of your next chat message: no "[#id]", no name prefix, no quotes.` +
     (isDirect
       ? ''
       : `\nIn the group chat, not every message needs you. If the newest message is clearly meant for ` +
-        `someone else, is a conversation you have nothing to add to, or just wraps up a topic, reply with ` +
-        `exactly ${NO_REPLY} and nothing else. Always answer when someone mentions you by name, asks you ` +
-        `something, or replies to one of your messages.`)
+        `someone else, someone else has already answered it, it is a conversation you have nothing to add to, ` +
+        `or it just wraps up a topic, reply with exactly ${NO_REPLY} and nothing else. Always answer when ` +
+        `someone mentions you by name, asks you something, or replies to one of your messages.`)
 
   const response = await anthropic.beta.messages.create({
     model: MODEL,
@@ -185,12 +231,12 @@ async function respond(bot, incoming) {
     .trim()
   if (!text || text === NO_REPLY) return
 
-  // Still the latest? If someone wrote again while Claude was thinking, let
-  // that message's own invocation answer instead.
-  let check = sb.from('messages').select('id').gt('id', incoming.id).neq('user_id', userId).limit(1)
+  // Still the latest? If a person wrote again while Claude was thinking, let
+  // that message's own delivery answer instead.
+  let check = sb.from('messages').select('id, user_id').gt('id', incoming.id).neq('user_id', userId).limit(20)
   check = isDirect ? check.eq('user_id', incoming.user_id).eq('recipient_id', userId) : check.is('recipient_id', null)
   const { data: newer } = await check
-  if (newer?.length) return
+  if (newer?.some((m) => !isBot(m.user_id))) return
 
   const { error: postError } = await sb
     .from('messages')

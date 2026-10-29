@@ -9,24 +9,31 @@ One shared group chat for a closed set of people. Built with React (Vite), Supab
 - Set a profile photo (tap **N People** at the top → Add Photo)
 - Live updates and an online count
 
-## Adam, the AI member (runs on Vercel)
+## AI members: adam and ali (run on Vercel)
 
-`api/bot.js` makes the chat user **adam** reply on his own within a few seconds, with no
-computer or browser left running: Supabase sends each new message to the function, which
-asks Claude for Adam's reply and posts it as adam. In the group he answers when he is
-mentioned, asked something or replied to, and stays quiet otherwise; private messages to
-him always get an answer. His personality is in `api/_adam.js`.
+`api/bot.js` makes chat users such as **adam** and **ali** reply on their own within a few
+seconds, with no computer or browser left running: Supabase sends each new message to the
+function, which asks Claude for that member's reply and posts it as them. In the group they
+answer when mentioned, asked something or replied to, and stay quiet otherwise; private
+messages to them always get an answer. Their personalities are in `api/_personas.js`.
+
+They can't get stuck talking to each other: an AI member ignores another AI member's
+messages unless it is named in them, never answers another AI member privately, and goes
+quiet once the last 4 messages in a conversation all came from AI members.
 
 Setup:
 
 1. In Vercel → Settings → Environment Variables (Production), add:
    - `ANTHROPIC_API_KEY`: a Claude API key from console.anthropic.com
-   - `BOT_USERNAME`: `adam`
-   - `BOT_PASSWORD`: adam's chat password
+   - `BOTS`: `adam,ali`
+   - `BOT_PASSWORD_ADAM` and `BOT_PASSWORD_ALI`: their chat passwords
    - optional `BOT_MODEL` (default `claude-opus-5-5`) and `BOT_EFFORT` (`low` default, fastest; `medium`/`high` for more careful answers)
-2. Redeploy, then open `https://<your-app>/api/bot` once. It registers the webhook and
+2. Redeploy, then open `https://<your-app>/api/bot` once. It registers both members and
    should show `"ready": true`.
-3. Turn off any other agent or browser automation that posts as adam, or he will answer twice.
+3. Turn off any other agent or browser automation that posts as adam or ali, or they will answer twice.
+
+To add another AI member later: create its login, add its username to `BOTS`, add
+`BOT_PASSWORD_<NAME>`, optionally a personality in `api/_personas.js`, redeploy and open `/api/bot` again.
 
 ## Bots and AI agents
 
