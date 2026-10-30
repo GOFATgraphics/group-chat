@@ -238,6 +238,15 @@ export function ProjectDashboard({ project, token, onBack }) {
   const [noteRows, setNoteRows] = useState(null)
   const [noteLoading, setNoteLoading] = useState(false)
   const [noteError, setNoteError] = useState('')
+  // Queue and Stages tabs also need full, paged lists, not the
+  // dashboard's capped first 200 rows: Stages counted 200 matched
+  // trades instead of the true 206, and a queue over 200 rows would
+  // be cut the same way. These load lazily on tab switch, like the
+  // Database, References, and Notes tabs, and fall back to the
+  // dashboard lists only while the paged load is in progress.
+  const [allQueue, setAllQueue] = useState(null)
+  const [queueLoading, setQueueLoading] = useState(false)
+  const [queueError, setQueueError] = useState('')
   // Raw message popup: { ref, text } or null. The table cell shows a
   // View button only, never the full message text, so raw_message
   // cannot take over the whole screen.
@@ -270,7 +279,7 @@ export function ProjectDashboard({ project, token, onBack }) {
   }, [token, project.id])
 
   useEffect(() => {
-    if (tab !== 'database' || dbTrades !== null) return undefined
+    if ((tab !== 'database' && tab !== 'stages') || dbTrades !== null) return undefined
     let cancelled = false
     setDbLoading(true)
     setDbError('')
@@ -329,13 +338,40 @@ export function ProjectDashboard({ project, token, onBack }) {
     }
   }, [tab, token, project.id, noteRows])
 
+  useEffect(() => {
+    if ((tab !== 'queue' && tab !== 'stages') || allQueue !== null) return undefined
+    let cancelled = false
+    setQueueLoading(true)
+    setQueueError('')
+    fetchAllCollection(token, project.id, 'queue')
+      .then((rows) => {
+        if (!cancelled) setAllQueue(rows)
+      })
+      .catch((err) => {
+        if (!cancelled) setQueueError(err.message || 'Could not load queue.')
+      })
+      .finally(() => {
+        if (!cancelled) setQueueLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [tab, token, project.id, allQueue])
+
   const queue = data?.queue ?? []
   const trades = data?.trades ?? []
   const syncLog = data?.sync_log ?? []
-  const linkedQueueIds = new Set(trades.map((t) => t.queue_id).filter((id) => id != null))
+  // Stages and Queue use the full paged lists when loaded, falling
+  // back to the dashboard's capped lists only while loading. With
+  // all 206 seeded trades at stage 'matched' and an empty queue,
+  // Stages now shows Matched 206, not the dashboard cap of 200.
+  const stageTrades = dbTrades ?? trades
+  const stageQueue = allQueue ?? queue
+  const linkedQueueIds = new Set(stageTrades.map((t) => t.queue_id).filter((id) => id != null))
   const stageCount = (key) =>
-    trades.filter((t) => t.stage === key).length +
-    queue.filter((q) => q.status === key && !linkedQueueIds.has(q.id)).length
+    stageTrades.filter((t) => t.stage === key).length +
+    stageQueue.filter((q) => q.status === key && !linkedQueueIds.has(q.id)).length
+  const queueRows = allQueue ?? queue
 
   // Database columns are dynamic, not hardcoded: they come from the
   // full_data keys of the first trade that has full_data, in the order
@@ -357,12 +393,14 @@ export function ProjectDashboard({ project, token, onBack }) {
   }
   const dbFullCount = dbRows.filter((t) => t.full_data && typeof t.full_data === 'object').length
 
-  // Database, References, Notes, and Sync log tabs are the sheet-like
-  // views: they use the wide page variant (no 900px cap), while Queue,
-  // Stages, the project list and the create form keep the centered
-  // page. The per-tab class on main is only for the per-page header
-  // colour in styles.css; it changes no layout on its own.
-  const wide = tab === 'database' || tab === 'references' || tab === 'notes' || tab === 'log'
+  // Every dashboard tab uses the wide page variant (no 900px cap),
+  // so Queue and Stages match Database, References, Notes, and Sync
+  // log instead of sitting narrow and centered while the sheet-like
+  // tabs stretch full width. The project list and create form are
+  // separate components and keep the centered page. The per-tab
+  // class on main is only for the per-page header colour in
+  // styles.css; it changes no layout on its own.
+  const wide = true
   return (
     <main className={`project-page${wide ? ' project-page-wide' : ''} project-page-${tab}`} aria-label={`Dashboard for ${project.name}`}>
       <header className="project-header">
@@ -395,11 +433,15 @@ export function ProjectDashboard({ project, token, onBack }) {
           {tab === 'queue' && (
             <section aria-label="Queue">
               <h2>Queue</h2>
-              {queue.length === 0 ? (
+              {queueLoading ? (
+                <p className="project-empty">Loading queue…</p>
+              ) : queueError ? (
+                <p className="project-empty">{queueError}</p>
+              ) : queueRows.length === 0 ? (
                 <p className="project-empty">No trades queued yet. The one-trader test will land here.</p>
               ) : (
                 <ul className="project-list">
-                  {queue.map((q) => (
+                  {queueRows.map((q) => (
                     <li key={q.id}>
                       <div className="project-row">
                         <span className="project-row-name">{show(q.subject || q.message_id)}</span>
@@ -417,6 +459,7 @@ export function ProjectDashboard({ project, token, onBack }) {
           {tab === 'stages' && (
             <section aria-label="Stages">
               <h2>Stages</h2>
+              {dbLoading ? <p className="muted">Loading all trades for exact counts…</p> : null}
               <div className="project-stage-grid">
                 {STAGES.map((s) => (
                   <article key={s.key} className="project-stage-card">
@@ -451,6 +494,7 @@ export function ProjectDashboard({ project, token, onBack }) {
                   <table className="project-table">
                     <thead>
                       <tr>
+                        <th className="sn-col">S/N</th>
                         {dbColumns.map((col) => (
                           <th key={col}>{col}</th>
                         ))}
@@ -459,13 +503,14 @@ export function ProjectDashboard({ project, token, onBack }) {
                     <tbody>
                       {dbRows.length === 0 ? (
                         <tr>
-                          <td colSpan={Math.max(dbColumns.length, 1)} className="project-empty">
+                          <td colSpan={Math.max(dbColumns.length, 1) + 1} className="project-empty">
                             No trades saved yet.
                           </td>
                         </tr>
                       ) : (
-                        dbRows.map((t) => (
+                        dbRows.map((t, i) => (
                           <tr key={t.id}>
+                            <td className="sn-col">{i + 1}</td>
                             {dbColumns.map((col) =>
                               col === 'raw_message' && firstFull ? (
                                 <td key={col} className="raw-message-cell">
@@ -513,6 +558,7 @@ export function ProjectDashboard({ project, token, onBack }) {
                   <table className="project-table">
                     <thead>
                       <tr>
+                        <th className="sn-col">S/N</th>
                         {REFERENCE_COLUMNS.map(([h]) => (
                           <th key={h}>{h}</th>
                         ))}
@@ -521,13 +567,14 @@ export function ProjectDashboard({ project, token, onBack }) {
                     <tbody>
                       {(refRows ?? []).length === 0 ? (
                         <tr>
-                          <td colSpan={REFERENCE_COLUMNS.length} className="project-empty">
+                          <td colSpan={REFERENCE_COLUMNS.length + 1} className="project-empty">
                             No references saved yet.
                           </td>
                         </tr>
                       ) : (
-                        (refRows ?? []).map((r) => (
+                        (refRows ?? []).map((r, i) => (
                           <tr key={r.id}>
+                            <td className="sn-col">{i + 1}</td>
                             {REFERENCE_COLUMNS.map(([h, field]) => (
                               <td key={h}>{field === 'updated_at' ? when(r[field]) : show(r[field])}</td>
                             ))}
@@ -557,6 +604,7 @@ export function ProjectDashboard({ project, token, onBack }) {
                   <table className="project-table">
                     <thead>
                       <tr>
+                        <th className="sn-col">S/N</th>
                         {NOTE_COLUMNS.map(([h]) => (
                           <th key={h}>{h}</th>
                         ))}
@@ -565,13 +613,14 @@ export function ProjectDashboard({ project, token, onBack }) {
                     <tbody>
                       {(noteRows ?? []).length === 0 ? (
                         <tr>
-                          <td colSpan={NOTE_COLUMNS.length} className="project-empty">
+                          <td colSpan={NOTE_COLUMNS.length + 1} className="project-empty">
                             No notes saved yet.
                           </td>
                         </tr>
                       ) : (
-                        (noteRows ?? []).map((n) => (
+                        (noteRows ?? []).map((n, i) => (
                           <tr key={n.id}>
+                            <td className="sn-col">{i + 1}</td>
                             {NOTE_COLUMNS.map(([h, field]) => (
                               <td key={h}>{field === 'created_at' ? when(n[field]) : show(n[field])}</td>
                             ))}

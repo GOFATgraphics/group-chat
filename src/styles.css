@@ -2514,21 +2514,27 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
 .project-page-log .project-tab.active { background: #92400e; border-color: #92400e; }
 
 /* ---- Database view fixes: sheet order, raw message popup, sticky header, soft rows ---- */
-/* Sticky header for wide sheet-like pages only (Database, References,
-   Notes, Sync log). The wide page becomes a flex column exactly one
+/* Sticky header for wide dashboard pages (all six tabs, including
+   Queue and Stages). The wide page becomes a flex column exactly one
    viewport tall: project header and tabs never scroll, the section
    heading and note stay above the table, and only the table scrolls,
    vertically and horizontally, inside its wrap. The table header row
    is sticky at the top of that scroll area, like a frozen header in
    the sheet, with its per-page colour as the opaque background. The
-   centered Queue/Stages/project list pages do not use the wide class
-   and keep their original whole-page scrolling. Chat rules are
+   Queue and Stages now use the same wide class as the sheet-like
+   tabs, so all six dashboard tabs share one layout; only the
+   project list and create form keep the centered page. Chat rules are
    untouched: no .shell, .chat, .messages, or .composer rule is changed. */
 .project-page-wide { display: flex; flex-direction: column; overflow: hidden; }
 .project-page-wide .project-header, .project-page-wide .project-tabs { flex-shrink: 0; }
 .project-page-wide > section { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
 .project-page-wide > section > h2, .project-page-wide > section > p.muted { flex-shrink: 0; }
 .project-page-wide > section > ul.project-list { overflow-y: auto; flex: 1; min-height: 0; }
+/* Stages cards spread full width (the 2-column grid already fills
+   its container) and scroll inside the wide page like the Queue
+   list, instead of clipping on narrow screens where the cards
+   stack to one column. */
+.project-page-wide .project-stage-grid { overflow-y: auto; flex: 1; min-height: 0; }
 .project-page-wide .project-table-wrap { overflow: auto; flex: 1; min-height: 0; }
 .project-page-wide .project-table thead th { position: sticky; top: 0; z-index: 2; }
 /* Soft alternating row colours, like the sheet: a very pale mint tint
@@ -2548,3 +2554,19 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
 .raw-message-dialog-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 16px; border-bottom: 0.5px solid var(--separator); flex-shrink: 0; }
 .raw-message-close { border: 0.5px solid var(--separator); border-radius: 999px; background: var(--fill); color: var(--text); padding: 6px 12px; font-size: 14px; flex-shrink: 0; }
 .raw-message-dialog-body { padding: 16px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.5; }
+
+/* ---- Serial number column, sheet-like tables only ---- */
+/* S/N is the first column of the Database, References, and Notes
+   tables, like the sheet's left row-number column, numbered 1, 2, 3
+   in displayed (paged) order. It is sticky on the left, so it stays
+   visible while the other columns scroll sideways: body cells get
+   the row's own soft alternating background (opaque, so scrolling
+   cells do not show through), the header cell keeps the per-page
+   header colour and sits above both the sticky header row and the
+   sticky body cells at the top-left corner. The Sync log is a list,
+   not a table, so it has no S/N column. Chat rules are untouched. */
+.project-page-wide .project-table th.sn-col, .project-page-wide .project-table td.sn-col { position: sticky; left: 0; width: 1%; min-width: 48px; text-align: center; white-space: nowrap; border-right: 0.5px solid var(--separator); }
+.project-page-wide .project-table td.sn-col { z-index: 1; }
+.project-page-wide .project-table tbody tr:nth-child(even) td.sn-col { background: color-mix(in srgb, #0f766e 6%, var(--bg)); }
+.project-page-wide .project-table tbody tr:nth-child(odd) td.sn-col { background: var(--bg); }
+.project-page-wide .project-table thead th.sn-col { z-index: 3; }
