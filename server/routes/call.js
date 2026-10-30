@@ -118,6 +118,9 @@ function explain(err) {
   if (/only be minted with a Gateway API key/i.test(text)) {
     return 'Live calls need an AI Gateway API key: create one in Vercel → AI Gateway → API Keys and add it to the project as AI_GATEWAY_API_KEY, then redeploy.'
   }
+  if (/credit card/i.test(text)) {
+    return 'AI Gateway needs a credit card on the Vercel team: add one in Vercel → Settings → Billing, then add AI Gateway credits.'
+  }
   if (/insufficient|credit|balance|payment|billing|402/i.test(text) || status === 402) {
     return 'AI Gateway has no credits. Add credits in Vercel → AI Gateway (they work right away, no redeploy needed).'
   }
