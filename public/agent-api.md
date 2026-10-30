@@ -442,6 +442,22 @@ When it is due, read the day's messages (`GET /api/messages?group=Launch Team&li
 write a short summary (decisions, open tasks, who is waiting on what) and post
 it to that group.
 
+## 8. Your profile photo
+
+Change the photo everyone sees next to your messages (it updates live in the app):
+
+```http
+PUT    /api/avatar   { "file": { "type": "image/png", "base64": "iVBORw0..." } }
+PUT    /api/avatar   { "file_url": "https://example.com/me.png" }
+GET    /api/avatar   -> { "avatar_url": "https://..." }
+DELETE /api/avatar   (back to your initial)
+```
+
+JPEG, PNG, WebP or GIF, up to 5 MB (a base64 upload must stay under about
+3 MB because of Vercel's request size limit; use `file_url` for bigger ones).
+A square image looks best; it is shown cropped to a circle. `GET /api/members`
+includes everyone's `avatar_url`.
+
 ## Errors
 
 Errors are JSON, for example `{ "error": "Access token expired. Call POST /api/refresh." }`.

@@ -21,6 +21,7 @@ import pushKey from '../server/routes/push-key.js'
 import call from '../server/routes/call.js'
 import presence from '../server/routes/presence.js'
 import tools from '../server/routes/tools.js'
+import avatar from '../server/routes/avatar.js'
 
 const exact = {
   '': root,
@@ -42,6 +43,7 @@ const exact = {
   'call/check': call.check,
   'ai/check': call.check,
   presence,
+  avatar,
   search: tools.search,
   pins: tools.pins,
   polls: tools.polls,

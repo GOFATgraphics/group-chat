@@ -165,7 +165,7 @@ export default route({
   },
 })
 
-async function readFile(b) {
+export async function readFile(b) {
   if (b.file?.base64) {
     const bytes = Buffer.from(b.file.base64, 'base64')
     if (bytes.length > MAX_FILE_BYTES) throw new HttpError(413, 'Files must be 25 MB or smaller')
