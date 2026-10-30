@@ -996,7 +996,7 @@ export default function Chat({ session }) {
   useEffect(() => {
     const onKey = (e) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return
-      if (document.querySelector('.lightbox, .media-viewer, .call-screen')) return
+      if (document.querySelector('.lightbox, .viewer, .call-screen')) return
       if (showMembers) setShowMembers(false)
       else if (showSettings) setShowSettings(false)
       else if (!wide && screen === 'chat' && !document.activeElement?.closest?.('.composer')) goBack()
@@ -2410,7 +2410,19 @@ export default function Chat({ session }) {
         </div>
       )}
 
-      {lightbox && <MediaViewer item={lightbox} onClose={() => setLightbox(null)} />}
+      {lightbox && (
+        <MediaViewer
+          item={{
+            ...lightbox,
+            sender: lightbox.msg ? (lightbox.msg.user_id === myId ? 'You' : profiles[lightbox.msg.user_id]) : undefined,
+            date: lightbox.msg
+              ? new Date(lightbox.msg.created_at).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+              : undefined,
+          }}
+          onClose={() => setLightbox(null)}
+          onReply={lightbox.msg && !readOnly ? () => startReply(lightbox.msg) : undefined}
+        />
+      )}
       {callWith && (
         <Suspense fallback={<div className="call-screen" />}>
           <CallScreen
@@ -2651,7 +2663,7 @@ function Message({
                     src={url}
                     alt={msg.attachment_name}
                     onLoad={onMediaLoad}
-                    onClick={() => !msg._status && onOpenImage({ url, name: msg.attachment_name ?? 'photo.jpg', type: 'image' })}
+                    onClick={() => !msg._status && onOpenImage({ url, name: msg.attachment_name ?? 'photo.jpg', type: 'image', msg })}
                   />
                   {msg._status === 'sending' && <UploadRing progress={uploadProgress} />}
                 </span>
@@ -2706,7 +2718,7 @@ function Message({
               referrerPolicy="no-referrer"
               onLoad={onMediaLoad}
               onError={(e) => (e.currentTarget.style.display = 'none')}
-              onClick={() => onOpenImage({ url: src, name: decodeURIComponent(src.split('?')[0].split('/').pop() || 'image'), type: 'image' })}
+              onClick={() => onOpenImage({ url: src, name: decodeURIComponent(src.split('?')[0].split('/').pop() || 'image'), type: 'image', msg })}
             />
           ))}
 
