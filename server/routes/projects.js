@@ -6,7 +6,7 @@
 //   DELETE /api/projects/<id>                   owner only (trade rows cascade)
 //   GET    /api/projects/<id>/queue|trades|references|notes|sync-log
 //   POST   /api/projects/<id>/queue|trades|references|notes|sync-log
-//   PATCH  /api/projects/<id>/queue|trades/<row id>
+//   PATCH  /api/projects/<id>/queue|trades|notes/<row id>
 //   DELETE /api/projects/<id>/queue|trades|references|notes|sync-log/<row id>
 //
 // Auth and access follow the existing pattern in server/lib.js exactly:
@@ -47,6 +47,11 @@ const PATCHABLE = {
   // JSON object; see the validation in item.PATCH below. Reads need no
   // change: the dashboard and subcollection GETs already select('*').
   trades: ['queue_id', 'contract_ref', 'buyer', 'seller', 'commodity', 'quantity', 'disport', 'lifecycle_stage', 'sub_stage', 'action_owner', 'deadline', 'fingerprint', 'stage', 'full_data'],
+  // Notes editing, added 2026-10-30: a note row can be corrected in place
+  // (subject, summary, priority, action_required, message_id, trade_id),
+  // so a bad summary does not need delete-and-repost. Ids, project_id
+  // and timestamps are still never taken from the request body.
+  notes: ['trade_id', 'subject', 'summary', 'priority', 'action_required', 'message_id'],
 }
 
 function projectId(req) {
@@ -217,7 +222,7 @@ const item = route({
     const { sb } = await auth(req)
     const id = projectId(req)
     const kind = collection(req)
-    if (!PATCHABLE[kind]) throw new HttpError(405, `Only queue and trade rows can be updated this way`)
+    if (!PATCHABLE[kind]) throw new HttpError(405, `Only queue, trade, and note rows can be updated this way`)
     const rid = rowId(req)
     await visibleProject(sb, id)
     const b = body(req)
@@ -233,10 +238,11 @@ const item = route({
     if (row.status !== undefined && !QUEUE_STATUSES.includes(row.status)) throw new HttpError(400, `status must be one of: ${QUEUE_STATUSES.join(', ')}`)
     if (row.stage !== undefined && !TRADE_STAGES.includes(row.stage)) throw new HttpError(400, `stage must be one of: ${TRADE_STAGES.join(', ')}`)
     if (row.queue_id !== undefined) await childInProject(sb, 'trade_queue', row.queue_id, id)
+    if (row.trade_id !== undefined && kind === 'notes') await childInProject(sb, 'trades', row.trade_id, id)
     if (Object.keys(row).length === 0) throw new HttpError(400, 'Nothing to update')
     const saved = check(await sb.from(TABLES[kind]).update(row).eq('id', rid).eq('project_id', id).select().maybeSingle())
     if (!saved) throw new HttpError(404, 'Row not found in this project or not visible to you')
-    return { [kind === 'queue' ? 'queue_item' : 'trade']: saved }
+    return { [{ queue: 'queue_item', trades: 'trade', notes: 'note' }[kind]]: saved }
   },
 
   async DELETE(req) {
