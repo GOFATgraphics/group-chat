@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { AIBadge } from './icons.jsx'
 
 // Sheet for making a named group (name + people) or adding people to one.
 // mode "create" asks for a name; mode "add" only picks people.
@@ -64,7 +65,7 @@ export default function GroupSheet({ mode = 'create', people, Avatar, onDone, on
                   <Avatar name={p.name} src={p.avatar} />
                   <span className="member-name">
                     {p.name}
-                    {p.ai && <span className="ai-badge">AI</span>}
+                    {p.ai && <AIBadge />}
                   </span>
                   <input type="checkbox" className="pick-check" checked={picked.has(p.id)} onChange={() => toggle(p.id)} />
                 </label>

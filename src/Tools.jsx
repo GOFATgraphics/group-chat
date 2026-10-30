@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from './supabase.js'
+import { PinIcon, NoteIcon, DecisionIcon, AlarmIcon, ClockIcon, XIcon, IconTile } from './icons.jsx'
 
 // Team tools (the AI members' wishlist): pinned messages, polls, shared
 // notes / tasks / decisions, scheduled messages and reminders, and search.
@@ -35,7 +36,7 @@ export function PinStrip({ pins, profiles, onJump, preview }) {
       }}
       aria-label={`Pinned message ${i + 1} of ${pins.length}. Tap to go to it.`}
     >
-      <span className="pin-icon" aria-hidden="true">📌</span>
+      <IconTile icon={PinIcon} color="red" size={28} />
       <span className="pin-text">
         <b>{pins.length > 1 ? `Pinned ${i + 1} of ${pins.length}` : 'Pinned'}</b>
         <span>
@@ -166,7 +167,7 @@ export function PollComposer({ onSend, onCancel }) {
     <form className="poll-compose" onSubmit={send}>
       <div className="poll-compose-choices">
         <button type="button" className="poll-compose-close" onClick={onCancel} aria-label="Cancel poll">
-          ✕
+          <XIcon size={12} />
         </button>
         {choices.map((c, i) => (
           <input
@@ -275,7 +276,7 @@ export function NotesSheet({ scope, title, readOnly, profiles, onClose, onError 
                 {tab === 'task' ? (
                   <input type="checkbox" className="pick-check" checked={item.done} disabled={readOnly} onChange={() => toggle(item)} aria-label="Done" />
                 ) : (
-                  <span className="item-icon" aria-hidden="true">{tab === 'decision' ? '✅' : '📝'}</span>
+                  <IconTile icon={tab === 'decision' ? DecisionIcon : NoteIcon} color={tab === 'decision' ? 'green' : 'yellow'} size={26} />
                 )}
                 <span className="item-body">
                   <span className="item-text">{item.text}</span>
@@ -286,7 +287,7 @@ export function NotesSheet({ scope, title, readOnly, profiles, onClose, onError 
                 </span>
                 {!readOnly && (
                   <button className="item-delete" onClick={() => remove(item)} aria-label="Delete">
-                    ✕
+                    <XIcon size={13} />
                   </button>
                 )}
               </li>
@@ -364,7 +365,9 @@ export function ScheduleSheet({ target, onClose, onError }) {
         </div>
         <div className="segmented">
           <button type="button" className={kind === 'message' ? 'on' : ''} onClick={() => setKind('message')}>Message</button>
-          <button type="button" className={kind === 'reminder' ? 'on' : ''} onClick={() => setKind('reminder')}>⏰ Reminder</button>
+          <button type="button" className={kind === 'reminder' ? 'on' : ''} onClick={() => setKind('reminder')}>
+            <AlarmIcon size={16} /> Reminder
+          </button>
         </div>
         <textarea
           className="group-name-input tool-text"
@@ -395,7 +398,7 @@ export function ScheduleSheet({ target, onClose, onError }) {
             <ul className="member-list item-list">
               {list.map((s) => (
                 <li key={s.id}>
-                  <span className="item-icon" aria-hidden="true">{s.kind === 'reminder' ? '⏰' : '🕒'}</span>
+                  <IconTile icon={s.kind === 'reminder' ? AlarmIcon : ClockIcon} color={s.kind === 'reminder' ? 'red' : 'orange'} size={26} />
                   <span className="item-body">
                     <span className="item-text">{s.content}</span>
                     <span className="item-meta">
@@ -404,7 +407,7 @@ export function ScheduleSheet({ target, onClose, onError }) {
                     </span>
                   </span>
                   <button type="button" className="item-delete" onClick={() => cancel(s.id)} aria-label="Cancel">
-                    ✕
+                    <XIcon size={13} />
                   </button>
                 </li>
               ))}

@@ -3,6 +3,19 @@ import { supabase, BUCKET, AVATAR_BUCKET, avatarUrl } from './supabase.js'
 import Splash from './Splash.jsx'
 import ChatList, { listPreview, listTime } from './ChatList.jsx'
 import GroupSheet from './Groups.jsx'
+import {
+  AIBadge,
+  IconTile,
+  SearchIcon as SearchGlyph,
+  NoteIcon,
+  ClockIcon,
+  PinIcon,
+  PollIcon,
+  AlarmIcon,
+  PeopleIcon,
+  XIcon,
+  messageKind,
+} from './icons.jsx'
 import { PinStrip, PollCard, PollComposer, NotesSheet, ScheduleSheet, useMessageSearch, Highlighted, itemScope } from './Tools.jsx'
 import ApiKeys from './ApiKeys.jsx'
 import { useTyping } from './typing.js'
@@ -512,7 +525,9 @@ export default function Chat({ session }) {
   }, [groups])
 
   const previewOf = (m) => {
-    if (m.call_duration != null) return '📞 Voice call'
+    if (m.call_duration != null) return 'Voice call'
+    if (m.content?.startsWith('📊 ')) return `Poll: ${m.content.slice(2).trim().replace(/^Poll:\s*/, '')}`
+    if (m.content?.startsWith('⏰ ')) return m.content.slice(2).trim()
     if (m.content?.trim()) {
       const text = m.content.trim()
       return text.length > 80 ? `${text.slice(0, 80)}…` : text
@@ -607,7 +622,7 @@ export default function Chat({ session }) {
     if (!m) return 'Original message not loaded'
     if (m.call_duration != null) return 'voice call'
     if (m.content?.trim()) {
-      const text = m.content.trim()
+      const text = m.content.trim().replace(/^📊\s*/, 'Poll: ').replace(/^Poll: Poll:/, 'Poll:').replace(/^⏰\s*/, '')
       return text.length > 60 ? `${text.slice(0, 60)}…` : text
     }
     if (m.attachment_path) {
@@ -1847,7 +1862,7 @@ export default function Chat({ session }) {
       view: { type: 'group' },
       title: 'Group Chat',
       avatar: '/logo-192.png',
-      emptyText: 'Say hi to everyone 👋',
+      emptyText: 'Say hi to everyone',
     },
     ...Object.values(groups)
       .filter((g) => g.members.includes(myId))
@@ -1856,7 +1871,7 @@ export default function Chat({ session }) {
         view: { type: 'group', groupId: g.id },
         title: g.name,
         faces: groupFaces(g),
-        emptyText: 'New group · say hi 👋',
+        emptyText: 'New group · say hi',
       })),
     ...memberIds
       .filter((id) => id !== myId)
@@ -1873,6 +1888,7 @@ export default function Chat({ session }) {
     .map((c) => ({
       ...c,
       preview: previewFor(c.key, c.key === 'group' || c.key.startsWith('group:')),
+      kind: messageKind(lastByKey[c.key]),
       time: listTime(lastByKey[c.key]?.created_at),
       unread: unread[c.key] ?? 0,
       typing: typingIn(c.key),
@@ -2001,7 +2017,7 @@ export default function Chat({ session }) {
           <div className="empty">
             <img className="empty-logo" src="/logo.png" alt="" />
             {isGroup ? (
-              <>No messages yet. Say hi 👋</>
+              <>No messages yet. Say hi.</>
             ) : isOwnerView ? (
               <>No messages in this private chat between {ownerPairLabel}.</>
             ) : (
@@ -2114,7 +2130,7 @@ export default function Chat({ session }) {
             </span>
           </button>
           <button className="notice-close" onClick={() => setNotice(null)} aria-label="Dismiss notification">
-            ✕
+            <XIcon size={14} />
           </button>
         </div>
       )}
@@ -2208,7 +2224,7 @@ export default function Chat({ session }) {
               </span>
               <span className="info-name">
                 {isGroup ? groupTitle : isOwnerView ? ownerPairLabel : peerName}
-                {peerId && aiIds.has(peerId) && <span className="ai-badge">AI</span>}
+                {peerId && aiIds.has(peerId) && <AIBadge />}
               </span>
               <span className="info-sub">{headerSubtitle}</span>
               {peerId && aiIds.has(peerId) && (
@@ -2226,11 +2242,21 @@ export default function Chat({ session }) {
               )}
             </div>
             <div className="group-actions info-tools">
-              <button onClick={() => { setShowMembers(false); setToolSheet('search') }}>🔍  Search this chat</button>
-              <button onClick={() => { setShowMembers(false); setToolSheet('notes') }}>📝  Notes, tasks & decisions</button>
-              {!readOnly && <button onClick={() => { setShowMembers(false); setToolSheet('schedule') }}>🕒  Scheduled messages</button>}
+              <button onClick={() => { setShowMembers(false); setToolSheet('search') }}>
+                <IconTile icon={SearchGlyph} color="blue" /> <span>Search this chat</span>
+              </button>
+              <button onClick={() => { setShowMembers(false); setToolSheet('notes') }}>
+                <IconTile icon={NoteIcon} color="yellow" /> <span>Notes, tasks & decisions</span>
+              </button>
+              {!readOnly && (
+                <button onClick={() => { setShowMembers(false); setToolSheet('schedule') }}>
+                  <IconTile icon={ClockIcon} color="orange" /> <span>Scheduled messages</span>
+                </button>
+              )}
               {pins.length > 0 && (
-                <button onClick={() => { setShowMembers(false); jumpTo(pins[0].id) }}>📌  Pinned ({pins.length})</button>
+                <button onClick={() => { setShowMembers(false); jumpTo(pins[0].id) }}>
+                  <IconTile icon={PinIcon} color="red" /> <span>Pinned</span> <span className="tool-count">{pins.length}</span>
+                </button>
               )}
             </div>
             {(isGroup || isOwnerView) && (
@@ -2256,7 +2282,7 @@ export default function Chat({ session }) {
                         </span>
                         <span className="member-name">
                           {profiles[id]}
-                          {aiIds.has(id) && <span className="ai-badge">AI</span>}
+                          {aiIds.has(id) && <AIBadge />}
                           {id === myId && <span className="muted"> (you)</span>}
                         </span>
                         {id !== myId && (
@@ -2553,6 +2579,10 @@ function Message({
   // An image link in the text (e.g. an AI's generated image) shows as a picture.
   const linkedImages = useMemo(() => (msg.call_duration != null ? [] : imageLinksIn(msg.content)), [msg.content, msg.call_duration])
   const shownText = useMemo(() => withoutMarkdownImages(msg.content), [msg.content])
+  // A scheduled reminder ("⏰ Reminder: …") or a poll still loading ("📊 …")
+  // shows an icon header instead of the emoji.
+  const special = shownText?.startsWith('⏰ Reminder:') ? 'reminder' : shownText?.startsWith('📊 ') ? 'poll' : null
+  const specialText = special === 'reminder' ? shownText.replace(/^⏰ Reminder:\s*/, '') : special === 'poll' ? shownText.slice(2).trim() : null
   // Just one to three emoji, nothing else: shown big without a bubble.
   const jumbo = useMemo(() => (msg.attachment_path || msg.call_duration != null ? 0 : emojiOnlyCount(shownText)), [shownText, msg.attachment_path, msg.call_duration])
 
@@ -2703,11 +2733,25 @@ function Message({
               {shownText.trim()}
             </div>
           ) : (
-            <div className={`bubble ${tail(!linkedImages.length)}`} title={new Date(msg.created_at).toLocaleString()}>
-              {renderMessageContent(shownText, highlightMentions ? profiles : null)}
+            <div className={`bubble ${tail(!linkedImages.length)} ${special ? `special ${special}` : ''}`} title={new Date(msg.created_at).toLocaleString()}>
+              {special === 'reminder' && (
+                <span className="special-head">
+                  <AlarmIcon size={15} /> Reminder
+                </span>
+              )}
+              {special === 'poll' && (
+                <span className="special-head">
+                  <PollIcon size={15} /> Poll
+                </span>
+              )}
+              {renderMessageContent(special ? specialText : shownText, highlightMentions ? profiles : null)}
             </div>
           ))}
-          {pinned && <span className="pin-mark" title="Pinned" aria-label="Pinned">📌</span>}
+          {pinned && (
+            <span className="pin-mark" title="Pinned" aria-label="Pinned">
+              <PinIcon size={13} />
+            </span>
+          )}
           {linkedImages.map((src) => (
             <img
               key={src}
@@ -3220,7 +3264,7 @@ function Composer({ onSend, replying = false, focusKey, onPoll, onSchedule, plac
                     setPollMode(true)
                   }}
                 >
-                  <span className="attach-emoji" aria-hidden="true">📊</span>
+                  <PollIcon size={24} />
                   <span>Poll</span>
                 </button>
               )}
@@ -3232,7 +3276,7 @@ function Composer({ onSend, replying = false, focusKey, onPoll, onSchedule, plac
                     onSchedule()
                   }}
                 >
-                  <span className="attach-emoji" aria-hidden="true">🕒</span>
+                  <ClockIcon size={24} />
                   <span>Schedule a message or reminder</span>
                 </button>
               )}
@@ -3264,7 +3308,7 @@ function Composer({ onSend, replying = false, focusKey, onPoll, onSchedule, plac
                 onMouseEnter={() => setMention((prev) => (prev ? { ...prev, active: i } : prev))}
               >
                 {m.all ? (
-                  <span className="mention-all-icon" aria-hidden="true">👥</span>
+                  <span className="mention-all-icon" aria-hidden="true"><PeopleIcon size={24} /></span>
                 ) : (
                   <Avatar name={m.username} src={m.avatar} />
                 )}
@@ -3293,7 +3337,7 @@ function Composer({ onSend, replying = false, focusKey, onPoll, onSchedule, plac
               </div>
             )}
             <button type="button" className="pending-remove" onClick={() => setFile(null)} aria-label="Remove">
-              ✕
+              <XIcon size={12} />
             </button>
           </div>
         )}

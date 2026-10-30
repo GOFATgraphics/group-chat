@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useMessageSearch, Highlighted } from './Tools.jsx'
+import { AIBadge, KIND_ICON, XIcon, SearchIcon as SearchGlyph } from './icons.jsx'
 
 // The home screen: every conversation (the group chat, a private chat with
 // each member, and for the owner the read-only view of other members' private
@@ -40,7 +41,7 @@ export default function ChatList({ items, me, myAvatar, activeKey, onOpen, onSet
         />
         {query && (
           <button className="list-search-clear" onClick={() => setQuery('')} aria-label="Clear search">
-            ✕
+            <XIcon size={11} />
           </button>
         )}
       </label>
@@ -119,13 +120,25 @@ function Row({ c, active, onOpen, Avatar }) {
           <span className="convo-line">
             <span className="convo-title">
               {c.title}
-              {c.ai && <span className="ai-badge">AI</span>}
+              {c.ai && <AIBadge />}
             </span>
             <span className="convo-time">{c.time}</span>
             <ChevronRight />
           </span>
           <span className={`convo-preview ${c.typing ? 'typing' : ''}`}>
-            {c.typing ? 'typing…' : c.preview || <span className="muted">{c.emptyText}</span>}
+            {c.typing ? (
+              'typing…'
+            ) : c.preview ? (
+              <>
+                {c.kind && KIND_ICON[c.kind] && (() => {
+                  const K = KIND_ICON[c.kind]
+                  return <K size={15} className="preview-icon" />
+                })()}
+                {c.preview}
+              </>
+            ) : (
+              <span className="muted">{c.emptyText}</span>
+            )}
           </span>
         </span>
         {unread && <span className="convo-badge">{c.unread > 99 ? '99+' : c.unread}</span>}
@@ -167,18 +180,23 @@ export function listTime(iso) {
 // One line describing a message in the list: text, or what was sent.
 export function listPreview(m) {
   if (!m) return ''
-  if (m.call_duration != null) return '📞 Voice call'
-  const text = m.content?.trim()
+  if (m.call_duration != null) return 'Voice call'
+  let text = m.content?.trim() ?? ''
+  if (text.startsWith('📊 ')) {
+    text = text.slice(2).trim()
+    return text.startsWith('Poll:') ? text : `Poll: ${text}`
+  }
+  if (text.startsWith('⏰ ')) return text.slice(2).trim()
   if (m.attachment_path) {
     const type = m.attachment_type ?? ''
     const what = type.startsWith('image/')
-      ? '📷 Photo'
+      ? 'Photo'
       : type.startsWith('video/')
-        ? '🎬 Video'
+        ? 'Video'
         : type.startsWith('audio/')
-          ? '🎤 Voice note'
-          : `📎 ${m.attachment_name ?? 'File'}`
+          ? 'Voice note'
+          : m.attachment_name ?? 'File'
     return text ? `${what} · ${text}` : what
   }
-  return text ?? ''
+  return text
 }
