@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import { supabase, BUCKET, AVATAR_BUCKET, avatarUrl } from './supabase.js'
 import Splash from './Splash.jsx'
 import ChatList, { listPreview, listTime } from './ChatList.jsx'
+import { ProjectsList, CreateProject, ProjectDashboard, loadProjects, saveProjects, createProjectRecord } from './Projects.jsx'
 import GroupSheet from './Groups.jsx'
 import {
   AIBadge,
@@ -103,6 +104,20 @@ export default function Chat({ session }) {
   const listVisibleRef = useRef(true)
   listVisibleRef.current = wide || screen === 'list'
   const [showSettings, setShowSettings] = useState(false)
+  // Project pages (local only, localStorage): null = chats, otherwise
+  // { page: 'list' } | { page: 'create' } | { page: 'dashboard', project }.
+  // When set, the whole Project page replaces the chat shell, it is never
+  // rendered inside a chat pane or as a modal.
+  const [projectScreen, setProjectScreen] = useState(null)
+  const [projects, setProjects] = useState(() => loadProjects())
+  const openProjects = () => setProjectScreen({ page: 'list' })
+  const createProjectAndOpen = (name) => {
+    const project = createProjectRecord(name)
+    const next = [...projects, project]
+    setProjects(next)
+    saveProjects(next)
+    setProjectScreen({ page: 'dashboard', project })
+  }
   // Conversation key -> its newest message, for the chat list.
   const [lastByKey, setLastByKey] = useState({})
   // Named groups you can see: id -> { id, name, created_by, members: [user ids] }
@@ -2114,10 +2129,29 @@ export default function Chat({ session }) {
     .filter(([key]) => key !== viewKey(view))
     .reduce((sum, [, n]) => sum + n, 0)
 
+  // Whole Project pages take over the screen when open.
+  if (projectScreen?.page === 'list') {
+    return (
+      <ProjectsList
+        projects={projects}
+        onCreate={() => setProjectScreen({ page: 'create' })}
+        onOpen={(project) => setProjectScreen({ page: 'dashboard', project })}
+        onBack={() => setProjectScreen(null)}
+      />
+    )
+  }
+  if (projectScreen?.page === 'create') {
+    return <CreateProject onDone={createProjectAndOpen} onBack={() => setProjectScreen({ page: 'list' })} />
+  }
+  if (projectScreen?.page === 'dashboard') {
+    return <ProjectDashboard project={projectScreen.project} onBack={() => setProjectScreen({ page: 'list' })} />
+  }
+
   return (
     <div ref={shellRef} className={`shell ${wide ? 'wide' : `on-${screen}`}`}>
       <div className="pane-list-wrap" inert={!wide && screen === 'chat'}>
         <ChatList
+          onOpenProjects={openProjects}
           items={listItems}
           me={me.username}
           myAvatar={avatars[myId]}

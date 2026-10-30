@@ -2435,3 +2435,28 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
 }
 .attach-pop button:active { background: color-mix(in srgb, var(--text) 8%, transparent); }
 .attach-pop button svg { flex-shrink: 0; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.12)); }
+
+/* ---- Project pages (local build, phase 1) ---- */
+.project-page { max-width: 900px; margin: 0 auto; padding: 20px 16px calc(32px + env(safe-area-inset-bottom)); background: var(--bg); color: var(--text); min-height: var(--app-height, 100dvh); }
+.project-header { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.project-header h1 { margin: 0; font-size: 28px; }
+.project-back { align-self: flex-start; border: 0; background: none; color: var(--blue); font-size: 16px; padding: 4px 0; }
+.project-label { display: block; font-weight: 600; margin: 16px 0 8px; }
+.project-input { width: 100%; box-sizing: border-box; padding: 12px; border: 0.5px solid var(--separator); border-radius: 10px; background: var(--fill); color: var(--text); font-size: 16px; }
+.project-input:focus { outline: 2px solid var(--blue); }
+.project-done-btn, .project-create-btn { margin-top: 16px; }
+.project-empty { color: var(--muted); padding: 16px 0; }
+.project-list { list-style: none; margin: 16px 0 0; padding: 0; }
+.project-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%; padding: 14px 0; border: 0; border-bottom: 0.5px solid var(--separator); background: none; color: var(--text); text-align: left; }
+.project-row-name { font-size: 17px; font-weight: 600; }
+.project-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 20px; }
+.project-tab { border: 0.5px solid var(--separator); border-radius: 999px; background: var(--fill); color: var(--text); padding: 8px 14px; font-size: 15px; }
+.project-tab.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+.project-stage-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 600px) { .project-stage-grid { grid-template-columns: 1fr; } }
+.project-stage-card { border: 0.5px solid var(--separator); border-radius: 12px; padding: 16px; background: var(--raised); }
+.project-stage-card h3 { margin: 4px 0; text-transform: capitalize; }
+.project-stage-count { font-size: 32px; font-weight: 700; }
+.project-table-wrap { overflow-x: auto; }
+.project-table { width: 100%; border-collapse: collapse; min-width: 640px; }
+.project-table th, .project-table td { text-align: left; padding: 10px 8px; border-bottom: 0.5px solid var(--separator); font-size: 14px; }

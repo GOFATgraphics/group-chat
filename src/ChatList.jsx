@@ -7,7 +7,7 @@ import { AIBadge, KIND_ICON, XIcon, SearchIcon as SearchGlyph } from './icons.js
 // chats), newest first, with the last message, its time, unread count, who's
 // online and who's typing. On wide screens it stays beside the open chat.
 
-export default function ChatList({ items, me, myAvatar, activeKey, onOpen, onSettings, onNewGroup, Avatar, profiles = {}, avatars = {}, chatNameOf, onOpenMessage }) {
+export default function ChatList({ items, me, myAvatar, activeKey, onOpen, onSettings, onNewGroup, Avatar, profiles = {}, avatars = {}, chatNameOf, onOpenMessage, onOpenProjects }) {
   const [query, setQuery] = useState('')
   // Typing two or more letters also searches every message you can read.
   const found = useMessageSearch(onOpenMessage ? query : '')
@@ -51,6 +51,24 @@ export default function ChatList({ items, me, myAvatar, activeKey, onOpen, onSet
             <Row key={c.key} c={c} active={c.key === activeKey} onOpen={onOpen} Avatar={Avatar} />
           ))}
         </ul>
+        {onOpenProjects && (
+          <>
+            <div className="list-section">Project</div>
+            <ul className="convo-list">
+              <li>
+                <button className="convo" onClick={onOpenProjects} aria-label="Open project">
+                  <span className="convo-body">
+                    <span className="convo-line">
+                      <span className="convo-title">project</span>
+                      <ChevronRight />
+                    </span>
+                    <span className="convo-preview muted">Create a project and open its dashboard</span>
+                  </span>
+                </button>
+              </li>
+            </ul>
+          </>
+        )}
         {owner.length > 0 && (
           <>
             <div className="list-section">Owner view · read only</div>
