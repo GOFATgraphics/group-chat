@@ -292,7 +292,8 @@ export function ProjectDashboard({ project, token, onBack }) {
   // shows a View button only, never the full text inline, so a long
   // note cannot stretch its column and push following columns far
   // away. raw_message already worked this way; addendum_notes,
-  // Notes, doc_instructions, and required_documents now work the
+  // Notes, doc_instructions, required_documents, and
+  // additional_information now work the
   // same way in Database, and in Notes the long Summary, Subject,
   // and Message ID columns work the same way. Other columns stay
   // inline, including addresses and shipping marks, which are short
@@ -300,7 +301,7 @@ export function ProjectDashboard({ project, token, onBack }) {
   // trade ID, and Created, which stay inline verbatim even when
   // Action required is TRUE or an email address, because that is
   // what the source Shadow Notes Log contained, seeded verbatim.
-  const LONG_TEXT_COLUMNS = ['addendum_notes', 'Notes', 'doc_instructions', 'required_documents', 'raw_message']
+  const LONG_TEXT_COLUMNS = ['addendum_notes', 'Notes', 'doc_instructions', 'required_documents', 'additional_information', 'raw_message']
   const NOTE_LONG_TEXT_FIELDS = ['message_id', 'subject', 'summary']
   const [rawMessage, setRawMessage] = useState(null)
 
@@ -444,6 +445,32 @@ export function ProjectDashboard({ project, token, onBack }) {
     return show(field ? t[field] : undefined)
   }
   const dbFullCount = dbRows.filter((t) => t.full_data && typeof t.full_data === 'object').length
+  // Empty-column hiding, Database view only, presentation only: no
+  // column is removed from the sheet-order list and no data changes.
+  // A column is empty only when every loaded trade has no value for
+  // it: null, undefined, an empty/whitespace string, a dash-only
+  // string, or an empty array. 0 and false are NOT empty, so a
+  // numeric zero keeps its column visible. The list is recomputed
+  // from the loaded trades on every render, never hardcoded, so a
+  // future trade that fills a column makes that column reappear
+  // automatically even while empty columns stay hidden. Stage and
+  // Sync are app columns, never hidden. The toggle is shown only
+  // once the full paged trade list has loaded, so the count is not
+  // taken from the dashboard's capped first 200 rows.
+  const [showEmptyColumns, setShowEmptyColumns] = useState(false)
+  const isEmptyCellValue = (v) =>
+    v === null || v === undefined || (typeof v === 'string' && (v.trim() === '' || v.trim() === '—' || v.trim() === '-')) || (Array.isArray(v) && v.length === 0)
+  const dbColumnValue = (t, col) => {
+    if (col === 'Stage') return t.stage
+    if (col === 'Sync') return 'Sync'
+    if (firstFull) return t.full_data && typeof t.full_data === 'object' ? t.full_data[col] : undefined
+    const field = SIMPLE_COLUMNS.find(([h]) => h === col)?.[1]
+    return field ? t[field] : undefined
+  }
+  const emptyDbColumns = firstFull
+    ? dbColumns.filter((col) => col !== 'Stage' && col !== 'Sync' && dbRows.every((t) => isEmptyCellValue(dbColumnValue(t, col))))
+    : []
+  const visibleDbColumns = showEmptyColumns ? dbColumns : dbColumns.filter((col) => !emptyDbColumns.includes(col))
   // A trade has a pending manual request when the log has a
   // 'sync_request' row for it with no completed 'google_sheet' row
   // after it. The dashboard log is capped at 200, newest first,
@@ -573,6 +600,14 @@ export function ProjectDashboard({ project, token, onBack }) {
                     ? ' Full trade data has not been backfilled yet, so the simplified columns are shown.'
                     : ''}
               </p>
+              {firstFull && dbTrades !== null && emptyDbColumns.length > 0 ? (
+                <p className="muted">
+                  {showEmptyColumns ? `${emptyDbColumns.length} empty columns shown` : `${emptyDbColumns.length} empty columns hidden`}{' '}
+                  <button type="button" className="raw-message-btn" onClick={() => setShowEmptyColumns((v) => !v)} aria-label={showEmptyColumns ? 'Hide empty columns' : 'Show empty columns'}>
+                    {showEmptyColumns ? 'Hide empty columns' : 'Show empty columns'}
+                  </button>
+                </p>
+              ) : null}
               {dbLoading ? (
                 <p className="project-empty">Loading trades…</p>
               ) : dbError ? (
@@ -583,7 +618,7 @@ export function ProjectDashboard({ project, token, onBack }) {
                     <thead>
                       <tr>
                         <th className="sn-col">S/N</th>
-                        {dbColumns.map((col) => (
+                        {visibleDbColumns.map((col) => (
                           <th key={col}>{col}</th>
                         ))}
                       </tr>
@@ -591,7 +626,7 @@ export function ProjectDashboard({ project, token, onBack }) {
                     <tbody>
                       {dbRows.length === 0 ? (
                         <tr>
-                          <td colSpan={Math.max(dbColumns.length, 1) + 1} className="project-empty">
+                          <td colSpan={Math.max(visibleDbColumns.length, 1) + 1} className="project-empty">
                             No trades saved yet.
                           </td>
                         </tr>
@@ -599,7 +634,7 @@ export function ProjectDashboard({ project, token, onBack }) {
                         dbRows.map((t, i) => (
                           <tr key={t.id}>
                             <td className="sn-col">{i + 1}</td>
-                            {dbColumns.map((col) =>
+                            {visibleDbColumns.map((col) =>
                               LONG_TEXT_COLUMNS.includes(col) && firstFull ? (
                                 <td key={col} className="raw-message-cell">
                                   <button
