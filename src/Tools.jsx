@@ -48,16 +48,23 @@ export function PinStrip({ pins, profiles, onJump, preview }) {
 
 // ---- polls -------------------------------------------------------------
 
-export function PollCard({ poll, myId, profiles, readOnly, mine, onChange }) {
+// iMessage-style poll: each choice is its own pill on the sender's side.
+// Choices with votes are filled and show who voted; empty ones are pale with
+// an empty circle; a pill grows with its share of the votes. Tap to vote
+// (tap again to take it back), "Add Choice" adds an option for everyone.
+export function PollCard({ poll, myId, profiles, avatars = {}, Avatar, readOnly, mine, onChange, onError, footer }) {
   const votes = poll.poll_votes ?? []
-  const voters = new Set(votes.map((v) => v.user_id)).size
   const myVotes = new Set(votes.filter((v) => v.user_id === myId).map((v) => v.option))
+  const counts = poll.options.map((_, i) => votes.filter((v) => v.option === i).length)
+  const top = Math.max(1, ...counts)
   const [busy, setBusy] = useState(false)
+  const [adding, setAdding] = useState(false)
+  const [choice, setChoice] = useState('')
 
   async function vote(i) {
     if (readOnly || busy) return
     setBusy(true)
-    let next = poll.multiple ? new Set(myVotes) : new Set()
+    const next = poll.multiple ? new Set(myVotes) : new Set()
     if (myVotes.has(i)) next.delete(i)
     else next.add(i)
     await supabase.from('poll_votes').delete().eq('poll_id', poll.id).eq('user_id', myId)
@@ -66,31 +73,63 @@ export function PollCard({ poll, myId, profiles, readOnly, mine, onChange }) {
     onChange?.()
   }
 
+  async function addChoice(e) {
+    e.preventDefault()
+    const t = choice.trim()
+    if (!t) return setAdding(false)
+    const { error } = await supabase.rpc('add_poll_option', { p_poll: poll.id, p_text: t })
+    if (error) return onError?.(error.message)
+    setChoice('')
+    setAdding(false)
+    onChange?.()
+  }
+
   return (
-    <div className={`poll-card ${mine ? 'mine' : ''}`}>
-      <div className="poll-head">
-        <span className="poll-badge">📊 Poll</span>
-        <span className="poll-meta">
-          {poll.multiple ? 'Choose any' : 'Choose one'} · {voters} {voters === 1 ? 'vote' : 'votes'}
-        </span>
-      </div>
-      <div className="poll-question">{poll.question}</div>
-      <div className="poll-options">
-        {poll.options.map((text, i) => {
-          const who = votes.filter((v) => v.option === i).map((v) => v.user_id)
-          const share = voters ? who.length / voters : 0
-          return (
-            <button key={i} className={`poll-option ${myVotes.has(i) ? 'chosen' : ''}`} onClick={() => vote(i)} disabled={readOnly}>
-              <span className="poll-fill" style={{ width: `${Math.round(share * 100)}%` }} />
-              <span className="poll-check" aria-hidden="true">{myVotes.has(i) ? '✓' : ''}</span>
-              <span className="poll-text">{text}</span>
-              <span className="poll-count" title={who.map((id) => profiles[id] ?? '…').join(', ')}>
-                {who.length ? who.map((id) => (profiles[id] ?? '?').slice(0, 1).toUpperCase()).join(' ') : ''}
-                {who.length ? ` · ${who.length}` : ''}
+    <div className={`ipoll ${mine ? 'mine' : ''}`} role="group" aria-label={`Poll: ${poll.question}`}>
+      <div className="ipoll-question">{poll.question}</div>
+      {poll.options.map((text, i) => {
+        const who = votes.filter((v) => v.option === i).map((v) => v.user_id)
+        const voted = who.length > 0
+        const width = 58 + 42 * (counts[i] / top)
+        return (
+          <button
+            key={i}
+            className={`ipoll-option ${voted ? 'voted' : ''} ${myVotes.has(i) ? 'mine-vote' : ''}`}
+            style={{ width: `${width}%` }}
+            onClick={() => vote(i)}
+            disabled={readOnly}
+            aria-pressed={myVotes.has(i)}
+            title={who.map((id) => profiles[id] ?? '…').join(', ')}
+          >
+            <span className="ipoll-text">{text}</span>
+            {voted ? (
+              <span className="ipoll-faces">
+                {who.slice(0, 3).map((id) => (Avatar ? <Avatar key={id} name={profiles[id] ?? '?'} src={avatars[id]} /> : null))}
+                {who.length > 3 && <span className="ipoll-more">+{who.length - 3}</span>}
               </span>
-            </button>
-          )
-        })}
+            ) : (
+              <span className="ipoll-circle" aria-hidden="true" />
+            )}
+          </button>
+        )
+      })}
+      {adding && (
+        <form className="ipoll-add" onSubmit={addChoice}>
+          <input autoFocus value={choice} maxLength={120} placeholder="New choice" onChange={(e) => setChoice(e.target.value)} onBlur={addChoice} />
+        </form>
+      )}
+      <div className="ipoll-foot">
+        {!readOnly && poll.options.length < 10 && !adding && (
+          <button className="ipoll-addbtn" onClick={() => setAdding(true)}>
+            Add Choice
+          </button>
+        )}
+        {footer && (
+          <>
+            {!readOnly && poll.options.length < 10 && !adding && <span aria-hidden="true"> · </span>}
+            <span>{footer}</span>
+          </>
+        )}
       </div>
     </div>
   )

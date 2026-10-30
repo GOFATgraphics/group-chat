@@ -2246,3 +2246,37 @@ video.media { cursor: default; }
 mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit; border-radius: 3px; padding: 0 1px; }
 .convo-avatar.small, .convo-avatar.small > .avatar { width: 40px; height: 40px; font-size: 16px; }
 .search-result .convo-preview b { font-weight: 600; color: var(--text); }
+
+/* ---- iMessage-style poll ---- */
+.ipoll { --poll: #f2b45a; --poll-soft: #fdf0dc; --poll-ink: #e19a2f; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; width: min(330px, 78vw); }
+.ipoll.mine { align-items: flex-end; }
+@media (prefers-color-scheme: dark) { .ipoll { --poll: #d9963b; --poll-soft: #3a2a14; --poll-ink: #f0b766; } }
+.ipoll-question { font-size: 13px; font-weight: 600; color: var(--muted); padding: 0 6px; }
+.ipoll-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 52px;
+  padding: 8px 10px 8px 22px;
+  border: 0;
+  border-radius: 26px;
+  background: var(--poll-soft);
+  color: var(--poll-ink);
+  font-size: 20px;
+  font-weight: 600;
+  text-align: left;
+  transition: width 0.45s cubic-bezier(0.34, 1.3, 0.44, 1), background 0.2s, transform 0.12s;
+}
+.ipoll-option:active { transform: scale(0.97); }
+.ipoll-option:disabled { cursor: default; }
+.ipoll-option.voted { background: var(--poll); color: #fff; }
+.ipoll-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ipoll-circle { width: 30px; height: 30px; border-radius: 50%; border: 2.5px solid var(--poll); flex-shrink: 0; }
+.ipoll-faces { display: flex; flex-shrink: 0; }
+.ipoll-faces .avatar { width: 34px; height: 34px; font-size: 14px; border: 2px solid var(--poll); }
+.ipoll-faces .avatar + .avatar { margin-left: -10px; }
+.ipoll-more { align-self: center; margin-left: 4px; font-size: 13px; }
+.ipoll-add input { width: min(330px, 78vw); min-height: 48px; padding: 0 20px; border: 2px dashed var(--poll); border-radius: 26px; background: none; color: var(--text); font: inherit; font-size: 18px; outline: none; }
+.ipoll-foot { font-size: 13px; color: var(--muted); padding: 0 6px; }
+.ipoll-addbtn { border: 0; background: none; padding: 0; color: var(--poll-ink); font-size: 14px; font-weight: 600; }

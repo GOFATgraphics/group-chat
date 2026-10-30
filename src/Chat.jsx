@@ -1390,6 +1390,11 @@ export default function Chat({ session }) {
     if (el && stickToBottom.current) el.scrollTop = el.scrollHeight
   }, [])
 
+  // A poll card is taller than its placeholder text: stay pinned to the bottom.
+  useLayoutEffect(() => {
+    scrollToBottom()
+  }, [polls, scrollToBottom])
+
   // A typing bubble appearing at the bottom keeps the view pinned there.
   const typingCount = typing.typers.length
   useLayoutEffect(() => {
@@ -2059,6 +2064,8 @@ export default function Chat({ session }) {
               pinned={pins.some((p) => p.id === item.msg.id)}
               onPin={() => togglePin(item.msg)}
               onPollChange={() => loadPolls([item.msg.id])}
+              onPollError={setError}
+              avatars={avatars}
               flash={flashId === item.msg.id}
             />
           ),
@@ -2447,6 +2454,8 @@ function Message({
   pinned = false,
   onPin,
   onPollChange,
+  onPollError,
+  avatars = {},
   flash = false,
 }) {
   const pressTimer = useRef(null)
@@ -2674,7 +2683,7 @@ function Message({
           )}
           {isCall && <CallCard msg={msg} tail={tail(true)} />}
           {poll ? (
-            <PollCard poll={poll} myId={myId} profiles={profiles} readOnly={readOnly} mine={mine} onChange={onPollChange} />
+            <PollCard poll={poll} myId={myId} profiles={profiles} avatars={avatars} Avatar={Avatar} readOnly={readOnly} mine={mine} onChange={onPollChange} onError={onPollError} />
           ) : shownText && !isCall && (jumbo ? (
             <div className={`jumbo-emoji n${jumbo}`} title={new Date(msg.created_at).toLocaleString()}>
               {shownText.trim()}
