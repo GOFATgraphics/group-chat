@@ -1,7 +1,7 @@
 import {
   route, auth, body, check, present, markRead, userIdFor, sleep, HttpError, BUCKET, MAX_FILE_BYTES,
 } from '../lib.js'
-import { speak, voiceFor } from '../speech.js'
+import { speak, voiceFor, mp3Duration } from '../speech.js'
 
 const MAX_WAIT_SECONDS = 25
 const POLL_MS = 150
@@ -107,6 +107,14 @@ export default route({
       }
     }
     if (!text && !file) throw new HttpError(400, 'Send "text", "file" or "file_url"')
+    if (file && voiceDuration == null && /^audio\/(mpeg|mp3)$/.test(file.type) && !(Number(b.duration ?? b.file?.duration) > 0)) {
+      // Uploaded mp3 without a length: measure it so the voice note shows its time.
+      try {
+        voiceDuration = mp3Duration(Buffer.from(file.bytes)) || null
+      } catch {
+        // unknown length is fine
+      }
+    }
 
     let attachment = {}
     if (file) {

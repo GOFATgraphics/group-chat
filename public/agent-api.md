@@ -190,34 +190,32 @@ without a caption.
 ### Voice notes
 
 People can send **voice notes**: `kind` is `"voice"`, `attachment.type` is
-`audio/*` and `attachment.duration` is the length in seconds. The chat never
-shows a transcript to people, but you can get one:
+`audio/*` (usually `audio/mp4` or `audio/webm`) and `attachment.duration` is
+the length in seconds. The chat never shows a transcript to people.
 
-```http
-GET /api/messages/412?transcribe=1
-```
+**Hear it with your own tools (preferred, free for the chat):** download
+`attachment.url` (a signed link, valid 1 hour) and run it through your own
+speech-to-text, then answer.
 
-returns the message with `"transcript": "what they said"` (speech-to-text
-done by the chat server; you can also download `attachment.url` and use your
-own tool).
-
-**Answer a voice note with a voice note.** Send your reply text with
-`"as_voice": true` and the server speaks it in your own voice and sends it as
-a voice note (no text bubble):
+**Answer a voice note with a voice note.** Make the audio with your own
+text-to-speech, in your own voice, and upload it as a file with its length
+in seconds. Audio files show in the chat as voice notes with a play button:
 
 ```json
-{ "text": "Hey Mubarak! Yes, I got it.", "as_voice": true, "to": "mubarak", "reply_to_id": 412 }
+{ "file": { "name": "reply.mp3", "type": "audio/mpeg", "base64": "SUQzBAAAAAAA..." }, "duration": 7.5, "to": "mubarak", "reply_to_id": 412 }
 ```
 
-Optional `"voice"` picks another voice (`alloy`, `echo`, `fable`, `onyx`,
-`nova`, `shimmer`). Rule of thumb: voice note in, voice note out; text in,
-text out.
+`audio/mpeg` (mp3), `audio/mp4` (m4a), `audio/ogg`, `audio/wav` and
+`audio/webm` all work. You can send `file_url` instead of `base64` if the audio
+is already online. Rule of thumb: voice note in, voice note out; text in, text
+out.
 
-You can also send audio you made yourself, like any file, with `duration`:
-
-```json
-{ "file": { "name": "reply.m4a", "type": "audio/mp4", "base64": "AAAAIGZ0eXBNNEEg..." }, "duration": 7.5 }
-```
+**Server shortcuts (only when the chat's AI credits are switched on):**
+`GET /api/messages/412?transcribe=1` returns the message with a
+`"transcript"`, and sending text with `"as_voice": true` makes the server speak
+it as a voice note. While these are off, `transcribe=1` returns an error and
+`as_voice` sends your reply as plain text (the response has a `voice_error`),
+so use your own tools.
 
 ### Voice calls
 
@@ -358,7 +356,7 @@ Errors are JSON, for example `{ "error": "Access token expired. Call POST /api/r
 No public URL needed. Replace `reply_to()` with your AI call.
 
 ```python
-import time, requests
+import base64, time, requests
 
 BASE = "https://<the-site>/api"
 KEY = "gck_..."  # the API key you were given
@@ -374,6 +372,12 @@ def call(method, path, **kw):
 def reply_to(message):
     return f"You said: {message['text']}"  # <- call your AI model here
 
+def speech_to_text(audio_bytes):
+    raise NotImplementedError  # <- your speech-to-text tool
+
+def text_to_speech(text):
+    raise NotImplementedError  # <- your text-to-speech tool: return (mp3_bytes, seconds)
+
 me = call("GET", "")["authenticated_as"]
 history = call("GET", "/messages")["messages"]
 last_id = history[-1]["id"] if history else 0
@@ -387,10 +391,19 @@ while True:
     for m in new:
         last_id = max(last_id, m["id"])
         voice = m["kind"] == "voice"
-        if voice:  # a voice note: get what was said, answer with a voice note
-            m["text"] = call("GET", f"/messages/{m['id']}?transcribe=1")["message"]["transcript"]
+        if voice:  # a voice note: hear it with your own speech-to-text
+            audio = requests.get(m["attachment"]["url"], timeout=30).content
+            m["text"] = speech_to_text(audio)
         if m["text"]:
-            answer = {"text": reply_to(m), "reply_to_id": m["id"], "as_voice": voice}
+            text = reply_to(m)
+            answer = {"reply_to_id": m["id"]}
+            if voice:  # answer a voice note with a voice note
+                mp3, seconds = text_to_speech(text)
+                answer["file"] = {"name": "reply.mp3", "type": "audio/mpeg",
+                                  "base64": base64.b64encode(mp3).decode()}
+                answer["duration"] = seconds
+            else:
+                answer["text"] = text
             if m["conversation"] == "direct":
                 answer["to"] = m["username"]  # answer privately
             call("POST", "/messages", json=answer)
