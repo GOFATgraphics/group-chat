@@ -1974,19 +1974,43 @@ export default function Chat({ session }) {
       ) : (
         <>
           {replyTo && (
-            <div className="reply-preview" role="note">
-              <span className="reply-preview-text">
-                <b>Replying to {profiles[replyTo.user_id] ?? '…'}</b>
-                <span>{quotePreviewOf(replyTo)}</span>
-              </span>
-              <button className="reply-preview-cancel" onClick={() => setReplyTo(null)} aria-label="Cancel reply">
-                ✕
+            // Reply mode, like iMessage: the chat blurs away, the message you
+            // are answering stays sharp just above the keyboard. Tap the blur
+            // or ✕ to cancel.
+            <div className="reply-focus" onClick={() => setReplyTo(null)}>
+              <button className="glass-btn right reply-focus-close" onClick={() => setReplyTo(null)} aria-label="Cancel reply">
+                <CloseIcon />
               </button>
+              <div className="reply-focus-msg" onClick={(e) => e.stopPropagation()}>
+                <div className="stamp">
+                  <b>{formatStamp(new Date(replyTo.created_at)).day}</b> {formatStamp(new Date(replyTo.created_at)).time}
+                </div>
+                <Message
+                  msg={replyTo}
+                  first
+                  last
+                  mine={replyTo.user_id === myId}
+                  readOnly
+                  myId={myId}
+                  username={profiles[replyTo.user_id] ?? '…'}
+                  avatar={avatars[replyTo.user_id]}
+                  profiles={profiles}
+                  reactions={reactions[replyTo.id] ?? []}
+                  url={urls[replyTo.attachment_path]}
+                  replyOriginal={replyTo.reply_to_id ? originals.get(replyTo.reply_to_id) ?? null : undefined}
+                  highlightMentions={isGroup}
+                  onOpenImage={setLightbox}
+                  onMediaLoad={() => {}}
+                  tickState={null}
+                />
+              </div>
             </div>
           )}
           <Composer
             onSend={send}
-            placeholder={isGroup ? (currentGroup ? `Message ${currentGroup.name}` : 'Message') : `Message ${peerName}`}
+            replying={Boolean(replyTo)}
+            focusKey={replyTo?.id}
+            placeholder={replyTo ? 'Reply' : isGroup ? (currentGroup ? `Message ${currentGroup.name}` : 'Message') : `Message ${peerName}`}
             enableMentions={isGroup}
             members={groupMemberIds
               .slice()
@@ -2265,53 +2289,53 @@ function Message({
     setCopied(true)
     setTimeout(() => setCopied(false), 1200)
   }
-  // Swipe-to-reply: a rightward drag on touch. The threshold and the
-  // horizontal-dominance check are the accidental-swipe guards: a small
-  // drag does nothing, and a mostly vertical drag (scrolling) never
-  // triggers a reply. touch-action: pan-y in CSS keeps vertical scrolling
-  // working while the horizontal drag is tracked here.
+  // Swipe-to-reply, like iMessage: drag a bubble to the right and it follows
+  // the finger (with resistance), a curved reply arrow grows in on the left,
+  // and letting go past the threshold starts a reply. A mostly vertical drag
+  // is a scroll and never replies; touch-action: pan-y keeps scrolling smooth.
   const swipeStart = useRef(null)
-  const swipeFired = useRef(false)
+  const swipeArmed = useRef(false)
   const [dragX, setDragX] = useState(0)
-  const SWIPE_THRESHOLD = 60
+  const SWIPE_THRESHOLD = 56
+  const endSwipe = (fire) => {
+    clearTimeout(pressTimer.current)
+    const was = swipeStart.current
+    swipeStart.current = null
+    setDragX(0)
+    if (fire && was?.dragging && swipeArmed.current) onReply?.()
+    swipeArmed.current = false
+  }
   const swipeHandlers = readOnly
     ? {}
     : {
         onPointerDown: (e) => {
           if (e.pointerType === 'mouse') return
-          swipeStart.current = { x: e.clientX, y: e.clientY }
-          swipeFired.current = false
+          swipeStart.current = { x: e.clientX, y: e.clientY, dragging: false }
+          swipeArmed.current = false
           // Swipe handlers replace the long-press gesture handlers on this
           // element, so start the tapback long-press timer here too.
           pressTimer.current = setTimeout(onOpenPicker, LONG_PRESS_MS)
         },
         onPointerMove: (e) => {
           const start = swipeStart.current
-          if (!start || swipeFired.current) return
+          if (!start) return
           const dx = e.clientX - start.x
           const dy = e.clientY - start.y
-          if (dx <= 0 || Math.abs(dy) > Math.abs(dx) * 0.7) {
-            setDragX(0)
-            return
-          }
-          setDragX(Math.min(dx, 64))
-          if (dx >= SWIPE_THRESHOLD) {
-            swipeFired.current = true
+          if (!start.dragging) {
+            if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) return endSwipe(false)
+            if (dx < 8) return
+            start.dragging = true
             clearTimeout(pressTimer.current)
-            setDragX(0)
-            onReply?.()
           }
+          // rubber band: 1:1 up to the threshold, then a third of the extra
+          const x = Math.max(0, dx <= SWIPE_THRESHOLD ? dx : SWIPE_THRESHOLD + (dx - SWIPE_THRESHOLD) / 3)
+          const armed = x >= SWIPE_THRESHOLD
+          if (armed && !swipeArmed.current) navigator.vibrate?.(8)
+          swipeArmed.current = armed
+          setDragX(x)
         },
-        onPointerUp: () => {
-          clearTimeout(pressTimer.current)
-          swipeStart.current = null
-          setDragX(0)
-        },
-        onPointerCancel: () => {
-          clearTimeout(pressTimer.current)
-          swipeStart.current = null
-          setDragX(0)
-        },
+        onPointerUp: () => endSwipe(true),
+        onPointerCancel: () => endSwipe(false),
       }
   const isImage = msg.attachment_type?.startsWith('image/')
   const isVideo = msg.attachment_type?.startsWith('video/')
@@ -2322,6 +2346,8 @@ function Message({
   // An image link in the text (e.g. an AI's generated image) shows as a picture.
   const linkedImages = useMemo(() => (msg.call_duration != null ? [] : imageLinksIn(msg.content)), [msg.content, msg.call_duration])
   const shownText = useMemo(() => withoutMarkdownImages(msg.content), [msg.content])
+  // Just one to three emoji, nothing else: shown big without a bubble.
+  const jumbo = useMemo(() => (msg.attachment_path || msg.call_duration != null ? 0 : emojiOnlyCount(shownText)), [shownText, msg.attachment_path, msg.call_duration])
 
   const grouped = useMemo(() => {
     const map = new Map()
@@ -2404,7 +2430,7 @@ function Message({
         )}
         <div
           className="pieces"
-          style={dragX ? { transform: `translateX(${dragX}px)` } : undefined}
+          style={dragX ? { transform: `translateX(${dragX}px)`, transition: 'none' } : undefined}
           onClick={(e) => {
             e.stopPropagation()
             if (e.detail === 1) setRevealed((r) => !r)
@@ -2412,7 +2438,15 @@ function Message({
           {...gestures}
           {...swipeHandlers}
         >
-          {dragX > 20 && <span className="swipe-reply-hint" aria-hidden="true">↩</span>}
+          {dragX > 4 && (
+            <span
+              className={`swipe-reply-hint ${dragX >= SWIPE_THRESHOLD ? 'armed' : ''}`}
+              style={{ opacity: Math.min(1, dragX / SWIPE_THRESHOLD), transform: `translateY(-50%) scale(${0.6 + 0.4 * Math.min(1, dragX / SWIPE_THRESHOLD)})` }}
+              aria-hidden="true"
+            >
+              <ReplyArrow />
+            </span>
+          )}
           {isMedia &&
             (url ? (
               isImage ? (
@@ -2455,11 +2489,15 @@ function Message({
             </a>
           )}
           {isCall && <CallCard msg={msg} tail={tail(true)} />}
-          {shownText && !isCall && (
+          {shownText && !isCall && (jumbo ? (
+            <div className={`jumbo-emoji n${jumbo}`} title={new Date(msg.created_at).toLocaleString()}>
+              {shownText.trim()}
+            </div>
+          ) : (
             <div className={`bubble ${tail(!linkedImages.length)}`} title={new Date(msg.created_at).toLocaleString()}>
               {renderMessageContent(shownText, highlightMentions ? profiles : null)}
             </div>
-          )}
+          ))}
           {linkedImages.map((src) => (
             <img
               key={src}
@@ -2711,7 +2749,7 @@ function formatReadTime(iso) {
   return `${d.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`
 }
 
-function Composer({ onSend, placeholder = 'Message', enableMentions = false, members = [], viewKey = '', onTyping, onVoiceError }) {
+function Composer({ onSend, replying = false, focusKey, placeholder = 'Message', enableMentions = false, members = [], viewKey = '', onTyping, onVoiceError }) {
   const [text, setText] = useState('')
   const [file, setFile] = useState(null)
   const [preview, setPreview] = useState(null)
@@ -2727,6 +2765,10 @@ function Composer({ onSend, placeholder = 'Message', enableMentions = false, mem
   const videoInput = useRef(null)
   const fileInput = useRef(null)
   const textRef = useRef(null)
+  // Starting a reply puts the cursor in the box, ready to type.
+  useEffect(() => {
+    if (focusKey != null) textRef.current?.focus()
+  }, [focusKey])
 
   useEffect(() => {
     if (!file?.type.startsWith('image/')) return setPreview(null)
@@ -2882,7 +2924,7 @@ function Composer({ onSend, placeholder = 'Message', enableMentions = false, mem
 
   return (
     <form
-      className="composer"
+      className={`composer ${replying ? 'replying' : ''}`}
       onSubmit={submit}
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => {
@@ -3251,3 +3293,27 @@ function renderMessageContent(text, profilesMap) {
 function linkify(text) {
   return renderMessageContent(text, null)
 }
+
+// How many emoji a message is, if it is only emoji (1-3), else 0.
+const EMOJI_ONLY = /^(?:\p{Extended_Pictographic}|\p{Emoji_Modifier}|\p{Regional_Indicator}|[\u200d\ufe0f\u20e3#*0-9]|\s)+$/u
+export function emojiOnlyCount(text) {
+  const t = (text ?? '').trim()
+  if (!t || t.length > 40 || !EMOJI_ONLY.test(t) || !/\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(t)) return 0
+  const n =
+    typeof Intl !== 'undefined' && Intl.Segmenter
+      ? [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(t.replace(/\s+/g, ''))].length
+      : [...t.replace(/\s+/g, '')].length
+  return n >= 1 && n <= 3 ? n : 0
+}
+
+const CloseIcon = () => (
+  <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+    <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+  </svg>
+)
+const ReplyArrow = () => (
+  <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+    <path d="M10 5 4 11l6 6" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M4.5 11H13a7 7 0 0 1 7 7v1" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+  </svg>
+)
