@@ -2280,3 +2280,35 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
 .ipoll-add input { width: min(330px, 78vw); min-height: 48px; padding: 0 20px; border: 2px dashed var(--poll); border-radius: 26px; background: none; color: var(--text); font: inherit; font-size: 18px; outline: none; }
 .ipoll-foot { font-size: 13px; color: var(--muted); padding: 0 6px; }
 .ipoll-addbtn { border: 0; background: none; padding: 0; color: var(--poll-ink); font-size: 14px; font-weight: 600; }
+
+/* poll made in the message box */
+.poll-compose {
+  flex: 1;
+  min-width: 0;
+  border-radius: 24px;
+  border: 0.5px solid var(--separator);
+  background: var(--bg);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  animation: reply-rise 0.28s cubic-bezier(0.22, 0.8, 0.25, 1);
+}
+.poll-compose-choices { position: relative; margin: 6px; padding: 2px 16px; border-radius: 18px; background: var(--fill); }
+.poll-compose-choices input {
+  display: block;
+  width: calc(100% - 30px);
+  padding: 13px 0;
+  border: 0;
+  border-bottom: 0.5px solid var(--separator);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 18px;
+  outline: none;
+}
+.poll-compose-choices input:last-child { border-bottom: 0; }
+.poll-compose-close { position: absolute; right: 8px; top: 10px; width: 24px; height: 24px; border: 0; border-radius: 50%; background: var(--muted); color: var(--bg); font-size: 11px; display: grid; place-items: center; }
+.poll-compose-send { display: flex; align-items: center; gap: 8px; padding: 4px 6px 6px 16px; }
+.poll-compose-send input { flex: 1; min-width: 0; border: 0; background: none; color: var(--text); font: inherit; font-size: 17px; outline: none; padding: 8px 0; }
+.poll-compose-send .send-btn:disabled { background: var(--separator); }
+.ipoll-comment { margin-top: 2px; font-size: 16px; }
+.ipoll.mine .ipoll-comment { background: var(--blue); color: #fff; }

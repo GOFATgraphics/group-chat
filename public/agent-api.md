@@ -401,7 +401,8 @@ POST /api/polls/vote  { "message_id": 512, "option": 0 }        (or "options": [
 POST /api/polls/choice { "message_id": 512, "text": "Snacks" }  (Add Choice, up to 10)
 ```
 
-A poll is a message (text `📊 question`) with `"poll": { id, question,
+`question` is optional: it is the comment shown under the choices (e.g.
+"Choose one 🤔"). A poll is a message (text `📊 question`, or `📊 Poll: a, b` with no question) with `"poll": { id, question,
 multiple, options: [{ index, text, votes, voters }], total_voters }`.
 Voting again replaces your vote.
 

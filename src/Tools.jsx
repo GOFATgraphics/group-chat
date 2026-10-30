@@ -86,7 +86,6 @@ export function PollCard({ poll, myId, profiles, avatars = {}, Avatar, readOnly,
 
   return (
     <div className={`ipoll ${mine ? 'mine' : ''}`} role="group" aria-label={`Poll: ${poll.question}`}>
-      <div className="ipoll-question">{poll.question}</div>
       {poll.options.map((text, i) => {
         const who = votes.filter((v) => v.option === i).map((v) => v.user_id)
         const voted = who.length > 0
@@ -131,66 +130,71 @@ export function PollCard({ poll, myId, profiles, avatars = {}, Avatar, readOnly,
           </>
         )}
       </div>
+      {poll.question && poll.question !== 'Poll' && (
+        <div className={`bubble tail ipoll-comment`}>{poll.question}</div>
+      )}
     </div>
   )
 }
 
-export function PollSheet({ onCreate, onCancel }) {
-  const [question, setQuestion] = useState('')
-  const [options, setOptions] = useState(['', ''])
-  const [multiple, setMultiple] = useState(false)
+// Making a poll happens right in the message box, like iMessage: the box
+// grows into Choice 1, 2, 3 (a new row appears as you fill the last one),
+// with "Add comment or Send" underneath. The comment shows under the poll.
+export function PollComposer({ onSend, onCancel }) {
+  const [choices, setChoices] = useState(['', '', ''])
+  const [comment, setComment] = useState('')
   const [busy, setBusy] = useState(false)
-  const filled = options.map((o) => o.trim()).filter(Boolean)
-  const ready = question.trim() && filled.length >= 2 && !busy
+  const filled = choices.map((c) => c.trim()).filter(Boolean)
+  const ready = filled.length >= 2 && !busy
+
+  function edit(i, value) {
+    setChoices((prev) => {
+      const next = prev.map((c, j) => (j === i ? value : c))
+      if (i === next.length - 1 && value.trim() && next.length < 10) next.push('')
+      return next
+    })
+  }
+  async function send(e) {
+    e?.preventDefault()
+    if (!ready) return
+    setBusy(true)
+    await onSend({ question: comment.trim(), options: filled, multiple: false })
+    setBusy(false)
+  }
+
   return (
-    <div className="sheet-backdrop" onClick={onCancel}>
-      <form
-        className="sheet tool-sheet"
-        onClick={(e) => e.stopPropagation()}
-        onSubmit={async (e) => {
-          e.preventDefault()
-          if (!ready) return
-          setBusy(true)
-          await onCreate({ question: question.trim(), options: filled, multiple })
-          setBusy(false)
-        }}
-      >
-        <div className="sheet-grabber" aria-hidden="true" />
-        <div className="sheet-head">
-          <button type="button" className="sheet-cancel" onClick={onCancel}>Cancel</button>
-          <span>New Poll</span>
-          <button type="submit" className="sheet-done" disabled={!ready}>{busy ? '…' : 'Send'}</button>
-        </div>
-        <input className="group-name-input" placeholder="Ask a question" value={question} maxLength={300} onChange={(e) => setQuestion(e.target.value)} autoFocus />
-        <div className="sheet-section">Options</div>
-        <div className="tool-list">
-          {options.map((o, i) => (
-            <div key={i} className="tool-row">
-              <input
-                placeholder={`Option ${i + 1}`}
-                value={o}
-                maxLength={120}
-                onChange={(e) => setOptions((prev) => prev.map((x, j) => (j === i ? e.target.value : x)))}
-              />
-              {options.length > 2 && (
-                <button type="button" className="member-remove" onClick={() => setOptions((prev) => prev.filter((_, j) => j !== i))} aria-label="Remove option">
-                  −
-                </button>
-              )}
-            </div>
-          ))}
-          {options.length < 10 && (
-            <button type="button" className="tool-add" onClick={() => setOptions((prev) => [...prev, ''])}>
-              ＋ Add option
-            </button>
-          )}
-        </div>
-        <label className="setting-row">
-          <span>Allow more than one answer</span>
-          <input type="checkbox" className="switch" checked={multiple} onChange={(e) => setMultiple(e.target.checked)} />
-        </label>
-      </form>
-    </div>
+    <form className="poll-compose" onSubmit={send}>
+      <div className="poll-compose-choices">
+        <button type="button" className="poll-compose-close" onClick={onCancel} aria-label="Cancel poll">
+          ✕
+        </button>
+        {choices.map((c, i) => (
+          <input
+            key={i}
+            autoFocus={i === 0}
+            placeholder={`Choice ${i + 1}`}
+            value={c}
+            maxLength={120}
+            enterKeyHint="next"
+            onChange={(e) => edit(i, e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                e.currentTarget.parentElement.querySelectorAll('input')[i + 1]?.focus()
+              }
+            }}
+          />
+        ))}
+      </div>
+      <div className="poll-compose-send">
+        <input placeholder="Add comment or Send" value={comment} maxLength={300} onChange={(e) => setComment(e.target.value)} enterKeyHint="send" />
+        <button type="submit" className="send-btn" disabled={!ready} aria-label="Send poll">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+      </div>
+    </form>
   )
 }
 

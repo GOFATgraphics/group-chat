@@ -73,11 +73,13 @@ const polls = route({
   async POST(req) {
     const { sb, userId } = await auth(req)
     const b = args(req)
-    const question = String(b.question ?? '').trim()
+    // The question is the comment shown under the choices (optional, like iMessage).
+    const question = String(b.question ?? b.comment ?? '').trim() || 'Poll'
     const options = (Array.isArray(b.options) ? b.options : []).map((o) => String(o).trim()).filter(Boolean)
-    if (!question || options.length < 2 || options.length > 10) throw new HttpError(400, 'A poll needs a question and 2-10 options')
+    if (options.length < 2 || options.length > 10) throw new HttpError(400, 'A poll needs 2-10 options')
     const conv = await conversationFor(sb, userId, b)
-    const msg = check(await sb.from('messages').insert({ content: `📊 ${question}`, recipient_id: conv.recipient_id, group_id: conv.group_id }).select().single())
+    const summary = question === 'Poll' ? `Poll: ${options.join(', ')}` : question
+    const msg = check(await sb.from('messages').insert({ content: `📊 ${summary}`.slice(0, 4000), recipient_id: conv.recipient_id, group_id: conv.group_id }).select().single())
     const { error } = await sb.from('polls').insert({ message_id: msg.id, question, options, multiple: Boolean(b.multiple) })
     if (error) {
       await sb.from('messages').delete().eq('id', msg.id)

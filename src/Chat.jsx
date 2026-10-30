@@ -3,7 +3,7 @@ import { supabase, BUCKET, AVATAR_BUCKET, avatarUrl } from './supabase.js'
 import Splash from './Splash.jsx'
 import ChatList, { listPreview, listTime } from './ChatList.jsx'
 import GroupSheet from './Groups.jsx'
-import { PinStrip, PollCard, PollSheet, NotesSheet, ScheduleSheet, useMessageSearch, Highlighted, itemScope } from './Tools.jsx'
+import { PinStrip, PollCard, PollComposer, NotesSheet, ScheduleSheet, useMessageSearch, Highlighted, itemScope } from './Tools.jsx'
 import ApiKeys from './ApiKeys.jsx'
 import { useTyping } from './typing.js'
 import { VoicePlayer, VoiceRecorder, MicIcon, canRecordVoice, formatDuration } from './Voice.jsx'
@@ -1320,10 +1320,12 @@ export default function Chat({ session }) {
     loadPins()
   }
 
-  async function createPoll({ question, options, multiple }) {
+  async function createPoll({ question, options, multiple = false }) {
+    question = question?.trim() || 'Poll'
+    const summary = question === 'Poll' ? `Poll: ${options.join(', ')}` : question
     const { data: msg, error: err } = await supabase
       .from('messages')
-      .insert({ content: `📊 ${question}`, recipient_id: peerId, group_id: groupId })
+      .insert({ content: `📊 ${summary}`.slice(0, 4000), recipient_id: peerId, group_id: groupId })
       .select()
       .single()
     if (err) return setError(err.message)
@@ -1335,7 +1337,8 @@ export default function Chat({ session }) {
     stickToBottom.current = true
     addMessage(msg)
     loadPolls([msg.id])
-    setToolSheet(null)
+    playSend()
+    return true
   }
 
   // Scroll to a message and flash it. If it's older than what's loaded, load
@@ -2161,7 +2164,7 @@ export default function Chat({ session }) {
             onSend={send}
             replying={Boolean(replyTo)}
             focusKey={replyTo?.id}
-            onPoll={() => setToolSheet('poll')}
+            onPoll={createPoll}
             onSchedule={() => setToolSheet('schedule')}
             placeholder={replyTo ? 'Reply' : isGroup ? (currentGroup ? `Message ${currentGroup.name}` : 'Message') : `Message ${peerName}`}
             enableMentions={isGroup}
@@ -2290,7 +2293,6 @@ export default function Chat({ session }) {
         </div>
       )}
 
-      {toolSheet === 'poll' && <PollSheet onCreate={createPoll} onCancel={() => setToolSheet(null)} />}
       {toolSheet === 'notes' && (
         <NotesSheet
           scope={itemScope(view, myId)}
@@ -2962,6 +2964,7 @@ function Composer({ onSend, replying = false, focusKey, onPoll, onSchedule, plac
   const [busy, setBusy] = useState(false)
   const [menu, setMenu] = useState(false)
   const [recording, setRecording] = useState(false)
+  const [pollMode, setPollMode] = useState(false)
   // Mention picker state, group chat only. `at` is the index of the '@'
   // being typed, `query` is the text after it, `active` is the keyboard
   // highlight. Null means no picker is open.
@@ -3115,6 +3118,20 @@ function Composer({ onSend, replying = false, focusKey, onPoll, onSchedule, plac
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) submit(e)
   }
 
+  if (pollMode) {
+    return (
+      <div className="composer">
+        <PollComposer
+          onCancel={() => setPollMode(false)}
+          onSend={async (poll) => {
+            const ok = await onPoll(poll)
+            if (ok) setPollMode(false)
+          }}
+        />
+      </div>
+    )
+  }
+
   if (recording) {
     return (
       <div className="composer">
@@ -3188,7 +3205,7 @@ function Composer({ onSend, replying = false, focusKey, onPoll, onSchedule, plac
                   type="button"
                   onClick={() => {
                     setMenu(false)
-                    onPoll()
+                    setPollMode(true)
                   }}
                 >
                   <span className="attach-emoji" aria-hidden="true">📊</span>
