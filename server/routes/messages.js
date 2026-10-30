@@ -2,7 +2,7 @@ import {
   route, auth, body, check, present, markRead, userIdFor, groupIdFor, sleep, HttpError, BUCKET, MAX_FILE_BYTES,
 } from '../lib.js'
 import { speak, voiceFor, mp3Duration } from '../speech.js'
-import { takeDueTasks } from './tools.js'
+import { takeDueTasks, takeAssignedTasks } from './tools.js'
 
 const MAX_WAIT_SECONDS = 25
 const POLL_MS = 150
@@ -73,12 +73,17 @@ export default route({
       rows = check(await query).reverse()
     }
 
-    const [messages, dueTasks] = await Promise.all([
+    const [messages, dueTasks, assigned] = await Promise.all([
       present(sb, rows),
       takeDueTasks(sb),
+      takeAssignedTasks(sb, userId),
       shouldMarkRead ? markRead(sb, userId, rows) : null,
     ])
-    return dueTasks.length ? { messages, due_tasks: dueTasks } : { messages }
+    return {
+      messages,
+      ...(dueTasks.length ? { due_tasks: dueTasks } : {}),
+      ...(assigned.length ? { assigned_tasks: assigned } : {}),
+    }
   },
 
   async POST(req) {

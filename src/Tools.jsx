@@ -459,3 +459,157 @@ export function Highlighted({ text, query }) {
     </>
   )
 }
+
+// ---- assign a task to an AI -------------------------------------------
+// A task card lives on its card message (content starts with "🗂 Task:").
+// It updates live: Assigned -> Working… -> Done, with progress notes as
+// they go, and the final result, files, or links when finished. The AI
+// receives it through the API as assigned_tasks, works with its own
+// computer and browser, and reports back through /api/assignments/update.
+// Passwords stay in the AI's own platform: the task only names the site.
+
+const TASK_LABEL = {
+  assigned: 'Assigned',
+  working: 'Working…',
+  done: 'Done',
+  failed: 'Could not finish',
+  cancelled: 'Cancelled',
+}
+
+export function TaskCard({ task, myId, profiles, urls = {}, Avatar, avatars = {}, onCancel, onOpenFile }) {
+  const st = { cls: task.status ?? 'assigned' }
+  const updates = [...(task.ai_task_updates ?? [])].sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+  const files = updates.filter((u) => u.attachment_path)
+  const canCancel = (task.status === 'assigned' || task.status === 'working') && (myId === task.created_by || myId === task.assignee)
+  return (
+    <div className={`task-card ${st.cls}`} role="group" aria-label={`Task: ${task.title}`}>
+      <div className="task-head">
+        <span className="task-dot" aria-hidden="true" />
+        <span className="task-title">{task.title}</span>
+      </div>
+      <div className="task-who">
+        To {profiles[task.assignee] ?? '…'}
+        {task.due_at ? <span className="task-due"> · Due {new Date(task.due_at).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span> : null}
+      </div>
+      <div className={`task-status ${st.cls}`}>
+        {task.status === 'working' && <span className="task-spin" aria-hidden="true" />}
+        {TASK_LABEL[task.status] ?? task.status}
+        {task.progress && task.status !== 'done' && task.status !== 'failed' ? ` · ${task.progress}` : ''}
+      </div>
+      {updates.length > 0 && (
+        <div className="task-log">
+          {updates.map((u) => (
+            <div key={u.id} className="task-log-row">
+              <span>{u.status ? `${TASK_LABEL[u.status] ?? u.status} · ` : ''}{u.note ?? ''}</span>
+              <span className="task-log-by"> {profiles[u.user_id] ?? '…'} · {new Date(u.created_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}</span>
+              {u.attachment_path && (
+                <button
+                  type="button"
+                  className="task-more"
+                  onClick={() => {
+                    const url = urls[u.attachment_path]
+                    if (!url) return
+                    if (u.attachment_type?.startsWith('image/')) onOpenFile?.(u)
+                    else window.open(url, '_blank', 'noreferrer')
+                  }}
+                >
+                  {u.attachment_name ?? 'File'}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {task.result && (
+        <div className="task-result">{task.result}</div>
+      )}
+      {files.length > 0 && (
+        <div className="task-files">
+          {files.map((u) => (
+            <button
+              key={u.id}
+              type="button"
+              className="task-more"
+              onClick={() => {
+                const url = urls[u.attachment_path]
+                if (!url) return
+                if (u.attachment_type?.startsWith('image/')) onOpenFile?.(u)
+                else window.open(url, '_blank', 'noreferrer')
+              }}
+            >
+              {u.attachment_name ?? 'File'}
+            </button>
+          ))}
+        </div>
+      )}
+      {canCancel && onCancel && (
+        <button type="button" className="task-cancel" onClick={onCancel}>Cancel task</button>
+      )}
+    </div>
+  )
+}
+
+export function TaskSheet({ ais, defaultTo, Avatar, avatars = {}, onCreate, onCancel }) {
+  const [to, setTo] = useState(defaultTo ?? ais[0]?.id ?? '')
+  const [title, setTitle] = useState('')
+  const [due, setDue] = useState('')
+  const [busy, setBusy] = useState(false)
+  const ready = to && title.trim() && !busy
+
+  async function create(e) {
+    e?.preventDefault()
+    if (!ready) return
+    setBusy(true)
+    // datetime-local has no timezone: convert in the browser so the stored
+    // UTC time matches what the person picked in their own timezone.
+    const dueIso = due ? new Date(due).toISOString() : null
+    await onCreate({ assignee: to, title: title.trim(), due: dueIso })
+    setBusy(false)
+  }
+
+  return (
+    <div className="sheet-backdrop" onClick={onCancel}>
+      <div className="sheet tool-sheet" role="dialog" aria-label="Assign a task to an AI" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-grabber" aria-hidden="true" />
+        <div className="sheet-head">
+          <span>Assign a task</span>
+          <button className="sheet-done" onClick={onCancel}>Done</button>
+        </div>
+        <form onSubmit={create}>
+          <div className="sheet-section">
+            <p className="setting-note muted">Give an AI in this chat something to do. It will work with its own computer and browser, and report back here. The task only names the site, never a password.</p>
+            <div className="tool-list">
+              {ais.map((a) => (
+                <button key={a.id} type="button" className={`tool-row task-pick ${to === a.id ? 'on' : ''}`} onClick={() => setTo(a.id)} aria-pressed={to === a.id}>
+                  {Avatar ? <Avatar name={a.name ?? '?'} src={avatars[a.id]} /> : null}
+                  <span>{a.name ?? '…'}</span>
+                </button>
+              ))}
+            </div>
+            {ais.length === 0 && <p className="setting-note muted">No AI member is in this chat yet.</p>}
+          </div>
+          <div className="sheet-section">
+            <input
+              className="group-name-input tool-text"
+              autoFocus
+              value={title}
+              maxLength={4000}
+              placeholder="What should it do? e.g. Research the 5 best caterers in Kano with prices"
+              onChange={(e) => setTitle(e.target.value)}
+            />
+            <div className="tool-list">
+              <label className="tool-row">
+                <span>Due</span>
+                <input type="datetime-local" value={due} onChange={(e) => setDue(e.target.value)} />
+              </label>
+            </div>
+          </div>
+          <div className="sheet-section">
+            <button type="submit" className="sheet-done" disabled={!ready}>Assign task</button>
+            <button type="button" className="sheet-cancel" onClick={onCancel}>Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
