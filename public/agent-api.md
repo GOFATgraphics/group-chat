@@ -491,6 +491,73 @@ JPEG, PNG, WebP or GIF, up to 5 MB (a base64 upload must stay under about
 A square image looks best; it is shown cropped to a circle. `GET /api/members`
 includes everyone's `avatar_url`.
 
+## 9. Projects (trade dashboard)
+
+Projects are containers for trade ingestion work, one container per
+ingestion setup, not one trade. Each project has its own queue, stages,
+database view and trade log view, backed by the server tables from
+migration 0019. This is the wiring Adam extraction and Ali finishing will
+write to; it is not a chat, and it is not Google Sheets.
+
+Access is restricted by row-level security, and the API adds nothing on
+top of it: a project (and its queue, trade, reference, note and sync-log
+rows) is visible only to the project owner, the group owner (username
+`mubarak`), or an AI member (`adam` or `ali`). Other members get no rows,
+which the API reports as 404. Deletes are project-owner only. A caller
+who is not a project member gets 403 on a write even if they guess a
+project id. Never share project data with anyone outside that set.
+
+```http
+GET    /api/projects
+POST   /api/projects                     { "name": "Mercancia Trade Capture" }
+GET    /api/projects/<id>                queue, trades, references, notes, sync_log
+PATCH  /api/projects/<id>                { "name": "New name" }  (owner only)
+DELETE /api/projects/<id>                (owner only)
+GET    /api/projects/<id>/queue
+GET    /api/projects/<id>/trades
+GET    /api/projects/<id>/references
+GET    /api/projects/<id>/notes
+GET    /api/projects/<id>/sync-log
+```
+
+Write rows for Adam extraction and Ali finishing (all scoped to the
+project in the URL; `project_id` is never taken from the body):
+
+```http
+POST   /api/projects/<id>/queue
+       { "message_id": "mail-123", "sender": "…", "subject": "…", "body": "…",
+         "status": "queued" }
+       status: queued, extracted, finished, matched, new, failed, needs_review
+POST   /api/projects/<id>/trades
+       { "contract_ref": "…", "buyer": "…", "seller": "…", "commodity": "…",
+         "quantity": 500, "disport": "…", "stage": "extracted",
+         "queue_id": 12, "fingerprint": "…" }
+       stage: extracted, finished, matched, new
+POST   /api/projects/<id>/references
+       { "shadow_ref": "…", "live_refs": "…", "external_refs": "…", "fingerprint": "…" }
+POST   /api/projects/<id>/notes
+       { "trade_id": 3, "subject": "…", "summary": "…",
+         "priority": "…", "action_required": "…", "message_id": "mail-123" }
+POST   /api/projects/<id>/sync-log
+       { "trade_id": 3, "target": "google_sheet", "success": false,
+         "failure_reason": "…" }
+PATCH  /api/projects/<id>/queue/<row id>    { "status": "extracted", … }
+PATCH  /api/projects/<id>/trades/<row id>   { "stage": "finished", … }
+DELETE /api/projects/<id>/queue|trades|references|notes|sync-log/<row id>
+       (owner only)
+```
+
+- `POST /api/projects` sets `owner_id` to the caller, whatever the body says.
+- A queue row needs `message_id`; it is unique per project.
+- A trade's `queue_id` or a note's / sync-log's `trade_id`, when given,
+  must already belong to the same project, or the call is 404.
+- The dashboard stage counts in the app are trades in that stage, plus
+  queue rows in the same status with no trade yet, so a queued thread
+  linked to a trade is counted once.
+- The trade log view at this stage is the in-app `sync_log`, not Google
+  Sheets sync. Sheets sync is not in this build, and a failed sync never
+  deletes or blocks a saved trade.
+
 ## Errors
 
 Errors are JSON, for example `{ "error": "Access token expired. Call POST /api/refresh." }`.

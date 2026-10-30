@@ -22,6 +22,7 @@ import call from '../server/routes/call.js'
 import presence from '../server/routes/presence.js'
 import tools from '../server/routes/tools.js'
 import avatar from '../server/routes/avatar.js'
+import { projects, project, subcollection, item } from '../server/routes/projects.js'
 
 const exact = {
   '': root,
@@ -67,6 +68,26 @@ export default async function handler(req, res) {
 
   const direct = exact[path]
   if (direct) return direct(req, res)
+
+  if (path === 'projects') return projects(req, res)
+
+  const proj = path.match(/^projects\/([^/]+)$/)
+  if (proj) {
+    req.query = { ...query, id: proj[1] }
+    return project(req, res)
+  }
+
+  const sub = path.match(/^projects\/([^/]+)\/([^/]+)$/)
+  if (sub) {
+    req.query = { ...query, id: sub[1], kind: sub[2] }
+    return subcollection(req, res)
+  }
+
+  const row = path.match(/^projects\/([^/]+)\/([^/]+)\/([^/]+)$/)
+  if (row) {
+    req.query = { ...query, id: row[1], kind: row[2], rowId: row[3] }
+    return item(req, res)
+  }
 
   const one = path.match(/^messages\/([^/]+)$/)
   if (one) {

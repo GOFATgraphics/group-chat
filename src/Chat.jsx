@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import { supabase, BUCKET, AVATAR_BUCKET, avatarUrl } from './supabase.js'
 import Splash from './Splash.jsx'
 import ChatList, { listPreview, listTime } from './ChatList.jsx'
-import { ProjectsList, CreateProject, ProjectDashboard, loadProjects, saveProjects, createProjectRecord } from './Projects.jsx'
+import { ProjectsList, CreateProject, ProjectDashboard, listProjects, createProject } from './Projects.jsx'
 import GroupSheet from './Groups.jsx'
 import {
   AIBadge,
@@ -104,19 +104,53 @@ export default function Chat({ session }) {
   const listVisibleRef = useRef(true)
   listVisibleRef.current = wide || screen === 'list'
   const [showSettings, setShowSettings] = useState(false)
-  // Project pages (local only, localStorage): null = chats, otherwise
+  // Project pages (server-backed, /api/projects): null = chats, otherwise
   // { page: 'list' } | { page: 'create' } | { page: 'dashboard', project }.
   // When set, the whole Project page replaces the chat shell, it is never
-  // rendered inside a chat pane or as a modal.
+  // rendered inside a chat pane or as a modal. Projects are fetched with
+  // the signed-in session token, so the server's RLS rules apply.
   const [projectScreen, setProjectScreen] = useState(null)
-  const [projects, setProjects] = useState(() => loadProjects())
-  const openProjects = () => setProjectScreen({ page: 'list' })
-  const createProjectAndOpen = (name) => {
-    const project = createProjectRecord(name)
-    const next = [...projects, project]
-    setProjects(next)
-    saveProjects(next)
-    setProjectScreen({ page: 'dashboard', project })
+  const [projects, setProjects] = useState([])
+  const [projectsLoading, setProjectsLoading] = useState(false)
+  const [projectsError, setProjectsError] = useState('')
+  const [createError, setCreateError] = useState('')
+  const refreshProjects = useCallback(async () => {
+    const token = session?.access_token
+    if (!token) {
+      setProjectsError('You are not signed in. Sign in again to open projects.')
+      return
+    }
+    setProjectsLoading(true)
+    setProjectsError('')
+    try {
+      setProjects(await listProjects(token))
+    } catch (err) {
+      setProjectsError(err.message || 'Could not load projects.')
+    } finally {
+      setProjectsLoading(false)
+    }
+  }, [session?.access_token])
+  useEffect(() => {
+    refreshProjects()
+  }, [refreshProjects])
+  const openProjects = () => {
+    refreshProjects()
+    setProjectScreen({ page: 'list' })
+  }
+  const createProjectAndOpen = async (name) => {
+    const token = session?.access_token
+    if (!token) {
+      setCreateError('You are not signed in. Sign in again to create a project.')
+      return
+    }
+    setCreateError('')
+    try {
+      const project = await createProject(token, name)
+      setProjects((prev) => [...prev, project])
+      setProjectScreen({ page: 'dashboard', project })
+    } catch (err) {
+      setCreateError(err.message || 'Could not create this project.')
+    }
   }
   // Conversation key -> its newest message, for the chat list.
   const [lastByKey, setLastByKey] = useState({})
@@ -2134,6 +2168,8 @@ export default function Chat({ session }) {
     return (
       <ProjectsList
         projects={projects}
+        loading={projectsLoading}
+        error={projectsError}
         onCreate={() => setProjectScreen({ page: 'create' })}
         onOpen={(project) => setProjectScreen({ page: 'dashboard', project })}
         onBack={() => setProjectScreen(null)}
@@ -2141,10 +2177,10 @@ export default function Chat({ session }) {
     )
   }
   if (projectScreen?.page === 'create') {
-    return <CreateProject onDone={createProjectAndOpen} onBack={() => setProjectScreen({ page: 'list' })} />
+    return <CreateProject onDone={createProjectAndOpen} onBack={() => setProjectScreen({ page: 'list' })} error={createError} />
   }
   if (projectScreen?.page === 'dashboard') {
-    return <ProjectDashboard project={projectScreen.project} onBack={() => setProjectScreen({ page: 'list' })} />
+    return <ProjectDashboard project={projectScreen.project} token={session?.access_token} onBack={() => setProjectScreen({ page: 'list' })} />
   }
 
   return (
