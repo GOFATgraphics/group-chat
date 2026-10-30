@@ -48,6 +48,7 @@ const exact = {
   pins: tools.pins,
   polls: tools.polls,
   'polls/vote': tools.vote,
+  'polls/choice': tools.choice,
   notes: tools.notes,
   schedule: tools.schedule,
   tasks: tools.tasks,

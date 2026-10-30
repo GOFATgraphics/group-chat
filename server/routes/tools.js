@@ -3,6 +3,7 @@
 //   GET    /api/pins[?group=…|?with=…]          POST/DELETE /api/pins { message_id }
 //   POST   /api/polls { question, options: [..], multiple?, to?|group? }
 //   POST   /api/polls/vote { poll_id | message_id, option | options: [..] }
+//   POST   /api/polls/choice { poll_id | message_id, text }   (Add Choice)
 //   GET    /api/notes[?kind=task][&group=…|&with=…]
 //   POST   /api/notes { kind: note|task|decision, text, to?|group? }
 //   PATCH  /api/notes { id, text?, done? }       DELETE /api/notes { id }
@@ -106,6 +107,19 @@ const vote = route({
   },
 })
 
+const choice = route({
+  async POST(req) {
+    const { sb } = await auth(req)
+    const b = args(req)
+    let q = sb.from('polls').select('id')
+    q = b.poll_id ? q.eq('id', b.poll_id) : q.eq('message_id', Number(b.message_id))
+    const poll = check(await q.maybeSingle())
+    if (!poll) throw new HttpError(404, 'Poll not found')
+    const options = check(await sb.rpc('add_poll_option', { p_poll: poll.id, p_text: String(b.text ?? '') }))
+    return { poll_id: poll.id, options }
+  },
+})
+
 const NOTE_KINDS = ['note', 'task', 'decision']
 const notes = route({
   async GET(req) {
@@ -184,4 +198,4 @@ const tasks = route({
   },
 })
 
-export default { search, pins, polls, vote, notes, schedule, tasks }
+export default { search, pins, polls, vote, choice, notes, schedule, tasks }

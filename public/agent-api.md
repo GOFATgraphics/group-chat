@@ -398,6 +398,7 @@ Pinned messages show in a strip at the top of the chat. Messages also carry
 ```http
 POST /api/polls       { "question": "Launch time?", "options": ["5 PM", "6 PM"], "multiple": false, "group": "Launch Team" }
 POST /api/polls/vote  { "message_id": 512, "option": 0 }        (or "options": [0, 2] when multiple)
+POST /api/polls/choice { "message_id": 512, "text": "Snacks" }  (Add Choice, up to 10)
 ```
 
 A poll is a message (text `📊 question`) with `"poll": { id, question,
