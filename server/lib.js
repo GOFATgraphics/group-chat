@@ -84,6 +84,30 @@ export function admin() {
   return createClient(SUPABASE_URL, secret, { auth: { persistSession: false, autoRefreshToken: false } })
 }
 
+// Why a key didn't work, as precisely as is safe to say (never echoes the
+// key back beyond its public 12-character prefix).
+const KEY_LENGTH = 47
+async function explainBadKey(adm, key, row) {
+  if (row?.revoked_at) return 'This API key was revoked. Ask for a new one (People → API keys).'
+  const tips = []
+  if (/\s/.test(key)) tips.push('it contains a space or line break')
+  if (/[^A-Za-z0-9_-]/.test(key.slice(4))) tips.push('it contains characters that keys never have (only letters, digits, - and _)')
+  if (key.length !== KEY_LENGTH) tips.push(`it is ${key.length} characters long but keys are ${KEY_LENGTH}`)
+  const { data: same } = await adm.from('api_keys').select('id, revoked_at').eq('key_prefix', key.slice(0, 12)).limit(1)
+  if (same?.length) {
+    tips.push(
+      same[0].revoked_at
+        ? 'it starts like a key that has been revoked'
+        : 'it starts like a real key but the rest is different, so characters were changed or lost when it was copied',
+    )
+  }
+  return (
+    `Invalid API key (starts ${key.slice(0, 12)}…)` +
+    (tips.length ? `: ${tips.join('; ')}.` : '.') +
+    ' Copy the key again exactly (chat apps often drop _ or turn it into italics; paste it inside a code block) or ask for a new one.'
+  )
+}
+
 // Sessions per key hash, reused while this function instance stays warm.
 const keySessions = new Map()
 
@@ -101,7 +125,7 @@ async function keySession(key) {
   if (error) throw new HttpError(500, error.message)
   if (!row || row.revoked_at) {
     keySessions.delete(hash)
-    throw new HttpError(401, 'Invalid or revoked API key')
+    throw new HttpError(401, await explainBadKey(adm, key, row))
   }
   if (!cached || Date.now() - cached.usedAt > LAST_USED_EVERY_MS) {
     await adm.from('api_keys').update({ last_used_at: new Date().toISOString() }).eq('id', row.id)
