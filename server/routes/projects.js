@@ -21,6 +21,7 @@
 // Reads and writes below also fetch the project first, so a forbidden
 // project fails as 404 before any child row is touched.
 
+import { randomUUID } from 'node:crypto'
 import { route, auth, body, check, HttpError } from '../lib.js'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -102,7 +103,16 @@ const projects = route({
     const name = typeof b.name === 'string' ? b.name.trim() : ''
     if (!name) throw new HttpError(400, 'name is required')
     if (name.length > 200) throw new HttpError(400, 'name must be 200 characters or fewer')
-    const row = check(await sb.from('projects').insert({ owner_id: userId, name }).select('id, owner_id, name, created_at').single())
+    // Do NOT use insert().select() here: the projects SELECT policy calls
+    // can_access_project(), which queries the projects table itself, and in
+    // an INSERT ... RETURNING query it cannot yet see the row just created,
+    // so it fails with an RLS error even though the INSERT itself passes
+    // (proven in Supabase: insert without returning succeeds, with
+    // returning fails). Insert with a client-generated id, then fetch the
+    // row in a separate query, which sees it normally.
+    const id = randomUUID()
+    check(await sb.from('projects').insert({ id, owner_id: userId, name }))
+    const row = check(await sb.from('projects').select('id, owner_id, name, created_at').eq('id', id).single())
     return { project: row }
   },
 })
