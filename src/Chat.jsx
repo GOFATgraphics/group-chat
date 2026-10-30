@@ -552,6 +552,7 @@ export default function Chat({ session }) {
     if (!chatActive) return
     clearUnread(viewKey(view))
     markAsRead(messagesRef.current)
+    refreshReactions()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, chatActive])
 
@@ -981,11 +982,19 @@ export default function Chat({ session }) {
     if (own.length) loadReads(own.slice(-50))
   }, [myId, loadReads])
 
+  // Reactions (tapbacks) can be missed the same way, e.g. an AI reacting
+  // while the phone was in the background: re-read them for what's on screen.
+  const refreshReactions = useCallback(() => {
+    const ids = messagesRef.current.filter((m) => typeof m.id === 'number').slice(-60).map((m) => m.id)
+    if (ids.length) loadReactions(ids)
+  }, [loadReactions])
+
   useEffect(() => {
     const onBack = () => {
       if (document.visibilityState !== 'visible') return
       catchUp()
       refreshReads()
+      refreshReactions()
       const pending = pendingReadsRef.current
       pendingReadsRef.current = []
       if (pending.length) markAsRead(pending)
@@ -993,8 +1002,14 @@ export default function Chat({ session }) {
     document.addEventListener('visibilitychange', onBack)
     window.addEventListener('focus', onBack)
     window.addEventListener('online', onBack)
+    let tick = 0
     const timer = setInterval(() => {
-      if (document.visibilityState === 'visible') catchUp()
+      if (document.visibilityState !== 'visible') return
+      catchUp()
+      if (++tick % 3 === 0) {
+        refreshReactions()
+        refreshReads()
+      }
     }, 4000)
     return () => {
       document.removeEventListener('visibilitychange', onBack)
@@ -1002,7 +1017,7 @@ export default function Chat({ session }) {
       window.removeEventListener('online', onBack)
       clearInterval(timer)
     }
-  }, [catchUp, refreshReads, markAsRead])
+  }, [catchUp, refreshReads, refreshReactions, markAsRead])
 
   useEffect(() => {
     // One handler for every new message, whether it came live over the
