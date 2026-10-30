@@ -90,14 +90,21 @@ export default route({
     }
     let file = await readFile(b)
     let voiceDuration = null
+    let voiceError = null
     if (b.as_voice) {
       // Speak the text and send it as a voice note instead of a text message.
       if (file) throw new HttpError(400, 'Use either as_voice or a file, not both')
       const me = check(await sb.from('profiles').select('username').eq('id', userId).single())
-      const spoken = await speak(text, voiceFor(me.username, b.voice))
-      file = spoken
-      voiceDuration = spoken.duration
-      text = ''
+      try {
+        const spoken = await speak(text, voiceFor(me.username, b.voice))
+        file = spoken
+        voiceDuration = spoken.duration
+        text = ''
+      } catch (err) {
+        // No speech available (e.g. AI Gateway has no credits): still deliver
+        // the reply, as text, and say why in the response.
+        voiceError = err.message
+      }
     }
     if (!text && !file) throw new HttpError(400, 'Send "text", "file" or "file_url"')
 
@@ -128,7 +135,7 @@ export default route({
       check({ error })
     }
     const [message] = await present(sb, [data])
-    return { message }
+    return voiceError ? { message, voice_error: `Sent as text instead: ${voiceError}` } : { message }
   },
 })
 

@@ -18,6 +18,7 @@ import { gateway } from '@ai-sdk/gateway'
 import { getVercelOidcToken } from '@vercel/oidc'
 import { route, auth, body, check, HttpError } from '../lib.js'
 import { PERSONAS, defaultPersona } from '../personas.js'
+import { speak, transcribeAudio } from '../speech.js'
 
 export const CALL_MODEL = process.env.CALL_MODEL || 'openai/gpt-realtime-2'
 export const CALL_MAX_SECONDS = Math.min(30, Number(process.env.CALL_MAX_MINUTES) || 10) * 60
@@ -139,30 +140,58 @@ const token = route({
   },
 })
 
-// GET /api/call/check: can this deployment start live calls? Tries to mint
-// a client secret (discarded, never returned) and reads the AI Gateway credit
-// balance. Safe to open in a browser.
+// GET /api/call/check (also /api/ai/check): what can this deployment do
+// with Vercel AI Gateway right now? Tries each AI feature with a tiny request
+// (nothing is returned or stored) and reads the credit balance. Safe to open
+// in a browser; it never returns a usable token.
 const checkRoute = route({
   async GET() {
-    const out = { model: CALL_MODEL }
-    try {
-      await gateway.experimental_realtime.getToken({ model: CALL_MODEL })
-      out.realtime = 'ok'
-    } catch (err) {
-      console.error('realtime check failed', err)
-      out.realtime = explain(err)
-      out.raw = { message: err?.message, statusCode: err?.statusCode, name: err?.name, cause: err?.cause?.message }
+    const out = {
+      auth: process.env.AI_GATEWAY_API_KEY ? 'AI Gateway API key' : 'Vercel OIDC (no AI_GATEWAY_API_KEY set)',
     }
+    const attempt = async (name, fn) => {
+      try {
+        await fn()
+        out[name] = 'ok'
+      } catch (err) {
+        console.error(`ai check ${name} failed`, err)
+        out[name] = explain(err)
+      }
+    }
+    await Promise.all([
+      attempt('live_calls', () => gateway.experimental_realtime.getToken({ model: CALL_MODEL })),
+      attempt('voice_replies', () => speak('ok', 'alloy')),
+      attempt('transcription', () => transcribeAudio(SILENT_WAV, 'audio/wav')),
+    ])
     try {
       const key = process.env.AI_GATEWAY_API_KEY || (await getVercelOidcToken().catch(() => ''))
-      out.auth = process.env.AI_GATEWAY_API_KEY ? 'api key' : key ? 'vercel oidc' : 'none'
       const res = await fetch('https://ai-gateway.vercel.sh/v1/credits', { headers: { Authorization: `Bearer ${key}` } })
-      out.credits = res.ok ? await res.json() : `HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`
+      out.credits = res.ok ? await res.json() : `HTTP ${res.status}`
     } catch (err) {
       out.credits = `unavailable: ${err.message}`
     }
+    out.ready = ['live_calls', 'voice_replies', 'transcription'].every((k) => out[k] === 'ok')
     return out
   },
 })
+
+// 0.25 s of silence, 16 kHz mono 16-bit WAV, for the transcription check.
+const SILENT_WAV = (() => {
+  const samples = 4000
+  const buf = Buffer.alloc(44 + samples * 2)
+  buf.write('RIFF', 0)
+  buf.writeUInt32LE(36 + samples * 2, 4)
+  buf.write('WAVEfmt ', 8)
+  buf.writeUInt32LE(16, 16)
+  buf.writeUInt16LE(1, 20)
+  buf.writeUInt16LE(1, 22)
+  buf.writeUInt32LE(16000, 24)
+  buf.writeUInt32LE(32000, 28)
+  buf.writeUInt16LE(2, 32)
+  buf.writeUInt16LE(16, 34)
+  buf.write('data', 36)
+  buf.writeUInt32LE(samples * 2, 40)
+  return new Uint8Array(buf)
+})()
 
 export default { start, token, check: checkRoute }

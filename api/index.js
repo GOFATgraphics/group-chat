@@ -39,6 +39,7 @@ const exact = {
   'call/start': call.start,
   'call/token': call.token,
   'call/check': call.check,
+  'ai/check': call.check,
   presence,
 }
 
