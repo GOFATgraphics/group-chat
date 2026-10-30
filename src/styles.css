@@ -2437,7 +2437,21 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
 .attach-pop button svg { flex-shrink: 0; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.12)); }
 
 /* ---- Project pages (local build, phase 1) ---- */
-.project-page { max-width: 900px; margin: 0 auto; padding: 20px 16px calc(32px + env(safe-area-inset-bottom)); background: var(--bg); color: var(--text); min-height: var(--app-height, 100dvh); }
+/* Project pages replace the chat shell entirely (see Chat.jsx: the
+   Project list, Create, and Dashboard are returned early, never inside
+   .shell or .chat). The app globally sets html, body { overflow: hidden }
+   so the chat shell can manage its own internal scrolling, but the
+   Project page was a plain <main> in normal flow with only min-height,
+   so it had no scroll container of its own: tall content grew past the
+   viewport and was clipped, and wide content could not be reached, on
+   desktop, laptop, and iPhone alike. Fix: make the Project page itself
+   the scroll container, exactly one viewport tall, using the same
+   --app-height the shell and login page use (visualViewport height, so
+   the iPhone keyboard does not break it). Vertical scroll is on this
+   page; horizontal scroll stays inside the table wrap below, so the
+   page itself never slides sideways. Chat rules are untouched. */
+.project-page { max-width: 900px; margin: 0 auto; padding: 20px 16px calc(32px + env(safe-area-inset-bottom)); background: var(--bg); color: var(--text); height: var(--app-height, 100dvh); overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.project-header h1 { overflow-wrap: anywhere; min-width: 0; }
 .project-header { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
 .project-header h1 { margin: 0; font-size: 28px; }
 .project-back { align-self: flex-start; border: 0; background: none; color: var(--blue); font-size: 16px; padding: 4px 0; }
@@ -2447,16 +2461,24 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
 .project-done-btn, .project-create-btn { margin-top: 16px; }
 .project-empty { color: var(--muted); padding: 16px 0; }
 .project-list { list-style: none; margin: 16px 0 0; padding: 0; }
-.project-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%; padding: 14px 0; border: 0; border-bottom: 0.5px solid var(--separator); background: none; color: var(--text); text-align: left; }
-.project-row-name { font-size: 17px; font-weight: 600; }
+.project-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%; min-width: 0; padding: 14px 0; border: 0; border-bottom: 0.5px solid var(--separator); background: none; color: var(--text); text-align: left; }
+.project-row-name { font-size: 17px; font-weight: 600; flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.project-row .muted { min-width: 0; flex-shrink: 1; overflow-wrap: anywhere; text-align: right; }
 .project-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 20px; }
 .project-tab { border: 0.5px solid var(--separator); border-radius: 999px; background: var(--fill); color: var(--text); padding: 8px 14px; font-size: 15px; }
 .project-tab.active { background: var(--blue); color: #fff; border-color: var(--blue); }
 .project-stage-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 @media (max-width: 600px) { .project-stage-grid { grid-template-columns: 1fr; } }
-.project-stage-card { border: 0.5px solid var(--separator); border-radius: 12px; padding: 16px; background: var(--raised); }
+.project-stage-card { border: 0.5px solid var(--separator); border-radius: 12px; padding: 16px; background: var(--raised); min-width: 0; overflow-wrap: anywhere; }
 .project-stage-card h3 { margin: 4px 0; text-transform: capitalize; }
 .project-stage-count { font-size: 32px; font-weight: 700; }
-.project-table-wrap { overflow-x: auto; }
+/* Database view table: the wrap is its own horizontal scroll container
+   (the page itself is overflow-x: hidden, so a wide table must scroll
+   here, not by sliding the whole page). min-width 640px forces the
+   scroll on narrow phones; -webkit-overflow-scrolling keeps the swipe
+   smooth on iPhone. Cells wrap long words so a single long buyer,
+   seller, or commodity name cannot push the table wider than its
+   scroll area. */
+.project-table-wrap { overflow-x: auto; overflow-y: hidden; max-width: 100%; -webkit-overflow-scrolling: touch; }
 .project-table { width: 100%; border-collapse: collapse; min-width: 640px; }
-.project-table th, .project-table td { text-align: left; padding: 10px 8px; border-bottom: 0.5px solid var(--separator); font-size: 14px; }
+.project-table th, .project-table td { text-align: left; padding: 10px 8px; border-bottom: 0.5px solid var(--separator); font-size: 14px; overflow-wrap: anywhere; }
