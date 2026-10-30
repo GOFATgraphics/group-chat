@@ -2277,6 +2277,9 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
   font-weight: 600;
   text-align: left;
   transition: width 0.45s cubic-bezier(0.34, 1.3, 0.44, 1), background 0.2s, transform 0.12s;
+  /* never narrower than its words: votes only make a pill wider */
+  min-width: max-content;
+  max-width: 100%;
 }
 .ipoll-option:active { transform: scale(0.97); }
 .ipoll-option:disabled { cursor: default; }
