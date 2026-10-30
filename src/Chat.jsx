@@ -19,6 +19,8 @@ const GROUP_WINDOW_MS = 5 * 60 * 1000
 const STAMP_GAP_MS = 15 * 60 * 1000
 const LONG_PRESS_MS = 450
 const AVATAR_PX = 256
+const WIDE_QUERY = '(min-width: 900px)'
+const PREVIEW_FIELDS = 'id, user_id, recipient_id, content, attachment_path, attachment_name, attachment_type, call_duration, created_at'
 
 export default function Chat({ session }) {
   const myId = session.user.id
@@ -58,7 +60,29 @@ export default function Chat({ session }) {
     }
     return { type: 'group' }
   })
-  const [showPanel, setShowPanel] = useState(false)
+  // Phones show one screen at a time: the chat list, or the open chat sliding
+  // over it. Wide screens show both side by side, so a chat is always open.
+  const [wide, setWide] = useState(() => window.matchMedia?.(WIDE_QUERY).matches ?? false)
+  useEffect(() => {
+    const mq = window.matchMedia?.(WIDE_QUERY)
+    if (!mq) return
+    const onChange = () => setWide(mq.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+  const [screen, setScreen] = useState(() =>
+    new URLSearchParams(window.location.search).get('view') ? 'chat' : 'list',
+  )
+  // The chat counts as "being read" only while it is on screen.
+  const chatActive = wide || screen === 'chat'
+  const activeRef = useRef(chatActive)
+  activeRef.current = chatActive
+  // While the list is on screen it shows new messages itself: no pop-up notice.
+  const listVisibleRef = useRef(true)
+  listVisibleRef.current = wide || screen === 'list'
+  const [showSettings, setShowSettings] = useState(false)
+  // Conversation key -> its newest message, for the chat list.
+  const [lastByKey, setLastByKey] = useState({})
   const [dmPeers, setDmPeers] = useState([])
   const [ownerPairs, setOwnerPairs] = useState([])
   const [lightbox, setLightbox] = useState(null) // { url, name, type } for the full-screen viewer
@@ -121,6 +145,9 @@ export default function Chat({ session }) {
   }, [view])
 
   const listRef = useRef(null)
+  const shellRef = useRef(null)
+  const paneRef = useRef(null)
+  const edgeRef = useRef(null)
   const stickToBottom = useRef(true)
   const preserveScroll = useRef(null)
 
@@ -231,7 +258,7 @@ export default function Chat({ session }) {
   const markAsRead = useCallback(
     (rows) => {
       const v = viewRef.current
-      if (!v || v.type === 'owner') return
+      if (!v || v.type === 'owner' || !activeRef.current) return
       const todo = (rows ?? []).filter(
         (m) => m && m.user_id !== myId && isMessageForView(m, v) && !markedReadRef.current.has(m.id),
       )
@@ -318,6 +345,69 @@ export default function Chat({ session }) {
     [myId],
   )
 
+  // ---- chat list ---------------------------------------------------------
+  const lastRef = useRef(lastByKey)
+  lastRef.current = lastByKey
+  const bumpLast = useCallback(
+    (m) => {
+      const { key } = notifyTarget(m)
+      setLastByKey((prev) => {
+        const cur = prev[key]
+        if (cur && (cur.id === m.id || Date.parse(cur.created_at) > Date.parse(m.created_at))) return prev
+        return { ...prev, [key]: m }
+      })
+    },
+    [notifyTarget],
+  )
+
+  // Newest message of every conversation, plus unread counts that survive a
+  // reload: anything from others newer than the last message you sent or
+  // read in that conversation.
+  const loadInbox = useCallback(async () => {
+    if (!myId) return
+    const [{ data: groupRows }, { data: dmRows }, { data: readRows }] = await Promise.all([
+      supabase.from('messages').select(PREVIEW_FIELDS).is('recipient_id', null).order('id', { ascending: false }).limit(150),
+      supabase.from('messages').select(PREVIEW_FIELDS).not('recipient_id', 'is', null).order('id', { ascending: false }).limit(600),
+      supabase.from('message_reads').select('message_id').eq('user_id', myId).order('message_id', { ascending: false }).limit(600),
+    ])
+    const readIds = new Set((readRows ?? []).map((r) => r.message_id))
+    const byKey = {}
+    for (const m of [...(groupRows ?? []), ...(dmRows ?? [])]) {
+      const { key, owner } = notifyTarget(m)
+      ;(byKey[key] ??= { owner, rows: [] }).rows.push(m)
+      if (owner) addOwnerPair(m.user_id, m.recipient_id)
+      else if (m.recipient_id) addDmPeer(m.user_id === myId ? m.recipient_id : m.user_id)
+    }
+    const last = {}
+    const counts = {}
+    for (const [key, { owner, rows }] of Object.entries(byKey)) {
+      rows.sort((a, b) => b.id - a.id)
+      last[key] = rows[0]
+      if (owner) continue
+      const seen = rows.find((m) => m.user_id === myId || readIds.has(m.id))
+      counts[key] = rows.filter((m) => m.user_id !== myId && (!seen || m.id > seen.id)).length
+    }
+    setLastByKey((prev) => {
+      const next = { ...last }
+      for (const [key, m] of Object.entries(prev)) if (!next[key] || m.id > next[key].id) next[key] = m
+      return next
+    })
+    setUnread((prev) => {
+      const next = { ...prev }
+      const open = activeRef.current ? viewKey(viewRef.current) : null
+      for (const [key, n] of Object.entries(counts)) {
+        if (key === open) continue
+        if (n > (next[key] ?? 0)) next[key] = n
+      }
+      return next
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [myId, notifyTarget, addDmPeer, addOwnerPair])
+
+  useEffect(() => {
+    loadInbox()
+  }, [loadInbox])
+
   const previewOf = (m) => {
     if (m.call_duration != null) return '📞 Voice call'
     if (m.content?.trim()) {
@@ -333,16 +423,48 @@ export default function Chat({ session }) {
     return 'sent a message'
   }
 
-  const openTarget = useCallback(
-    (target) => {
-      clearUnread(target.key)
+  // The one way to open a conversation: from the list, a notification, a
+  // member's "Message" button, or a notification tap. Reopening the chat that
+  // is already loaded is instant (no reload). On phones the chat slides in and
+  // gets a history entry, so the back gesture / back button returns to the list.
+  const openConversation = useCallback(
+    (v) => {
+      const same = viewKey(v) === viewKey(viewRef.current)
+      if (!same) setView(v)
       setNotice(null)
-      setView(target.view)
       setShowMembers(false)
-      setShowPanel(false)
+      setShowSettings(false)
+      if (!window.matchMedia?.(WIDE_QUERY).matches && history.state?.chatOpen !== true) {
+        history.pushState({ chatOpen: true }, '')
+      }
+      setScreen('chat')
     },
-    [clearUnread],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
   )
+  const openTarget = useCallback((target) => openConversation(target.view), [openConversation])
+
+  const goBack = useCallback(() => {
+    setScreen('list')
+    if (history.state?.chatOpen) history.back()
+  }, [])
+
+  useEffect(() => {
+    const onPop = () => {
+      if (!history.state?.chatOpen) setScreen('list')
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+
+  // A chat opened straight from a notification link still goes back to the list.
+  useEffect(() => {
+    if (screen === 'chat' && !wide && !history.state?.chatOpen) {
+      history.replaceState({}, '')
+      history.pushState({ chatOpen: true }, '')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // The single place a realtime arrival becomes a notification. Own
   // messages and messages in the currently viewed conversation never reach
@@ -353,7 +475,9 @@ export default function Chat({ session }) {
       const target = notifyTarget(m)
       const preview = previewOf(m)
       setUnread((prev) => ({ ...prev, [target.key]: (prev[target.key] ?? 0) + 1 }))
-      setNotice({ key: target.key, view: target.view, senderId: m.user_id, preview, owner: target.owner })
+      if (!listVisibleRef.current) {
+        setNotice({ key: target.key, view: target.view, senderId: m.user_id, preview, owner: target.owner })
+      }
       if (browserNotificationsRef.current && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
         const sender = profilesRef.current[m.user_id] ?? 'Someone'
         const convo = target.owner ? 'Owner view' : target.label ?? profilesRef.current[target.view.peerId] ?? 'Private chat'
@@ -423,14 +547,17 @@ export default function Chat({ session }) {
 
   // A conversation's unread count clears when it is opened, and the current
   // conversation's count clears again when the tab regains focus.
+  // Coming onto the screen (opened, or slid back in) marks what's shown as read.
   useEffect(() => {
+    if (!chatActive) return
     clearUnread(viewKey(view))
+    markAsRead(messagesRef.current)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view])
+  }, [view, chatActive])
 
   useEffect(() => {
     const onFocus = () => {
-      if (!document.hidden) clearUnread(viewKey(viewRef.current))
+      if (!document.hidden && activeRef.current) clearUnread(viewKey(viewRef.current))
     }
     window.addEventListener('focus', onFocus)
     document.addEventListener('visibilitychange', onFocus)
@@ -542,12 +669,11 @@ export default function Chat({ session }) {
     const onServiceWorkerMessage = (e) => {
       const v = e.data?.view
       if (e.data?.type !== 'open-conversation' || !v) return
-      if (v.type === 'group') setView({ type: 'group' })
-      else if (v.type === 'dm' && v.peerId) setView({ type: 'dm', peerId: v.peerId })
+      if (v.type === 'group') openConversation({ type: 'group' })
+      else if (v.type === 'dm' && v.peerId) openConversation({ type: 'dm', peerId: v.peerId })
       else if (v.type === 'owner' && v.aId && v.bId && isOwnerRef.current) {
-        setView({ type: 'owner', aId: v.aId, bId: v.bId })
+        openConversation({ type: 'owner', aId: v.aId, bId: v.bId })
       }
-      setShowPanel(false)
     }
     navigator.serviceWorker?.addEventListener('message', onServiceWorkerMessage)
     return () => navigator.serviceWorker?.removeEventListener('message', onServiceWorkerMessage)
@@ -635,21 +761,7 @@ export default function Chat({ session }) {
 
   function openDm(id) {
     addDmPeer(id)
-    setView({ type: 'dm', peerId: id })
-    setShowMembers(false)
-    setShowPanel(false)
-  }
-
-  function openOwner(a, b) {
-    const [first, second] = [a, b].sort()
-    setView({ type: 'owner', aId: first, bId: second })
-    setShowMembers(false)
-    setShowPanel(false)
-  }
-
-  function openGroup() {
-    setView({ type: 'group' })
-    setShowPanel(false)
+    openConversation({ type: 'dm', peerId: id })
   }
 
   const ensureProfile = useCallback(async (userId) => {
@@ -773,15 +885,18 @@ export default function Chat({ session }) {
     }
   }, [myId])
 
-  // Escape closes the side panel, like tapping its backdrop or close button.
+  // Escape closes an open sheet, or goes back to the list on a phone.
   useEffect(() => {
-    if (!showPanel) return
     const onKey = (e) => {
-      if (e.key === 'Escape') setShowPanel(false)
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      if (document.querySelector('.lightbox, .media-viewer, .call-screen')) return
+      if (showMembers) setShowMembers(false)
+      else if (showSettings) setShowSettings(false)
+      else if (!wide && screen === 'chat' && !document.activeElement?.closest?.('.composer')) goBack()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [showPanel])
+  }, [showMembers, showSettings, wide, screen, goBack])
 
   // Load the currently selected conversation (group or one DM) from scratch.
   useEffect(() => {
@@ -897,6 +1012,7 @@ export default function Chat({ session }) {
         seenIdsRef.current.add(m.id)
         if (lastIdRef.current == null || m.id > lastIdRef.current) lastIdRef.current = m.id
         clearTyping(m.user_id)
+        bumpLast(m)
         const peer = dmPeerOf(m)
         if (peer) {
           // A DM for a peer not currently being viewed still adds that peer
@@ -921,6 +1037,7 @@ export default function Chat({ session }) {
           if (viewRef.current.type === 'owner' && isMessageForView(m, viewRef.current)) {
             playReceive()
             addMessage(m)
+            if (!activeRef.current) notify(m)
             return
           }
           addOwnerPair(m.user_id, m.recipient_id)
@@ -939,18 +1056,23 @@ export default function Chat({ session }) {
           }
           return
         }
-        if (m.user_id !== myId) playReceive()
         addMessage(m)
-        markAsRead([m])
+        if (m.user_id !== myId) {
+          playReceive()
+          // Loaded in the background (phone showing the list): it's unread.
+          if (activeRef.current) markAsRead([m])
+          else notify(m)
+        }
     }
     incomingRef.current = onInsert
 
     const channel = supabase
       .channel('group-chat')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, ({ new: m }) => onInsert(m))
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, ({ old }) =>
-        setMessages((prev) => prev.filter((m) => m.id !== old.id)),
-      )
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, ({ old }) => {
+        setMessages((prev) => prev.filter((m) => m.id !== old.id))
+        if (Object.values(lastRef.current).some((m) => m.id === old.id)) loadInbox()
+      })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_reads' }, ({ new: r }) => {
         setReadTimes((prev) => ({ ...prev, [r.message_id]: { ...(prev[r.message_id] ?? {}), [r.user_id]: r.read_at } }))
         setReads((prev) => {
@@ -990,7 +1112,7 @@ export default function Chat({ session }) {
       incomingRef.current = null
       supabase.removeChannel(channel)
     }
-  }, [myId, catchUp, refreshReads, addMessage, applyReaction, dmPeerOf, addDmPeer, addOwnerPair, ensureProfile, isMessageForView, notify, markAsRead])
+  }, [myId, catchUp, refreshReads, addMessage, applyReaction, dmPeerOf, addDmPeer, addOwnerPair, ensureProfile, isMessageForView, notify, markAsRead, bumpLast, loadInbox])
 
   async function loadOlder() {
     const oldest = messages[0]
@@ -1083,6 +1205,7 @@ export default function Chat({ session }) {
       }
       stickToBottom.current = true
       setMessages((prev) => [...prev, draft])
+      bumpLast(draft)
       setReplyTo(null)
       playSend()
       deliver(draft)
@@ -1114,6 +1237,7 @@ export default function Chat({ session }) {
     }
     stickToBottom.current = true
     setMessages((prev) => [...prev, draft])
+    bumpLast(draft)
     setReplyTo(null)
     playSend()
     deliver(draft)
@@ -1336,7 +1460,6 @@ export default function Chat({ session }) {
         .map(([id]) => id),
     ]),
   ]
-  const hasUnread = Object.values(unread).some((n) => n > 0)
   const typingNames = typing.typers.map((id) => profiles[id]).filter(Boolean)
   const headerTyping = typingNames.length > 0
   const headerSubtitle = headerTyping
@@ -1354,14 +1477,10 @@ export default function Chat({ session }) {
   // Everyone else in the group, used only for the read-receipt rule:
   // a group message is blue only once every one of these has read it.
   const otherMemberIds = memberIds.filter((id) => id !== myId)
-  const headerFaces = [...memberIds.filter((id) => id !== myId), myId].slice(0, 3)
   const peerName = peerId ? profiles[peerId] ?? '…' : null
   const ownerNameA = ownerA ? profiles[ownerA] ?? '…' : null
   const ownerNameB = ownerB ? profiles[ownerB] ?? '…' : null
   const ownerPairLabel = isOwnerView ? `${ownerNameA} and ${ownerNameB}` : null
-  const dmList = dmPeers
-    .filter((id) => profiles[id])
-    .sort((a, b) => (profiles[a] ?? '').localeCompare(profiles[b] ?? ''))
   const ownerPairList = ownerPairs
     .filter(([a, b]) => profiles[a] && profiles[b])
     .sort((p, q) => `${profiles[p[0]]} and ${profiles[p[1]]}`.localeCompare(`${profiles[q[0]]} and ${profiles[q[1]]}`))
@@ -1372,44 +1491,155 @@ export default function Chat({ session }) {
       ? `Owner view · ${profiles[notice.view.aId] ?? '…'} and ${profiles[notice.view.bId] ?? '…'}`
       : notice.view.type === 'group'
         ? 'Group Chat'
-        : profiles[notice.view.peerId] ?? 'Private chat'
+        : 'Private message'
     : null
 
+  // Swipe from the left edge to go back to the list, following the finger
+  // like iOS. (Plain code, not hooks: this runs after the early returns.)
+  const setDrag = (dx) => {
+    const list = shellRef.current?.querySelector('.pane-list-wrap')
+    if (paneRef.current) paneRef.current.style.transform = dx == null ? '' : `translateX(${dx}px)`
+    if (list) list.style.transform = dx == null ? '' : `translateX(${-28 + (dx / window.innerWidth) * 28}%)`
+    shellRef.current?.classList.toggle('dragging', dx != null)
+  }
+  const edgeSwipe = wide
+    ? {}
+    : {
+        onTouchStart(e) {
+          const t = e.touches[0]
+          edgeRef.current = screen === 'chat' && e.touches.length === 1 && t.clientX < 28
+            ? { x: t.clientX, y: t.clientY, dx: 0, at: Date.now(), on: false }
+            : null
+        },
+        onTouchMove(e) {
+          const g = edgeRef.current
+          if (!g) return
+          const t = e.touches[0]
+          const dx = t.clientX - g.x
+          const dy = t.clientY - g.y
+          if (!g.on) {
+            if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) return (edgeRef.current = null)
+            if (dx < 10) return
+            g.on = true
+          }
+          g.dx = Math.max(0, dx)
+          setDrag(g.dx)
+        },
+        onTouchEnd() {
+          const g = edgeRef.current
+          edgeRef.current = null
+          if (!g?.on) return
+          const fast = g.dx / Math.max(1, Date.now() - g.at) > 0.5
+          setDrag(null)
+          if (g.dx > window.innerWidth * 0.33 || (fast && g.dx > 40)) goBack()
+        },
+        onTouchCancel() {
+          edgeRef.current = null
+          setDrag(null)
+        },
+      }
+
+  // ---- chat list rows ----
+  const typingIn = (key) =>
+    Object.entries(typing.all).some(
+      ([id, t]) => t.until > clock - 1000 && (key === 'group' ? t.to === null : key === `dm:${id}` && t.to === myId),
+    )
+  const previewFor = (key, named) => {
+    const m = lastByKey[key]
+    if (!m) return ''
+    const body = listPreview(m)
+    if (m.user_id === myId) return `You: ${body}`
+    return named ? `${profiles[m.user_id] ?? 'Someone'}: ${body}` : body
+  }
+  const stamp = (key) => Date.parse(lastByKey[key]?.created_at ?? 0) || 0
+  const listItems = [
+    {
+      key: 'group',
+      view: { type: 'group' },
+      title: 'Group Chat',
+      avatar: '/logo-192.png',
+      emptyText: 'Say hi to everyone 👋',
+    },
+    ...memberIds
+      .filter((id) => id !== myId)
+      .map((id) => ({
+        key: `dm:${id}`,
+        view: { type: 'dm', peerId: id },
+        title: profiles[id],
+        avatar: avatars[id],
+        online: online.includes(id),
+        ai: aiIds.has(id),
+        emptyText: 'Start a private chat',
+      })),
+  ]
+    .map((c) => ({
+      ...c,
+      preview: previewFor(c.key, c.key === 'group'),
+      time: listTime(lastByKey[c.key]?.created_at),
+      unread: unread[c.key] ?? 0,
+      typing: typingIn(c.key),
+    }))
+    .sort((a, b) => stamp(b.key) - stamp(a.key) || (a.key === 'group' ? -1 : b.key === 'group' ? 1 : a.title.localeCompare(b.title)))
+  if (isOwner) {
+    for (const [a, b] of ownerPairList) {
+      const key = `owner:${pairKey(a, b)}`
+      listItems.push({
+        key,
+        owner: true,
+        view: { type: 'owner', aId: a, bId: b },
+        title: `${profiles[a]} & ${profiles[b]}`,
+        faces: [a, b].map((id) => ({ id, name: profiles[id], src: avatars[id] })),
+        preview: previewFor(key, true),
+        time: listTime(lastByKey[key]?.created_at),
+        unread: unread[key] ?? 0,
+        stamp: stamp(key),
+      })
+    }
+    listItems.sort((x, y) => (x.owner && y.owner ? y.stamp - x.stamp : 0))
+  }
+  const otherUnread = Object.entries(unread)
+    .filter(([key]) => key !== viewKey(view))
+    .reduce((sum, [, n]) => sum + n, 0)
+
   return (
-    <div className="chat">
+    <div ref={shellRef} className={`shell ${wide ? 'wide' : `on-${screen}`}`}>
+      <div className="pane-list-wrap" inert={!wide && screen === 'chat'}>
+        <ChatList
+          items={listItems}
+          me={me.username}
+          myAvatar={avatars[myId]}
+          activeKey={chatActive ? viewKey(view) : null}
+          onOpen={openConversation}
+          onSettings={() => setShowSettings(true)}
+          Avatar={Avatar}
+        />
+      </div>
+    <div className="chat pane-chat" ref={paneRef} inert={!chatActive} {...edgeSwipe}>
       <header className="topbar">
-        {/* Round glass buttons, iOS style: ☰ chats (blue dot = unread) or ‹ back,
-            and ⋯ for people & settings. */}
-        {isGroup ? (
-          <button className="glass-btn left" onClick={() => setShowPanel(true)} aria-label={hasUnread ? 'Open chats (unread messages)' : 'Open chats'}>
-            <MenuIcon />
-            {hasUnread && <span className="glass-dot" />}
-          </button>
-        ) : (
-          <button className="glass-btn left" onClick={openGroup} aria-label="Back to Group Chat">
+        {/* Round glass buttons, iOS style: ‹ back to the chat list (with the
+            unread count from other chats), ⋯ group info, 📞 call an AI. */}
+        {!wide && (
+          <button
+            className="glass-btn left back"
+            onClick={goBack}
+            aria-label={otherUnread > 0 ? `Back to chats, ${otherUnread} unread` : 'Back to chats'}
+          >
             <BackIcon />
+            {otherUnread > 0 && <span className="back-count">{otherUnread > 99 ? '99+' : otherUnread}</span>}
           </button>
         )}
-        {isGroup ? (
-          <button className="glass-btn right" onClick={() => setShowMembers(true)} aria-label="People and settings">
-            <DotsIcon />
+        {peerId && aiIds.has(peerId) ? (
+          <button
+            className="glass-btn right"
+            onClick={() => setCallWith({ id: peerId, username: peerName })}
+            aria-label={`Call ${peerName}`}
+          >
+            <PhoneIcon />
           </button>
         ) : (
-          <>
-          {peerId && aiIds.has(peerId) && (
-            <button
-              className="glass-btn right2"
-              onClick={() => setCallWith({ id: peerId, username: peerName })}
-              aria-label={`Call ${peerName}`}
-            >
-              <PhoneIcon />
-            </button>
-          )}
-          <button className="glass-btn right" onClick={() => setShowPanel(true)} aria-label={hasUnread ? 'Open chats (unread messages)' : 'Open chats'}>
-            <MenuIcon />
-            {hasUnread && <span className="glass-dot" />}
+          <button className="glass-btn right" onClick={() => setShowMembers(true)} aria-label="Chat info">
+            <DotsIcon />
           </button>
-          </>
         )}
         <button className="topbar-center" onClick={() => setShowMembers(true)}>
           <span className={`topbar-avatar ${isOwnerView ? 'pair' : ''}`}>
@@ -1585,102 +1815,89 @@ export default function Chat({ session }) {
         </>
       )}
 
-      {showPanel && (
-        <div className="panel-backdrop" onClick={() => setShowPanel(false)}>
-          <div className="panel" onClick={(e) => e.stopPropagation()}>
-            <div className="panel-head">
-              <span>Chats</span>
-              <button className="panel-close" onClick={() => setShowPanel(false)} aria-label="Close chats">
-                ✕
+      </div>
+
+      {showMembers && (
+        <div className="sheet-backdrop" onClick={() => setShowMembers(false)}>
+          <div className="sheet" role="dialog" aria-label="Chat info" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-grabber" aria-hidden="true" />
+            <div className="sheet-head">
+              <span>{isGroup ? 'Group Chat' : isOwnerView ? 'Private chat' : 'Contact'}</span>
+              <button className="sheet-done" onClick={() => setShowMembers(false)}>
+                Done
               </button>
             </div>
-            <button className={`dm-entry ${isGroup ? 'active' : ''}`} onClick={openGroup}>
-              <span className="group-avatar">
-                {headerFaces.map((id) => (
-                  <Avatar key={id} name={profiles[id] ?? '?'} src={avatars[id]} />
-                ))}
-              </span>
-              <span className="dm-name">Group Chat</span>
-              {unread.group > 0 && (
-                <span className="unread-badge" aria-label={`${unread.group} unread`}>
-                  {unread.group > 99 ? '99+' : unread.group}
-                </span>
-              )}
-              {online.length > 0 && <span className="dm-meta">{online.length} online</span>}
-            </button>
-            <div className="panel-section">Direct messages</div>
-            {dmList.length === 0 ? (
-              <div className="panel-empty muted">
-                No direct chats yet. Use Chat with in People to start one.
-              </div>
-            ) : (
-              <ul className="dm-list">
-                {dmList.map((id) => (
-                  <li key={id}>
-                    <button
-                      className={`dm-entry ${!isGroup && peerId === id ? 'active' : ''}`}
-                      aria-label={`Chat with ${profiles[id]}${online.includes(id) ? ' (online)' : ''}${unread[`dm:${id}`] > 0 ? `, ${unread[`dm:${id}`]} unread` : ''}`}
-                      onClick={() => openDm(id)}
-                    >
-                      <Avatar name={profiles[id]} src={avatars[id]} />
-                      <span className="dm-name">{profiles[id]}</span>
-                      {unread[`dm:${id}`] > 0 && (
-                        <span className="unread-badge" aria-label={`${unread[`dm:${id}`]} unread`}>
-                          {unread[`dm:${id}`] > 99 ? '99+' : unread[`dm:${id}`]}
-                        </span>
-                      )}
-                      {online.includes(id) && <span className="online-dot" title="Online" />}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {isOwner && (
-              <>
-                <div className="panel-section">Owner view</div>
-                {ownerPairList.length === 0 ? (
-                  <div className="panel-empty muted">
-                    No private chats between other members yet.
-                  </div>
+            <div className="info-hero">
+              <span className={`info-avatar ${isOwnerView ? 'pair' : ''}`}>
+                {isGroup ? (
+                  <img src="/logo-192.png" alt="" />
+                ) : isOwnerView ? (
+                  <>
+                    <Avatar name={ownerNameA} src={avatars[ownerA]} />
+                    <Avatar name={ownerNameB} src={avatars[ownerB]} />
+                  </>
                 ) : (
-                  <ul className="dm-list">
-                    {ownerPairList.map(([a, b]) => {
-                      const label = `${profiles[a]} and ${profiles[b]}`
-                      return (
-                        <li key={pairKey(a, b)}>
-                          <button
-                            className={`dm-entry ${isOwnerView && ownerA === a && ownerB === b ? 'active' : ''}`}
-                            aria-label={`Owner view: ${label}`}
-                            onClick={() => openOwner(a, b)}
-                          >
-                            <span className="group-avatar">
-                              <Avatar name={profiles[a]} src={avatars[a]} />
-                              <Avatar name={profiles[b]} src={avatars[b]} />
-                            </span>
-                            <span className="dm-name">{label}</span>
-                            {unread[`owner:${pairKey(a, b)}`] > 0 && (
-                              <span className="unread-badge" aria-label={`${unread[`owner:${pairKey(a, b)}`]} unread`}>
-                                {unread[`owner:${pairKey(a, b)}`] > 99 ? '99+' : unread[`owner:${pairKey(a, b)}`]}
-                              </span>
-                            )}
-                          </button>
-                        </li>
-                      )
-                    })}
-                  </ul>
+                  <Avatar name={peerName} src={avatars[peerId]} />
                 )}
+              </span>
+              <span className="info-name">
+                {isGroup ? 'Group Chat' : isOwnerView ? ownerPairLabel : peerName}
+                {peerId && aiIds.has(peerId) && <span className="ai-badge">AI</span>}
+              </span>
+              <span className="info-sub">{headerSubtitle}</span>
+              {peerId && aiIds.has(peerId) && (
+                <div className="info-actions">
+                  <button
+                    onClick={() => {
+                      setShowMembers(false)
+                      setCallWith({ id: peerId, username: peerName })
+                    }}
+                  >
+                    <PhoneIcon />
+                    <span>Call</span>
+                  </button>
+                </div>
+              )}
+            </div>
+            {(isGroup || isOwnerView) && (
+              <>
+                <div className="sheet-section">{isGroup ? `${memberIds.length} people` : 'In this chat'}</div>
+                <ul className="member-list">
+                  {(isGroup ? memberIds : [ownerA, ownerB])
+                    .slice()
+                    .sort((x, y) => (x === myId ? -1 : y === myId ? 1 : (profiles[x] ?? '').localeCompare(profiles[y] ?? '')))
+                    .map((id) => (
+                      <li key={id}>
+                        <span className="member-avatar">
+                          <Avatar name={profiles[id]} src={avatars[id]} />
+                          {online.includes(id) && <span className="convo-online" />}
+                        </span>
+                        <span className="member-name">
+                          {profiles[id]}
+                          {aiIds.has(id) && <span className="ai-badge">AI</span>}
+                          {id === myId && <span className="muted"> (you)</span>}
+                        </span>
+                        {id !== myId && (
+                          <button className="chat-with" onClick={() => openDm(id)}>
+                            Message
+                          </button>
+                        )}
+                      </li>
+                    ))}
+                </ul>
               </>
             )}
           </div>
         </div>
       )}
 
-      {showMembers && (
-        <div className="sheet-backdrop" onClick={() => setShowMembers(false)}>
-          <div className="sheet" onClick={(e) => e.stopPropagation()}>
+      {showSettings && (
+        <div className="sheet-backdrop" onClick={() => setShowSettings(false)}>
+          <div className="sheet" role="dialog" aria-label="Settings" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-grabber" aria-hidden="true" />
             <div className="sheet-head">
-              <span>{memberIds.length} People</span>
-              <button className="sheet-done" onClick={() => setShowMembers(false)}>
+              <span>Settings</span>
+              <button className="sheet-done" onClick={() => setShowSettings(false)}>
                 Done
               </button>
             </div>
@@ -1690,25 +1907,6 @@ export default function Chat({ session }) {
               onPick={changeAvatar}
               onRemove={() => setAvatarPath(null)}
             />
-            <ul className="member-list">
-              {memberIds
-                .sort((a, b) => (profiles[a] ?? '').localeCompare(profiles[b] ?? ''))
-                .map((id) => (
-                  <li key={id}>
-                    <Avatar name={profiles[id]} src={avatars[id]} />
-                    <span className="member-name">
-                      {profiles[id]}
-                      {id === myId && <span className="muted"> (you)</span>}
-                    </span>
-                    {online.includes(id) && <span className="online-dot" title="Online" />}
-                    {id !== myId && (
-                      <button className="chat-with" onClick={() => openDm(id)}>
-                        Chat with
-                      </button>
-                    )}
-                  </li>
-                ))}
-            </ul>
             <label className="setting-row">
               <span>Sounds</span>
               <input
@@ -2210,11 +2408,6 @@ function CallCard({ msg, tail }) {
   )
 }
 
-const MenuIcon = () => (
-  <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-    <path d="M4 7h16M4 12h16M4 17h11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-  </svg>
-)
 const BackIcon = () => (
   <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
     <path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
@@ -2303,6 +2496,8 @@ function Composer({ onSend, placeholder = 'Message', enableMentions = false, mem
   // highlight. Null means no picker is open.
   const [mention, setMention] = useState(null)
   const imageInput = useRef(null)
+  const cameraInput = useRef(null)
+  const videoInput = useRef(null)
   const fileInput = useRef(null)
   const textRef = useRef(null)
 
@@ -2399,11 +2594,14 @@ function Composer({ onSend, placeholder = 'Message', enableMentions = false, mem
     }
   }
 
-  function pick(e) {
-    const f = e.target.files?.[0]
-    if (f) setFile(f)
+  // One file: preview it in the box with room for a caption. Several (from
+  // Photos or Files): send each straight away, in the order picked.
+  async function pick(e) {
+    const files = [...(e.target.files ?? [])]
     e.target.value = ''
     setMenu(false)
+    if (files.length === 1) return setFile(files[0])
+    for (const f of files) await onSend({ text: '', file: f })
   }
 
   function onPaste(e) {
@@ -2466,23 +2664,58 @@ function Composer({ onSend, placeholder = 'Message', enableMentions = false, mem
         if (f) setFile(f)
       }}
     >
-      <div className="plus-wrap">
-        <button type="button" className="circle-btn" aria-label="Add photo or file" onClick={() => setMenu((m) => !m)}>
-          <PlusIcon />
-        </button>
-        {menu && (
-          <div className="plus-menu">
-            <button type="button" onClick={() => imageInput.current.click()}>
-              <span className="plus-menu-icon photos">🖼️</span> Photos
-            </button>
-            <button type="button" onClick={() => fileInput.current.click()}>
-              <span className="plus-menu-icon files">📎</span> File
-            </button>
+      <button
+        type="button"
+        className={`circle-btn plus-btn ${menu ? 'open' : ''}`}
+        aria-label="Add photo, video or file"
+        aria-expanded={menu}
+        onClick={() => setMenu((m) => !m)}
+      >
+        <PlusIcon />
+      </button>
+      {menu && (
+        <div className="attach-backdrop" onClick={() => setMenu(false)}>
+          <div className="attach-sheet" role="dialog" aria-label="Add to message" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-grabber" aria-hidden="true" />
+            <div className="attach-tiles">
+              <button type="button" onClick={() => cameraInput.current.click()}>
+                <span className="attach-icon camera"><CameraIcon /></span>
+                Camera
+              </button>
+              <button type="button" onClick={() => imageInput.current.click()}>
+                <span className="attach-icon photos"><PhotosIcon /></span>
+                Photos
+              </button>
+              <button type="button" onClick={() => videoInput.current.click()}>
+                <span className="attach-icon videos"><VideoIcon /></span>
+                Videos
+              </button>
+            </div>
+            <div className="attach-list">
+              <button type="button" onClick={() => fileInput.current.click()}>
+                <ClipIcon />
+                <span>Add files</span>
+              </button>
+              {canRecordVoice() && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenu(false)
+                    setRecording(true)
+                  }}
+                >
+                  <MicIcon />
+                  <span>Record a voice note</span>
+                </button>
+              )}
+            </div>
           </div>
-        )}
-      </div>
-      <input ref={imageInput} type="file" accept="image/*,video/*" hidden onChange={pick} />
-      <input ref={fileInput} type="file" hidden onChange={pick} />
+        </div>
+      )}
+      <input ref={cameraInput} type="file" accept="image/*" capture="environment" hidden onChange={pick} />
+      <input ref={imageInput} type="file" accept="image/*" multiple hidden onChange={pick} />
+      <input ref={videoInput} type="file" accept="video/*" hidden onChange={pick} />
+      <input ref={fileInput} type="file" multiple hidden onChange={pick} />
 
       {enableMentions && mention && (
         <div className="mention-picker" role="listbox" aria-label="Mention a member">
@@ -2641,6 +2874,30 @@ const Chevron = () => (
 const PlusIcon = () => (
   <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
     <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+  </svg>
+)
+const CameraIcon = () => (
+  <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
+    <path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.6l1.3-2h5.2l1.3 2h1.6A2.5 2.5 0 0 1 20 8.5v8A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+    <circle cx="12" cy="12.5" r="3.5" fill="none" stroke="currentColor" strokeWidth="1.8" />
+  </svg>
+)
+const PhotosIcon = () => (
+  <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
+    <rect x="3.5" y="5" width="17" height="14" rx="3" fill="none" stroke="currentColor" strokeWidth="1.8" />
+    <circle cx="9" cy="10" r="1.7" fill="currentColor" />
+    <path d="M4 17l5-4.5 3.5 3 3-2.5L20 17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+  </svg>
+)
+const VideoIcon = () => (
+  <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
+    <rect x="3" y="6" width="13" height="12" rx="3" fill="none" stroke="currentColor" strokeWidth="1.8" />
+    <path d="M16 10.5l5-3v9l-5-3z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+  </svg>
+)
+const ClipIcon = () => (
+  <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+    <path d="M20 11.5l-7.8 7.8a5 5 0 0 1-7-7L13 4.5a3.3 3.3 0 0 1 4.7 4.7l-7.8 7.8a1.7 1.7 0 0 1-2.4-2.4l7.1-7.1" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
   </svg>
 )
 const ArrowUpIcon = () => (
