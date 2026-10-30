@@ -2512,3 +2512,39 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
 .project-page-notes .project-tab.active { background: #6d28d9; border-color: #6d28d9; }
 .project-page-log .project-table thead th { background: #92400e; color: #fff; }
 .project-page-log .project-tab.active { background: #92400e; border-color: #92400e; }
+
+/* ---- Database view fixes: sheet order, raw message popup, sticky header, soft rows ---- */
+/* Sticky header for wide sheet-like pages only (Database, References,
+   Notes, Sync log). The wide page becomes a flex column exactly one
+   viewport tall: project header and tabs never scroll, the section
+   heading and note stay above the table, and only the table scrolls,
+   vertically and horizontally, inside its wrap. The table header row
+   is sticky at the top of that scroll area, like a frozen header in
+   the sheet, with its per-page colour as the opaque background. The
+   centered Queue/Stages/project list pages do not use the wide class
+   and keep their original whole-page scrolling. Chat rules are
+   untouched: no .shell, .chat, .messages, or .composer rule is changed. */
+.project-page-wide { display: flex; flex-direction: column; overflow: hidden; }
+.project-page-wide .project-header, .project-page-wide .project-tabs { flex-shrink: 0; }
+.project-page-wide > section { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+.project-page-wide > section > h2, .project-page-wide > section > p.muted { flex-shrink: 0; }
+.project-page-wide > section > ul.project-list { overflow-y: auto; flex: 1; min-height: 0; }
+.project-page-wide .project-table-wrap { overflow: auto; flex: 1; min-height: 0; }
+.project-page-wide .project-table thead th { position: sticky; top: 0; z-index: 2; }
+/* Soft alternating row colours, like the sheet: a very pale mint tint
+   on even rows, plain background on odd rows, dark/light text inherited
+   from the theme, so rows stay readable. NOT bold colours. The colour
+   is a 6% tint of the Database teal mixed with the page background, so
+   it stays pale in light mode and does not wash out text in dark mode. */
+.project-page-wide .project-table tbody tr:nth-child(even) { background: color-mix(in srgb, #0f766e 6%, var(--bg)); }
+.project-page-wide .project-table tbody tr:nth-child(odd) { background: var(--bg); }
+/* Raw message: a very small View button cell only, never the full text,
+   so raw_message cannot take over the whole screen. The popup below
+   shows the full message for that trade only. */
+.raw-message-cell { width: 1%; white-space: nowrap; }
+.raw-message-btn { border: 0.5px solid var(--separator); border-radius: 999px; background: var(--fill); color: var(--blue); padding: 6px 12px; font-size: 14px; }
+.raw-message-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 100; }
+.raw-message-dialog { background: var(--raised); color: var(--text); border-radius: 12px; max-width: 720px; width: 100%; max-height: 85dvh; display: flex; flex-direction: column; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25); }
+.raw-message-dialog-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 16px; border-bottom: 0.5px solid var(--separator); flex-shrink: 0; }
+.raw-message-close { border: 0.5px solid var(--separator); border-radius: 999px; background: var(--fill); color: var(--text); padding: 6px 12px; font-size: 14px; flex-shrink: 0; }
+.raw-message-dialog-body { padding: 16px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.5; }

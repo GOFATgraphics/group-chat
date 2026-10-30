@@ -209,6 +209,18 @@ const NOTE_COLUMNS = [
   ['Created', 'created_at'],
 ]
 
+// Exact TradesDB header order, read from the user's copy sheet
+// (TradesDB tab, first row) for this build only. full_data is stored
+// as jsonb, which sorts keys by length then alphabetically and so
+// loses sheet order; ordering by this list restores the sheet order
+// (timestamp, Mercancia_Contract_ref, trade_date, and onward) without
+// changing stored data. The sheet header 'commission' appears twice;
+// it is kept once here, so the list has 116 unique names for 117
+// sheet headers. Any full_data key not in this list goes at the end,
+// in full_data order, never first. Stage is appended last by the
+// Database view and is not a TradesDB column.
+const TRADESDB_SHEET_COLUMNS = ["timestamp", "Mercancia_Contract_ref", "trade_date", "purchase_or_sale", "total_quantity", "quantity_unit", "commodity_name", "origin", "incoterm", "destination_port", "shipment_window", "unit_price", "currency", "price_per_unit", "seller_name", "seller_address", "seller_contact", "seller_email", "seller_phone", "seller_signatory", "buyer_name", "buyer_address", "buyer_contact", "buyer_email", "buyer_phone", "buyer_signatory", "direct_business", "broker_name", "broker_address", "broker_contact", "broker_email", "broker_phone", "commission", "crop_year", "moisture_max", "protein_min", "oil_min", "purity_min", "admixture_max", "fibre_max", "ash_max", "starch_min", "aflatoxin_limit", "nut_count", "outturn_kor", "weevilled_max", "natural_variation", "physical_condition", "cleaning_method", "tolerance", "tolerance_type", "cargo_type", "container_type", "total_containers", "load_per_container", "partial_shipment", "transshipment", "free_time_dest", "shipment_advice", "insurance", "demurrage_free_time", "packing_type", "packing_size", "shipping_marks", "tagging_labels", "weight_quality_basis", "inspection_agency", "inspection_paid_by", "silica_gel", "fumigation_type", "container_lining", "inland_haulage", "thc_status", "payment_terms", "key_deadline", "beneficiary_name", "bank_name", "account_number", "swift_bic", "gst_number", "pan_number", "iec_code", "fssai_number", "exim_code", "arbitration_law", "import_permit_noc", "doc_instructions", "required_documents", "addendum_notes", "raw_message", "last_update", "contract_issuer", "additional_information", "trader_name", "product_category", "Parent_Folder_URL", "authorized_signatory", "back_to_back_source_ref", "column_98", "contract_no", "direction", "Folder_Banking_URL", "Folder_Contacts_URL", "Folder_Docs_URL", "Folder_Logistics_URL", "Folder_Packing_URL", "Folder_Specs_URL", "Has_notes", "mercancia_ref", "modification_notes", "Notes", "parent_reference", "Sender_Email", "trade_status", "trade_type", "WhatsApp_number"]
+
 export function ProjectDashboard({ project, token, onBack }) {
   const [tab, setTab] = useState('queue')
   const [data, setData] = useState(null)
@@ -226,6 +238,17 @@ export function ProjectDashboard({ project, token, onBack }) {
   const [noteRows, setNoteRows] = useState(null)
   const [noteLoading, setNoteLoading] = useState(false)
   const [noteError, setNoteError] = useState('')
+  // Raw message popup: { ref, text } or null. The table cell shows a
+  // View button only, never the full message text, so raw_message
+  // cannot take over the whole screen.
+  const [rawMessage, setRawMessage] = useState(null)
+
+  useEffect(() => {
+    if (!rawMessage) return undefined
+    const onKey = (e) => { if (e.key === 'Escape') setRawMessage(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [rawMessage])
 
   useEffect(() => {
     let cancelled = false
@@ -324,7 +347,7 @@ export function ProjectDashboard({ project, token, onBack }) {
   const dbRows = dbTrades ?? trades
   const firstFull = dbRows.find((t) => t.full_data && typeof t.full_data === 'object' && !Array.isArray(t.full_data))
   const dbColumns = firstFull
-    ? [...Object.keys(firstFull.full_data), 'Stage']
+    ? [...TRADESDB_SHEET_COLUMNS.filter((c) => Object.prototype.hasOwnProperty.call(firstFull.full_data, c)), ...Object.keys(firstFull.full_data).filter((c) => !TRADESDB_SHEET_COLUMNS.includes(c)), 'Stage']
     : SIMPLE_COLUMNS.map(([h]) => h)
   const dbCell = (t, col) => {
     if (col === 'Stage') return show(t.stage)
@@ -412,7 +435,9 @@ export function ProjectDashboard({ project, token, onBack }) {
               <p className="muted">
                 Own database view inside the app, full width like the TradesDB sheet. Scroll sideways for more columns.
                 {dbRows.length > 0 && firstFull
-                  ? ` ${dbFullCount} of ${dbRows.length} trades have full trade data; the rest show — until the backfill runs.`
+                  ? (dbFullCount === dbRows.length
+                      ? ` All ${dbRows.length} trades have full trade data.`
+                      : ` ${dbFullCount} of ${dbRows.length} trades have full trade data; the rest show —.`)
                   : dbRows.length > 0
                     ? ' Full trade data has not been backfilled yet, so the simplified columns are shown.'
                     : ''}
@@ -441,9 +466,27 @@ export function ProjectDashboard({ project, token, onBack }) {
                       ) : (
                         dbRows.map((t) => (
                           <tr key={t.id}>
-                            {dbColumns.map((col) => (
-                              <td key={col}>{dbCell(t, col)}</td>
-                            ))}
+                            {dbColumns.map((col) =>
+                              col === 'raw_message' && firstFull ? (
+                                <td key={col} className="raw-message-cell">
+                                  <button
+                                    type="button"
+                                    className="raw-message-btn"
+                                    onClick={() =>
+                                      setRawMessage({
+                                        ref: t.full_data?.Mercancia_Contract_ref || t.contract_ref || '',
+                                        text: t.full_data?.raw_message || '',
+                                      })
+                                    }
+                                    aria-label={`View raw message for ${t.full_data?.Mercancia_Contract_ref || t.contract_ref || 'this trade'}`}
+                                  >
+                                    View
+                                  </button>
+                                </td>
+                              ) : (
+                                <td key={col}>{dbCell(t, col)}</td>
+                              )
+                            )}
                           </tr>
                         ))
                       )}
@@ -567,6 +610,25 @@ export function ProjectDashboard({ project, token, onBack }) {
             </section>
           )}
         </>
+      )}
+      {rawMessage && (
+        <div className="raw-message-backdrop" onClick={() => setRawMessage(null)} role="presentation">
+          <div
+            className="raw-message-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Raw message for ${rawMessage.ref}`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="raw-message-dialog-head">
+              <strong>{rawMessage.ref ? `Raw message: ${rawMessage.ref}` : 'Raw message'}</strong>
+              <button type="button" className="raw-message-close" onClick={() => setRawMessage(null)} aria-label="Close raw message">
+                Close
+              </button>
+            </div>
+            <div className="raw-message-dialog-body">{rawMessage.text || 'No raw message stored for this trade.'}</div>
+          </div>
+        </div>
       )}
     </main>
   )
