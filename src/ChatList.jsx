@@ -1,12 +1,16 @@
 import { useState } from 'react'
+import { useMessageSearch, Highlighted } from './Tools.jsx'
+import { AIBadge, KIND_ICON, XIcon, SearchIcon as SearchGlyph } from './icons.jsx'
 
 // The home screen: every conversation (the group chat, a private chat with
 // each member, and for the owner the read-only view of other members' private
 // chats), newest first, with the last message, its time, unread count, who's
 // online and who's typing. On wide screens it stays beside the open chat.
 
-export default function ChatList({ items, me, myAvatar, activeKey, onOpen, onSettings, Avatar }) {
+export default function ChatList({ items, me, myAvatar, activeKey, onOpen, onSettings, onNewGroup, Avatar, profiles = {}, avatars = {}, chatNameOf, onOpenMessage }) {
   const [query, setQuery] = useState('')
+  // Typing two or more letters also searches every message you can read.
+  const found = useMessageSearch(onOpenMessage ? query : '')
   const q = query.trim().toLowerCase()
   const shown = q ? items.filter((c) => c.title.toLowerCase().includes(q) || (c.preview ?? '').toLowerCase().includes(q)) : items
   const chats = shown.filter((c) => !c.owner)
@@ -19,6 +23,11 @@ export default function ChatList({ items, me, myAvatar, activeKey, onOpen, onSet
           <Avatar name={me} src={myAvatar} />
         </button>
         <h1 className="list-title">Chats</h1>
+        {onNewGroup && (
+          <button className="list-new" onClick={onNewGroup} aria-label="New group">
+            <NewGroupIcon />
+          </button>
+        )}
       </div>
       <label className="list-search">
         <SearchIcon />
@@ -32,7 +41,7 @@ export default function ChatList({ items, me, myAvatar, activeKey, onOpen, onSet
         />
         {query && (
           <button className="list-search-clear" onClick={() => setQuery('')} aria-label="Clear search">
-            ✕
+            <XIcon size={11} />
           </button>
         )}
       </label>
@@ -52,7 +61,33 @@ export default function ChatList({ items, me, myAvatar, activeKey, onOpen, onSet
             </ul>
           </>
         )}
-        {!shown.length && <div className="list-empty">No chats match “{query}”.</div>}
+        {query.trim().length >= 2 && onOpenMessage && (
+          <>
+            <div className="list-section">Messages{found.loading ? ' · searching…' : ''}</div>
+            {!found.loading && found.results.length === 0 && <div className="list-empty">No messages match “{query.trim()}”.</div>}
+            <ul className="convo-list">
+              {found.results.map((m) => (
+                <li key={m.id}>
+                  <button className="convo search-result" onClick={() => onOpenMessage(m)}>
+                    <span className="convo-avatar small">
+                      <Avatar name={profiles[m.user_id] ?? '?'} src={avatars[m.user_id]} />
+                    </span>
+                    <span className="convo-body">
+                      <span className="convo-line">
+                        <span className="convo-title">{chatNameOf?.(m) ?? ''}</span>
+                        <span className="convo-time">{listTime(m.created_at)}</span>
+                      </span>
+                      <span className="convo-preview">
+                        <b>{profiles[m.user_id] ?? '…'}:</b> <Highlighted text={m.content} query={found.query} />
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+        {!shown.length && query.trim().length < 2 && <div className="list-empty">No chats match “{query}”.</div>}
       </div>
     </aside>
   )
@@ -85,13 +120,25 @@ function Row({ c, active, onOpen, Avatar }) {
           <span className="convo-line">
             <span className="convo-title">
               {c.title}
-              {c.ai && <span className="ai-badge">AI</span>}
+              {c.ai && <AIBadge />}
             </span>
             <span className="convo-time">{c.time}</span>
             <ChevronRight />
           </span>
           <span className={`convo-preview ${c.typing ? 'typing' : ''}`}>
-            {c.typing ? 'typing…' : c.preview || <span className="muted">{c.emptyText}</span>}
+            {c.typing ? (
+              'typing…'
+            ) : c.preview ? (
+              <>
+                {c.kind && KIND_ICON[c.kind] && (() => {
+                  const K = KIND_ICON[c.kind]
+                  return <K size={15} className="preview-icon" />
+                })()}
+                {c.preview}
+              </>
+            ) : (
+              <span className="muted">{c.emptyText}</span>
+            )}
           </span>
         </span>
         {unread && <span className="convo-badge">{c.unread > 99 ? '99+' : c.unread}</span>}
@@ -100,6 +147,11 @@ function Row({ c, active, onOpen, Avatar }) {
   )
 }
 
+const NewGroupIcon = () => (
+  <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+    <path d="M12 20h8M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+)
 const SearchIcon = () => (
   <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
     <circle cx="8.5" cy="8.5" r="6" fill="none" stroke="currentColor" strokeWidth="2" />
@@ -128,18 +180,23 @@ export function listTime(iso) {
 // One line describing a message in the list: text, or what was sent.
 export function listPreview(m) {
   if (!m) return ''
-  if (m.call_duration != null) return '📞 Voice call'
-  const text = m.content?.trim()
+  if (m.call_duration != null) return 'Voice call'
+  let text = m.content?.trim() ?? ''
+  if (text.startsWith('📊 ')) {
+    text = text.slice(2).trim()
+    return text.startsWith('Poll:') ? text : `Poll: ${text}`
+  }
+  if (text.startsWith('⏰ ')) return text.slice(2).trim()
   if (m.attachment_path) {
     const type = m.attachment_type ?? ''
     const what = type.startsWith('image/')
-      ? '📷 Photo'
+      ? 'Photo'
       : type.startsWith('video/')
-        ? '🎬 Video'
+        ? 'Video'
         : type.startsWith('audio/')
-          ? '🎤 Voice note'
-          : `📎 ${m.attachment_name ?? 'File'}`
+          ? 'Voice note'
+          : m.attachment_name ?? 'File'
     return text ? `${what} · ${text}` : what
   }
-  return text ?? ''
+  return text
 }

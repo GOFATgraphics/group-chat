@@ -270,14 +270,34 @@ A private message (only that person sees it):
 { "text": "Sent you the details privately", "to": "mom" }
 ```
 
+A message in a **named group** (see "Named groups" below), by its id or name:
+
+```json
+{ "text": "Morning team!", "group": "Launch Team" }
+```
+
 A quoted reply (shows the original above the answer, like swipe-to-reply in the
-app). The quoted message must be in the same conversation, so for a private
-reply include `to` as well:
+app). With only `reply_to_id`, the reply goes to **the same conversation as the
+quoted message** (group, named group or private chat), so this is the safest
+way to answer anything:
 
 ```json
 { "text": "Yes, done!", "reply_to_id": 412 }
-{ "text": "Yes, done!", "reply_to_id": 415, "to": "mom" }
 ```
+
+### Named groups
+
+Besides the main group chat, Mubarak can make **named groups** with some of the
+members (for example "Launch Team" with Mubarak, Adam and Ali). You only see
+the groups you're in. A named group's messages have `"conversation": "group"`
+plus its `"group_id"` and `"group_name"`; in the main group chat both are
+`null`. Always answer in the conversation a message came from: reply with
+`reply_to_id`, or send with `"group": "<group_id>"`. Never answer a named
+group's message in the main group chat (others there can't see the context).
+
+- Read one named group: `GET /api/messages?group=<group_id or name>`
+- The main group chat only: `GET /api/messages?conversation=group`
+- Typing in a named group: `POST /api/typing { "group": "<group_id>" }`
 
 A photo or file you have as bytes (keep it under about 3 MB because of Vercel's request size limit):
 
@@ -301,13 +321,14 @@ Delete one of the agent's own messages: `DELETE /api/messages/412`.
 While you work on a reply, show the "…" typing bubble, like a person would:
 
 ```http
-POST /api/typing                    (group chat)
-POST /api/typing  { "to": "mom" }   (your private chat with mom)
+POST /api/typing                          (main group chat)
+POST /api/typing  { "to": "mom" }         (your private chat with mom)
+POST /api/typing  { "group": "<id>" }     (a named group)
 ```
 
 The bubble lasts about 6 seconds, so call it again every 3-4 seconds while you
 are still writing. Sending your message hides it straight away; to hide it
-without sending, post `{ "typing": false }` (with the same `to`).
+without sending, post `{ "typing": false }` (with the same `to` or `group`).
 
 ### Online status
 
@@ -338,6 +359,106 @@ GET /api/members   everyone in the chat
 GET /api/file?path=<attachment_path>          302 redirect to a download link
 GET /api/file?path=<attachment_path>&json=1   { "url": "..." }
 ```
+
+## 7. Team tools
+
+Use these to keep the team organised. Where a chat is needed, add
+`"to": "<username>"` for a private chat, `"group": "<group id or name>"` for a
+named group, or nothing for the main group chat (query strings use `with=` /
+`group=` / `conversation=group`).
+
+### Search all past messages
+
+```http
+GET /api/search?q=launch date
+GET /api/search?q=budget&group=Launch Team        (one named group)
+GET /api/search?q=invoice&with=mubarak            (one private chat)
+GET /api/search?q=friday&conversation=group       (main group chat only)
+```
+
+Every word must appear (any order; part of a word matches; any language).
+Returns `{ "messages": [...] }` newest first, the same shape as GET /api/messages,
+across the whole history you can read — not just the latest page. To answer
+"what did we agree on Tuesday?", search, then **quote the message** in your
+reply with `reply_to_id` (or cite its text and date).
+
+### Pin a message
+
+```http
+POST   /api/pins   { "message_id": 412 }
+DELETE /api/pins   { "message_id": 412 }
+GET    /api/pins?group=Launch Team                (pinned messages, newest first)
+```
+
+Pinned messages show in a strip at the top of the chat. Messages also carry
+`"pinned": true|false`.
+
+### Polls
+
+```http
+POST /api/polls       { "question": "Launch time?", "options": ["5 PM", "6 PM"], "multiple": false, "group": "Launch Team" }
+POST /api/polls/vote  { "message_id": 512, "option": 0 }        (or "options": [0, 2] when multiple)
+POST /api/polls/choice { "message_id": 512, "text": "Snacks" }  (Add Choice, up to 10)
+```
+
+`question` is optional: it is the comment shown under the choices (e.g.
+"Choose one 🤔"). A poll is a message (text `📊 question`, or `📊 Poll: a, b` with no question) with `"poll": { id, question,
+multiple, options: [{ index, text, votes, voters }], total_voters }`.
+Voting again replaces your vote.
+
+### Shared notes, tasks and decisions (per chat)
+
+```http
+GET    /api/notes?group=Launch Team               (optional &kind=task)
+POST   /api/notes  { "kind": "decision", "text": "We launch Friday 5 PM", "group": "Launch Team" }
+POST   /api/notes  { "kind": "task", "text": "Send the press kit", "to": "mubarak" }
+PATCH  /api/notes  { "id": "...", "done": true }   (or "text": "...")
+DELETE /api/notes  { "id": "..." }
+```
+
+`kind` is `note`, `task` or `decision`. Everyone in that chat sees the same
+list in the app (chat info → Notes, tasks & decisions). **When the team agrees
+something, log it as a decision** so it never gets lost in the scroll, and say
+so briefly in the chat.
+
+### Schedule messages, reminders and your own tasks
+
+```http
+POST   /api/schedule { "text": "Standup in 10 minutes", "at": "2026-11-02T08:50:00Z", "kind": "reminder", "repeat": "daily", "group": "Launch Team" }
+GET    /api/schedule                              (your upcoming ones)
+DELETE /api/schedule { "id": "..." }
+```
+
+- `kind: "message"` posts your text as you at that time.
+- `kind: "reminder"` posts "⏰ Reminder: <text>".
+- `kind: "task"` posts nothing: it reminds **you** (the AI). At that time you
+  get a webhook `{ "type": "task.due", "task": { id, text, group_id, recipient_id, ... } }`,
+  and the next `GET /api/messages` response includes `"due_tasks": [...]`
+  (also `GET /api/tasks`). Each due task is delivered once.
+- `repeat`: `daily` or `weekly` (omit for once). Times are ISO 8601; use UTC
+  or include the offset.
+
+**Daily summary of a group:** schedule yourself a repeating task, e.g.
+`{ "kind": "task", "text": "Post the daily summary of Launch Team", "at": "2026-11-01T17:00:00Z", "repeat": "daily", "group": "Launch Team" }`.
+When it is due, read the day's messages (`GET /api/messages?group=Launch Team&limit=200`),
+write a short summary (decisions, open tasks, who is waiting on what) and post
+it to that group.
+
+## 8. Your profile photo
+
+Change the photo everyone sees next to your messages (it updates live in the app):
+
+```http
+PUT    /api/avatar   { "file": { "type": "image/png", "base64": "iVBORw0..." } }
+PUT    /api/avatar   { "file_url": "https://example.com/me.png" }
+GET    /api/avatar   -> { "avatar_url": "https://..." }
+DELETE /api/avatar   (back to your initial)
+```
+
+JPEG, PNG, WebP or GIF, up to 5 MB (a base64 upload must stay under about
+3 MB because of Vercel's request size limit; use `file_url` for bigger ones).
+A square image looks best; it is shown cropped to a circle. `GET /api/members`
+includes everyone's `avatar_url`.
 
 ## Errors
 
@@ -404,8 +525,8 @@ while True:
                 answer["duration"] = seconds
             else:
                 answer["text"] = text
-            if m["conversation"] == "direct":
-                answer["to"] = m["username"]  # answer privately
+            # reply_to_id alone keeps the answer in the same conversation:
+            # main group, named group, or private chat.
             call("POST", "/messages", json=answer)
 ```
 
@@ -423,7 +544,7 @@ app.post('/chat-webhook', (req, res) => {
   res.sendStatus(200) // acknowledge first, then think
   const { message } = req.body
   handle(message) // call your AI, then POST /api/messages with the reply
-  // (add "to": message.username when message.conversation === 'direct')
+  // (send it with "reply_to_id": message.id so it lands in the same conversation)
   // and POST /api/read { message_ids: [message.id] } for the blue ticks
 })
 

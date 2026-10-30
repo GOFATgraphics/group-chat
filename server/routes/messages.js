@@ -1,14 +1,16 @@
 import {
-  route, auth, body, check, present, markRead, userIdFor, sleep, HttpError, BUCKET, MAX_FILE_BYTES,
+  route, auth, body, check, present, markRead, userIdFor, groupIdFor, sleep, HttpError, BUCKET, MAX_FILE_BYTES,
 } from '../lib.js'
 import { speak, voiceFor, mp3Duration } from '../speech.js'
+import { takeDueTasks } from './tools.js'
 
 const MAX_WAIT_SECONDS = 25
 const POLL_MS = 150
 
 // GET /api/messages
 //   Which conversation (default: the group chat plus your own direct messages):
-//   ?conversation=group   group chat only
+//   ?conversation=group   the main group chat only
+//   ?group=<id or name>   only that named group
 //   ?with=<username>      only your direct messages with that member
 //   Paging:
 //   ?after_id=123         only messages newer than this id (oldest first)
@@ -22,6 +24,8 @@ const POLL_MS = 150
 // POST /api/messages
 //   { "text": "hi" }                                   to the group
 //   { "text": "hi", "to": "<username>" }               private message
+//   { "text": "hi", "group": "<group id or name>" }     a named group
+//   With only reply_to_id, the reply goes to the quoted message's conversation.
 //   { "text": "yes!", "reply_to_id": 123 }             quoted reply
 //   { "text": "caption", "file": { "name": "a.png", "type": "image/png", "base64": "..." } }
 //   { "text": "caption", "file_url": "https://...", "file_name": "report.pdf" }
@@ -40,8 +44,11 @@ export default route({
       const peer = await userIdFor(sb, q.with)
       scope = (query) =>
         query.or(`and(user_id.eq.${userId},recipient_id.eq.${peer}),and(user_id.eq.${peer},recipient_id.eq.${userId})`)
+    } else if (q.group) {
+      const groupId = await groupIdFor(sb, q.group)
+      scope = (query) => query.eq('group_id', groupId)
     } else if (q.conversation === 'group') {
-      scope = (query) => query.is('recipient_id', null)
+      scope = (query) => query.is('recipient_id', null).is('group_id', null)
     } else {
       scope = (query) => query.or(`recipient_id.is.null,recipient_id.eq.${userId},user_id.eq.${userId}`)
     }
@@ -66,26 +73,37 @@ export default route({
       rows = check(await query).reverse()
     }
 
-    const [messages] = await Promise.all([present(sb, rows), shouldMarkRead ? markRead(sb, userId, rows) : null])
-    return { messages }
+    const [messages, dueTasks] = await Promise.all([
+      present(sb, rows),
+      takeDueTasks(sb),
+      shouldMarkRead ? markRead(sb, userId, rows) : null,
+    ])
+    return dueTasks.length ? { messages, due_tasks: dueTasks } : { messages }
   },
 
   async POST(req) {
     const { sb, userId } = await auth(req)
     const b = body(req)
     let text = typeof b.text === 'string' ? b.text.trim() : ''
-    const recipientId = b.to ? await userIdFor(sb, b.to) : null
-    if (recipientId === userId) throw new HttpError(400, "You can't send a private message to yourself")
     const replyToId = b.reply_to_id != null ? Number(b.reply_to_id) : null
-    if (replyToId != null) {
+    const original = replyToId != null
+      ? check(await sb.from('messages').select('user_id, recipient_id, group_id').eq('id', replyToId).maybeSingle())
+      : null
+    if (replyToId != null && !original) throw new HttpError(404, 'reply_to_id: message not found')
+    let recipientId = b.to ? await userIdFor(sb, b.to) : null
+    let groupId = b.group ? await groupIdFor(sb, b.group) : null
+    if (recipientId && groupId) throw new HttpError(400, 'Send to either "to" or "group", not both')
+    if (original && !b.to && !b.group) {
+      // No conversation given: answer where the quoted message was.
+      groupId = original.group_id ?? null
+      recipientId = original.recipient_id ? (original.user_id === userId ? original.recipient_id : original.user_id) : null
+    }
+    if (recipientId === userId) throw new HttpError(400, "You can't send a private message to yourself")
+    if (original) {
       // The quoted message must be one you can see, in the same conversation.
-      const original = check(
-        await sb.from('messages').select('user_id, recipient_id').eq('id', replyToId).maybeSingle(),
-      )
-      if (!original) throw new HttpError(404, 'reply_to_id: message not found')
       const sameConversation = recipientId
         ? [original.user_id, original.recipient_id].sort().join() === [userId, recipientId].sort().join()
-        : !original.recipient_id
+        : !original.recipient_id && (original.group_id ?? null) === groupId
       if (!sameConversation) throw new HttpError(400, 'reply_to_id must be a message in the same conversation')
     }
     let file = await readFile(b)
@@ -135,7 +153,7 @@ export default route({
 
     const { data, error } = await sb
       .from('messages')
-      .insert({ content: text || null, recipient_id: recipientId, reply_to_id: replyToId, ...attachment })
+      .insert({ content: text || null, recipient_id: recipientId, group_id: groupId, reply_to_id: replyToId, ...attachment })
       .select()
       .single()
     if (error) {
@@ -147,7 +165,7 @@ export default route({
   },
 })
 
-async function readFile(b) {
+export async function readFile(b) {
   if (b.file?.base64) {
     const bytes = Buffer.from(b.file.base64, 'base64')
     if (bytes.length > MAX_FILE_BYTES) throw new HttpError(413, 'Files must be 25 MB or smaller')

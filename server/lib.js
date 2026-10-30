@@ -84,6 +84,30 @@ export function admin() {
   return createClient(SUPABASE_URL, secret, { auth: { persistSession: false, autoRefreshToken: false } })
 }
 
+// Why a key didn't work, as precisely as is safe to say (never echoes the
+// key back beyond its public 12-character prefix).
+const KEY_LENGTH = 47
+async function explainBadKey(adm, key, row) {
+  if (row?.revoked_at) return 'This API key was revoked. Ask for a new one (People → API keys).'
+  const tips = []
+  if (/\s/.test(key)) tips.push('it contains a space or line break')
+  if (/[^A-Za-z0-9_-]/.test(key.slice(4))) tips.push('it contains characters that keys never have (only letters, digits, - and _)')
+  if (key.length !== KEY_LENGTH) tips.push(`it is ${key.length} characters long but keys are ${KEY_LENGTH}`)
+  const { data: same } = await adm.from('api_keys').select('id, revoked_at').eq('key_prefix', key.slice(0, 12)).limit(1)
+  if (same?.length) {
+    tips.push(
+      same[0].revoked_at
+        ? 'it starts like a key that has been revoked'
+        : 'it starts like a real key but the rest is different, so characters were changed or lost when it was copied',
+    )
+  }
+  return (
+    `Invalid API key (starts ${key.slice(0, 12)}…)` +
+    (tips.length ? `: ${tips.join('; ')}.` : '.') +
+    ' Copy the key again exactly (chat apps often drop _ or turn it into italics; paste it inside a code block) or ask for a new one.'
+  )
+}
+
 // Sessions per key hash, reused while this function instance stays warm.
 const keySessions = new Map()
 
@@ -101,7 +125,7 @@ async function keySession(key) {
   if (error) throw new HttpError(500, error.message)
   if (!row || row.revoked_at) {
     keySessions.delete(hash)
-    throw new HttpError(401, 'Invalid or revoked API key')
+    throw new HttpError(401, await explainBadKey(adm, key, row))
   }
   if (!cached || Date.now() - cached.usedAt > LAST_USED_EVERY_MS) {
     await adm.from('api_keys').update({ last_used_at: new Date().toISOString() }).eq('id', row.id)
@@ -179,16 +203,26 @@ export async function present(sb, rows) {
   if (!rows.length) return []
   const ids = rows.map((m) => m.id)
   const paths = rows.map((m) => m.attachment_path).filter(Boolean)
-  const [profiles, reactions, signed] = await Promise.all([
+  const groupIds = [...new Set(rows.map((m) => m.group_id).filter(Boolean))]
+  const [profiles, reactions, signed, groups] = await Promise.all([
     sb.from('profiles').select('id, username').then((r) => check(r)),
     sb.from('reactions').select('message_id, user_id, emoji').in('message_id', ids).then((r) => check(r)),
     paths.length ? sb.storage.from(BUCKET).createSignedUrls(paths, URL_TTL_SECONDS).then((r) => r.data ?? []) : [],
+    groupIds.length ? sb.from('chat_groups').select('id, name').in('id', groupIds).then((r) => check(r)) : [],
   ])
+  const [polls, pins] = await Promise.all([
+    sb.from('polls').select('id, message_id, question, options, multiple, poll_votes(user_id, option)').in('message_id', ids).then((r) => r.data ?? []),
+    sb.from('message_pins').select('message_id, pinned_by, pinned_at').in('message_id', ids).then((r) => r.data ?? []),
+  ])
+  const groupNames = Object.fromEntries(groups.map((g) => [g.id, g.name]))
   const names = Object.fromEntries(profiles.map((p) => [p.id, p.username]))
   const urls = Object.fromEntries(signed.map((s) => [s.path, s.signedUrl]))
   return rows.map((m) => ({
     id: m.id,
     conversation: m.recipient_id ? 'direct' : 'group',
+    // null for the main group chat; a named group's id and name otherwise
+    group_id: m.group_id ?? null,
+    group_name: m.group_id ? groupNames[m.group_id] ?? null : null,
     user_id: m.user_id,
     username: names[m.user_id] ?? null,
     recipient_id: m.recipient_id ?? null,
@@ -207,6 +241,8 @@ export async function present(sb, rows) {
           url: urls[m.attachment_path] ?? null,
         }
       : null,
+    poll: presentPoll(polls.find((p) => p.message_id === m.id), names),
+    pinned: pins.some((p) => p.message_id === m.id),
     reactions: reactions
       .filter((r) => r.message_id === m.id)
       .map((r) => ({ emoji: r.emoji, user_id: r.user_id, username: names[r.user_id] ?? null })),
@@ -246,7 +282,8 @@ export async function markRead(sb, userId, rows) {
 
 // Shows (or hides) the "typing…" bubble for this member in a conversation,
 // via the same Realtime broadcast channel the app listens on (src/typing.js).
-// to: null for the group chat, or the recipient's user id.
+// to: null for the main group chat, the recipient's user id for a private
+// chat, or "g:<group id>" for a named group.
 export async function broadcastTyping(token, userId, to, typing = true) {
   const res = await fetch(`${SUPABASE_URL}/realtime/v1/api/broadcast`, {
     method: 'POST',
@@ -256,4 +293,44 @@ export async function broadcastTyping(token, userId, to, typing = true) {
     }),
   })
   if (!res.ok) throw new HttpError(502, `Typing broadcast failed (HTTP ${res.status})`)
+}
+
+// A named group by id or (case-insensitive) name, among the groups this
+// member can see. Returns its id.
+export async function groupIdFor(sb, group) {
+  const value = String(group).trim()
+  const rows = check(await sb.from('chat_groups').select('id, name'))
+  const hit = rows.find((g) => g.id === value) ?? rows.find((g) => g.name.toLowerCase() === value.toLowerCase())
+  if (!hit) throw new HttpError(404, `No group "${group}" that you are in`)
+  return hit.id
+}
+
+// A poll as agents see it: options with vote counts and who voted.
+export function presentPoll(p, names = {}) {
+  if (!p) return null
+  const votes = p.poll_votes ?? []
+  return {
+    id: p.id,
+    question: p.question,
+    multiple: p.multiple,
+    options: p.options.map((text, i) => {
+      const voters = votes.filter((v) => v.option === i).map((v) => names[v.user_id] ?? v.user_id)
+      return { index: i, text, votes: voters.length, voters }
+    }),
+    total_voters: new Set(votes.map((v) => v.user_id)).size,
+  }
+}
+
+// Which conversation a request means: { group: id|name } for a named group,
+// { to: username } (or { with: username }) for a private chat, nothing for the
+// main group chat. Returns ids plus the sorted pair used by shared notes.
+export async function conversationFor(sb, userId, b = {}) {
+  const peerName = b.to ?? b.with
+  if (b.group) return { group_id: await groupIdFor(sb, b.group), recipient_id: null, pair: [null, null] }
+  if (peerName) {
+    const peer = await userIdFor(sb, peerName)
+    if (peer === userId) throw new HttpError(400, 'That is you')
+    return { group_id: null, recipient_id: peer, pair: [userId, peer].sort() }
+  }
+  return { group_id: null, recipient_id: null, pair: [null, null] }
 }

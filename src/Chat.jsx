@@ -2,6 +2,27 @@ import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import { supabase, BUCKET, AVATAR_BUCKET, avatarUrl } from './supabase.js'
 import Splash from './Splash.jsx'
 import ChatList, { listPreview, listTime } from './ChatList.jsx'
+import GroupSheet from './Groups.jsx'
+import {
+  AIBadge,
+  IconTile,
+  SearchIcon as SearchGlyph,
+  NoteIcon,
+  ClockIcon,
+  PinIcon,
+  PollIcon,
+  AlarmIcon,
+  PeopleIcon,
+  XIcon,
+  messageKind,
+  AppCamera,
+  AppPhotos,
+  AppFiles,
+  AppAudio,
+  AppPolls,
+  AppSendLater,
+} from './icons.jsx'
+import { PinStrip, PollCard, PollComposer, NotesSheet, ScheduleSheet, useMessageSearch, Highlighted, itemScope } from './Tools.jsx'
 import ApiKeys from './ApiKeys.jsx'
 import { useTyping } from './typing.js'
 import { VoicePlayer, VoiceRecorder, MicIcon, canRecordVoice, formatDuration } from './Voice.jsx'
@@ -52,6 +73,7 @@ export default function Chat({ session }) {
     try {
       const params = new URLSearchParams(window.location.search)
       if (params.get('view') === 'dm' && params.get('peer')) return { type: 'dm', peerId: params.get('peer') }
+      if (params.get('view') === 'group' && params.get('group')) return { type: 'group', groupId: params.get('group') }
       if (params.get('view') === 'owner' && params.get('a') && params.get('b')) {
         return { type: 'owner', aId: params.get('a'), bId: params.get('b') }
       }
@@ -83,6 +105,19 @@ export default function Chat({ session }) {
   const [showSettings, setShowSettings] = useState(false)
   // Conversation key -> its newest message, for the chat list.
   const [lastByKey, setLastByKey] = useState({})
+  // Named groups you can see: id -> { id, name, created_by, members: [user ids] }
+  const [groups, setGroups] = useState({})
+  const groupsRef = useRef(groups)
+  groupsRef.current = groups
+  const groupsLoadedRef = useRef(false)
+  const [groupSheet, setGroupSheet] = useState(null) // 'create' | 'add' | null
+  // Team tools: pinned messages of the open chat, polls by message id, and
+  // which tool sheet is open ('notes' | 'schedule' | 'poll' | 'search').
+  const [pins, setPins] = useState([])
+  const [polls, setPolls] = useState({})
+  const [toolSheet, setToolSheet] = useState(null)
+  const [flashId, setFlashId] = useState(null)
+  const pendingJumpRef = useRef(null)
   const [dmPeers, setDmPeers] = useState([])
   const [ownerPairs, setOwnerPairs] = useState([])
   const [lightbox, setLightbox] = useState(null) // { url, name, type } for the full-screen viewer
@@ -211,14 +246,16 @@ export default function Chat({ session }) {
   profilesRef.current = profiles
 
   // ---- conversations -------------------------------------------------------
-  // view is { type: 'group' }, { type: 'dm', peerId }, or
+  // view is { type: 'group' } (the main group chat), { type: 'group', groupId }
+  // (a named group), { type: 'dm', peerId }, or
   // { type: 'owner', aId, bId } for a read-only owner view of a private
   // chat between two other members. The owner never appears as a
   // participant in an owner view.
   const isGroup = view.type === 'group'
   const peerId = view.type === 'dm' ? view.peerId : null
   const isOwnerView = view.type === 'owner'
-  const typing = useTyping(myId, isGroup ? null : peerId ?? undefined)
+  const groupId = isGroup ? view.groupId ?? null : null
+  const typing = useTyping(myId, isGroup ? (groupId ? `g:${groupId}` : null) : peerId ?? undefined)
   const clearTyping = typing.clear
   const ownerA = isOwnerView ? view.aId : null
   const ownerB = isOwnerView ? view.bId : null
@@ -232,7 +269,7 @@ export default function Chat({ session }) {
 
   const isMessageForView = useCallback(
     (msg, v) => {
-      if (v.type === 'group') return msg.recipient_id == null
+      if (v.type === 'group') return msg.recipient_id == null && (msg.group_id ?? null) === (v.groupId ?? null)
       if (v.type === 'owner') {
         return (
           (msg.user_id === v.aId && msg.recipient_id === v.bId) ||
@@ -259,6 +296,7 @@ export default function Chat({ session }) {
     (rows) => {
       const v = viewRef.current
       if (!v || v.type === 'owner' || !activeRef.current) return
+      if (v.type === 'group' && v.groupId && !groupsRef.current[v.groupId]?.members.includes(myId)) return
       const todo = (rows ?? []).filter(
         (m) => m && m.user_id !== myId && isMessageForView(m, v) && !markedReadRef.current.has(m.id),
       )
@@ -314,7 +352,7 @@ export default function Chat({ session }) {
   // message, is what the panel badge and the document title count, so a
   // message in the currently viewed conversation never creates a count.
   const viewKey = (v) => {
-    if (v.type === 'group') return 'group'
+    if (v.type === 'group') return v.groupId ? `group:${v.groupId}` : 'group'
     if (v.type === 'owner') return `owner:${[v.aId, v.bId].sort().join('|')}`
     return `dm:${v.peerId}`
   }
@@ -334,6 +372,9 @@ export default function Chat({ session }) {
   // only the owner, labelled as an owner view, never as a participant DM.
   const notifyTarget = useCallback(
     (m) => {
+      if (m.group_id) {
+        return { key: `group:${m.group_id}`, view: { type: 'group', groupId: m.group_id }, label: groupsRef.current[m.group_id]?.name ?? 'Group', owner: false }
+      }
       if (m.recipient_id == null) return { key: 'group', view: { type: 'group' }, label: 'Group Chat', owner: false }
       if (m.user_id !== myId && m.recipient_id !== myId) {
         const [a, b] = [m.user_id, m.recipient_id].sort()
@@ -366,9 +407,9 @@ export default function Chat({ session }) {
   const loadInbox = useCallback(async () => {
     if (!myId) return
     const [{ data: groupRows }, { data: dmRows }, { data: readRows }] = await Promise.all([
-      supabase.from('messages').select(PREVIEW_FIELDS).is('recipient_id', null).order('id', { ascending: false }).limit(150),
+      supabase.from('messages').select(PREVIEW_FIELDS).is('recipient_id', null).order('id', { ascending: false }).limit(300),
       supabase.from('messages').select(PREVIEW_FIELDS).not('recipient_id', 'is', null).order('id', { ascending: false }).limit(600),
-      supabase.from('message_reads').select('message_id').eq('user_id', myId).order('message_id', { ascending: false }).limit(600),
+      supabase.from('message_reads').select('message_id').eq('user_id', myId).order('message_id', { ascending: false }).limit(800),
     ])
     const readIds = new Set((readRows ?? []).map((r) => r.message_id))
     const byKey = {}
@@ -408,8 +449,91 @@ export default function Chat({ session }) {
     loadInbox()
   }, [loadInbox])
 
+  const loadGroups = useCallback(async () => {
+    const [{ data: rows, error: gErr }, { data: members }] = await Promise.all([
+      supabase.from('chat_groups').select('id, name, created_by, created_at').order('created_at'),
+      supabase.from('chat_group_members').select('group_id, user_id, added_at').order('added_at'),
+    ])
+    if (gErr) return // before migration 0014: no named groups yet
+    const next = {}
+    for (const g of rows ?? []) next[g.id] = { ...g, members: [] }
+    for (const m of members ?? []) next[m.group_id]?.members.push(m.user_id)
+    groupsLoadedRef.current = true
+    setGroups(next)
+  }, [])
+  useEffect(() => {
+    if (myId) loadGroups()
+  }, [myId, loadGroups])
+
+  // ---- named groups (the owner makes and manages them) ----
+  async function createGroup({ name, ids }) {
+    const { data: g, error: err } = await supabase.from('chat_groups').insert({ name }).select().single()
+    if (err) return setError(err.message)
+    const { error: mErr } = await supabase
+      .from('chat_group_members')
+      .insert([...new Set([myId, ...ids])].map((user_id) => ({ group_id: g.id, user_id })))
+    if (mErr) setError(mErr.message)
+    await loadGroups()
+    setGroupSheet(null)
+    openConversation({ type: 'group', groupId: g.id })
+  }
+  async function addToGroup({ ids }) {
+    const { error: err } = await supabase
+      .from('chat_group_members')
+      .insert(ids.map((user_id) => ({ group_id: view.groupId, user_id })))
+    if (err) setError(err.message)
+    await loadGroups()
+    setGroupSheet(null)
+  }
+  async function removeFromGroup(userId) {
+    const g = groups[view.groupId]
+    if (!g || !window.confirm(`Remove ${profiles[userId]} from ${g.name}?`)) return
+    const { error: err } = await supabase.from('chat_group_members').delete().match({ group_id: g.id, user_id: userId })
+    if (err) setError(err.message)
+    loadGroups()
+  }
+  async function leaveGroup() {
+    const g = groups[view.groupId]
+    if (!g || !window.confirm(`Leave ${g.name}? You won't see its messages anymore.`)) return
+    const { error: err } = await supabase.from('chat_group_members').delete().match({ group_id: g.id, user_id: myId })
+    if (err) return setError(err.message)
+    setShowMembers(false)
+    await loadGroups()
+  }
+  async function renameGroup() {
+    const g = groups[view.groupId]
+    const name = window.prompt('Group name', g?.name ?? '')?.trim()
+    if (!g || !name || name === g.name) return
+    const { error: err } = await supabase.from('chat_groups').update({ name: name.slice(0, 60) }).eq('id', g.id)
+    if (err) setError(err.message)
+    loadGroups()
+  }
+  async function deleteGroup() {
+    const g = groups[view.groupId]
+    if (!g || !window.confirm(`Delete ${g.name} and all its messages for everyone? This can't be undone.`)) return
+    const { error: err } = await supabase.from('chat_groups').delete().eq('id', g.id)
+    if (err) return setError(err.message)
+    setShowMembers(false)
+    goBack()
+    setView({ type: 'group' })
+    await loadGroups()
+    loadInbox()
+  }
+
+  // Removed from (or deleted) the group you're looking at: go back to the list.
+  useEffect(() => {
+    if (!groupsLoadedRef.current || view.type !== 'group' || !view.groupId) return
+    if (!groups[view.groupId]) {
+      setView({ type: 'group' })
+      setScreen('list')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groups])
+
   const previewOf = (m) => {
-    if (m.call_duration != null) return '📞 Voice call'
+    if (m.call_duration != null) return 'Voice call'
+    if (m.content?.startsWith('📊 ')) return `Poll: ${m.content.slice(2).trim().replace(/^Poll:\s*/, '')}`
+    if (m.content?.startsWith('⏰ ')) return m.content.slice(2).trim()
     if (m.content?.trim()) {
       const text = m.content.trim()
       return text.length > 80 ? `${text.slice(0, 80)}…` : text
@@ -504,7 +628,7 @@ export default function Chat({ session }) {
     if (!m) return 'Original message not loaded'
     if (m.call_duration != null) return 'voice call'
     if (m.content?.trim()) {
-      const text = m.content.trim()
+      const text = m.content.trim().replace(/^📊\s*/, 'Poll: ').replace(/^Poll: Poll:/, 'Poll:').replace(/^⏰\s*/, '')
       return text.length > 60 ? `${text.slice(0, 60)}…` : text
     }
     if (m.attachment_path) {
@@ -670,7 +794,7 @@ export default function Chat({ session }) {
     const onServiceWorkerMessage = (e) => {
       const v = e.data?.view
       if (e.data?.type !== 'open-conversation' || !v) return
-      if (v.type === 'group') openConversation({ type: 'group' })
+      if (v.type === 'group') openConversation(v.groupId ? { type: 'group', groupId: v.groupId } : { type: 'group' })
       else if (v.type === 'dm' && v.peerId) openConversation({ type: 'dm', peerId: v.peerId })
       else if (v.type === 'owner' && v.aId && v.bId && isOwnerRef.current) {
         openConversation({ type: 'owner', aId: v.aId, bId: v.bId })
@@ -749,7 +873,9 @@ export default function Chat({ session }) {
   }
 
   function filterConversation(query, v) {
-    if (v.type === 'group') return query.is('recipient_id', null)
+    if (v.type === 'group') {
+      return v.groupId ? query.eq('group_id', v.groupId) : query.is('recipient_id', null).is('group_id', null)
+    }
     if (v.type === 'owner') {
       return query.or(
         `and(user_id.eq.${v.aId},recipient_id.eq.${v.bId}),and(user_id.eq.${v.bId},recipient_id.eq.${v.aId})`,
@@ -799,7 +925,8 @@ export default function Chat({ session }) {
             (msg.attachment_path
               ? m.attachment_path === msg.attachment_path
               : !m._file && (m.content ?? null) === (msg.content ?? null)) &&
-            (m.recipient_id ?? null) === (msg.recipient_id ?? null),
+            (m.recipient_id ?? null) === (msg.recipient_id ?? null) &&
+            (m.group_id ?? null) === (msg.group_id ?? null),
         )
         if (pending === -1) return [...prev, msg]
         const next = prev.slice()
@@ -890,7 +1017,7 @@ export default function Chat({ session }) {
   useEffect(() => {
     const onKey = (e) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return
-      if (document.querySelector('.lightbox, .media-viewer, .call-screen')) return
+      if (document.querySelector('.lightbox, .viewer, .call-screen')) return
       if (showMembers) setShowMembers(false)
       else if (showSettings) setShowSettings(false)
       else if (!wide && screen === 'chat' && !document.activeElement?.closest?.('.composer')) goBack()
@@ -922,8 +1049,14 @@ export default function Chat({ session }) {
       loadReads(rows.map((m) => m.id))
       markAsRead(rows)
       signUrls(rows.map((m) => m.attachment_path))
+      if (pendingJumpRef.current) {
+        const id = pendingJumpRef.current
+        pendingJumpRef.current = null
+        jumpTo(id, rows)
+      }
     }
     load()
+    loadPins()
     return () => {
       cancelled = true
     }
@@ -1009,6 +1142,7 @@ export default function Chat({ session }) {
       if (++tick % 3 === 0) {
         refreshReactions()
         refreshReads()
+        reloadToolsRef.current()
       }
     }, 4000)
     return () => {
@@ -1064,7 +1198,10 @@ export default function Chat({ session }) {
           return
         } else if (!isMessageForView(m, viewRef.current)) {
           // A group message arriving while another conversation is viewed:
-          // it is not added to the current view, but it does notify.
+          // it is not added to the current view, but it does notify (named
+          // groups: only their members; the owner can see others silently).
+          if (m.group_id && !groupsRef.current[m.group_id]) loadGroups()
+          if (m.group_id && groupsRef.current[m.group_id] && !groupsRef.current[m.group_id].members.includes(myId)) return
           if (m.user_id !== myId) {
             playReceive()
             notify(m)
@@ -1102,6 +1239,14 @@ export default function Chat({ session }) {
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'reactions' }, ({ old: r }) =>
         applyReaction(r.message_id, r.user_id, r.emoji, false),
       )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'message_pins' }, () => reloadToolsRef.current())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'polls' }, () => reloadToolsRef.current())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'poll_votes' }, () => reloadToolsRef.current())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_groups' }, () => loadGroups())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_group_members' }, () => {
+        loadGroups()
+        loadInbox()
+      })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, ({ new: row }) => {
         if (row?.id) applyProfile(row)
       })
@@ -1127,7 +1272,7 @@ export default function Chat({ session }) {
       incomingRef.current = null
       supabase.removeChannel(channel)
     }
-  }, [myId, catchUp, refreshReads, addMessage, applyReaction, dmPeerOf, addDmPeer, addOwnerPair, ensureProfile, isMessageForView, notify, markAsRead, bumpLast, loadInbox])
+  }, [myId, catchUp, refreshReads, addMessage, applyReaction, dmPeerOf, addDmPeer, addOwnerPair, ensureProfile, isMessageForView, notify, markAsRead, bumpLast, loadInbox, loadGroups])
 
   async function loadOlder() {
     const oldest = messages[0]
@@ -1152,12 +1297,127 @@ export default function Chat({ session }) {
     signUrls(rows.map((m) => m.attachment_path))
   }
 
+  // ---- team tools ----------------------------------------------------------
+
+  // Pinned messages of the open chat, newest pin first.
+  async function loadPins() {
+    const { data } = await supabase
+      .from('message_pins')
+      .select('message_id, pinned_at, messages!inner(*)')
+      .order('pinned_at', { ascending: false })
+      .limit(100)
+    const v = viewRef.current
+    setPins((data ?? []).map((p) => p.messages).filter((m) => m && isMessageForView(m, v)))
+  }
+
+  // Polls for the poll messages on screen (their text starts with 📊).
+  const loadPolls = useCallback(async (ids) => {
+    if (!ids.length) return
+    const { data } = await supabase.from('polls').select('id, message_id, question, options, multiple, poll_votes(user_id, option)').in('message_id', ids)
+    setPolls((prev) => {
+      const next = { ...prev }
+      for (const p of data ?? []) next[p.message_id] = p
+      return next
+    })
+  }, [])
+  const pollIds = messages.filter((m) => typeof m.id === 'number' && m.content?.startsWith('📊 ')).map((m) => m.id)
+  const pollKey = pollIds.join(',')
+  useEffect(() => {
+    loadPolls(pollIds)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pollKey, loadPolls])
+  const reloadToolsRef = useRef(() => {})
+  reloadToolsRef.current = () => {
+    loadPins()
+    loadPolls(pollIds)
+  }
+
+  async function togglePin(msg) {
+    const pinned = pins.some((p) => p.id === msg.id)
+    const { error: err } = pinned
+      ? await supabase.from('message_pins').delete().eq('message_id', msg.id)
+      : await supabase.from('message_pins').insert({ message_id: msg.id })
+    if (err) setError(err.message)
+    loadPins()
+  }
+
+  async function createPoll({ question, options, multiple = false }) {
+    question = question?.trim() || 'Poll'
+    const summary = question === 'Poll' ? `Poll: ${options.join(', ')}` : question
+    const { data: msg, error: err } = await supabase
+      .from('messages')
+      .insert({ content: `📊 ${summary}`.slice(0, 4000), recipient_id: peerId, group_id: groupId })
+      .select()
+      .single()
+    if (err) return setError(err.message)
+    const { error: pErr } = await supabase.from('polls').insert({ message_id: msg.id, question, options, multiple })
+    if (pErr) {
+      await supabase.from('messages').delete().eq('id', msg.id)
+      return setError(pErr.message)
+    }
+    stickToBottom.current = true
+    addMessage(msg)
+    loadPolls([msg.id])
+    playSend()
+    return true
+  }
+
+  // Scroll to a message and flash it. If it's older than what's loaded, load
+  // the history around it first.
+  async function jumpTo(id, rows = messagesRef.current) {
+    const show = () =>
+      requestAnimationFrame(() => {
+        document.getElementById(`msg-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        setFlashId(id)
+        setTimeout(() => setFlashId((f) => (f === id ? null : f)), 1800)
+      })
+    if (rows.some((m) => m.id === id)) return show()
+    const v = viewRef.current
+    const [{ data: older }, { data: newer }] = await Promise.all([
+      filterConversation(supabase.from('messages').select('*').lte('id', id).order('id', { ascending: false }).limit(60), v),
+      filterConversation(supabase.from('messages').select('*').gt('id', id).order('id').limit(300), v),
+    ])
+    const page = [...(older ?? []).reverse(), ...(newer ?? [])]
+    if (!page.some((m) => m.id === id)) return setError('That message is no longer available.')
+    stickToBottom.current = false
+    preserveScroll.current = null
+    setMessages(page)
+    setHasMore((older ?? []).length === 60)
+    loadReactions(page.map((m) => m.id))
+    signUrls(page.map((m) => m.attachment_path))
+    setTimeout(show, 60)
+  }
+
+  // Open the chat a message belongs to (from search) and jump to it.
+  function openMessage(m) {
+    setToolSheet(null)
+    const v = m.group_id
+      ? { type: 'group', groupId: m.group_id }
+      : m.recipient_id == null
+        ? { type: 'group' }
+        : m.user_id === myId || m.recipient_id === myId
+          ? { type: 'dm', peerId: m.user_id === myId ? m.recipient_id : m.user_id }
+          : { type: 'owner', aId: [m.user_id, m.recipient_id].sort()[0], bId: [m.user_id, m.recipient_id].sort()[1] }
+    if (viewKey(v) === viewKey(viewRef.current)) {
+      openConversation(v)
+      jumpTo(m.id)
+    } else {
+      pendingJumpRef.current = m.id
+      openConversation(v)
+    }
+  }
+
   // ---- scrolling -----------------------------------------------------------
 
   const scrollToBottom = useCallback(() => {
     const el = listRef.current
     if (el && stickToBottom.current) el.scrollTop = el.scrollHeight
   }, [])
+
+  // A poll card is taller than its placeholder text: stay pinned to the bottom.
+  useLayoutEffect(() => {
+    scrollToBottom()
+  }, [polls, scrollToBottom])
 
   // A typing bubble appearing at the bottom keeps the view pinned there.
   const typingCount = typing.typers.length
@@ -1213,6 +1473,7 @@ export default function Chat({ session }) {
         id: `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         user_id: myId,
         recipient_id: peerId,
+        group_id: groupId,
         reply_to_id: replyToId,
         content: text || null,
         created_at: new Date().toISOString(),
@@ -1238,6 +1499,7 @@ export default function Chat({ session }) {
       id: tempId,
       user_id: myId,
       recipient_id: peerId,
+      group_id: groupId,
       reply_to_id: replyToId,
       content: text || null,
       created_at: new Date().toISOString(),
@@ -1297,7 +1559,13 @@ export default function Chat({ session }) {
     }
     const { data, error: insErr } = await supabase
       .from('messages')
-      .insert({ content: draft.content, recipient_id: draft.recipient_id, reply_to_id: draft.reply_to_id, ...attachment })
+      .insert({
+        content: draft.content,
+        recipient_id: draft.recipient_id,
+        group_id: draft.group_id ?? null,
+        reply_to_id: draft.reply_to_id,
+        ...attachment,
+      })
       .select()
       .single()
     setUploadProgress((prev) => {
@@ -1457,7 +1725,7 @@ export default function Chat({ session }) {
     const time = latest ? formatReadTime(latest) : ''
     if (view.type === 'group') {
       if (!readers.length) return { label: 'Delivered' }
-      const others = Object.keys(profiles).filter((id) => id !== myId)
+      const others = otherMemberIds
       if (others.length && others.every((id) => readers.includes(id))) return { label: 'Read by everyone', time, read: true }
       return { label: `Read by ${readers.map((id) => profiles[id] ?? 'someone').join(', ')}`, time, read: true }
     }
@@ -1465,6 +1733,21 @@ export default function Chat({ session }) {
   }
 
   const memberIds = Object.keys(profiles)
+  const currentGroup = groupId ? groups[groupId] ?? null : null
+  // People in the conversation on screen: the named group's members, or everyone.
+  const groupMemberIds = currentGroup ? currentGroup.members.filter((id) => profiles[id]) : memberIds
+  // The owner can look into a named group they're not in, read only.
+  const notInGroup = Boolean(groupId && currentGroup && !currentGroup.members.includes(myId))
+  const readOnly = isOwnerView || notInGroup
+  const groupTitle = groupId ? currentGroup?.name ?? 'Group' : 'Group Chat'
+  const groupFaces = (g) => {
+    const others = g.members.filter((id) => id !== myId && profiles[id])
+    return (others.length >= 2 ? others.slice(0, 2) : [...others, myId].slice(0, 2)).map((id) => ({
+      id,
+      name: profiles[id],
+      src: avatars[id],
+    }))
+  }
   // (Plain code after the early returns, not a hook.)
   const ONLINE_WINDOW_MS = 2 * 60 * 1000
   const online = [
@@ -1482,7 +1765,11 @@ export default function Chat({ session }) {
       ? `${typingNames.join(', ')} ${typingNames.length > 1 ? 'are' : 'is'} typing…`
       : 'typing…'
     : isGroup
-      ? `${Object.keys(profiles).length} people${online.length ? ` · ${online.length} online` : ''}`
+      ? `${groupMemberIds.length} people${
+          groupMemberIds.filter((id) => online.includes(id)).length
+            ? ` · ${groupMemberIds.filter((id) => online.includes(id)).length} online`
+            : ''
+        }${notInGroup ? ' · read only' : ''}`
       : isOwnerView
         ? 'Owner view · read only'
         : online.includes(peerId)
@@ -1491,7 +1778,7 @@ export default function Chat({ session }) {
 
   // Everyone else in the group, used only for the read-receipt rule:
   // a group message is blue only once every one of these has read it.
-  const otherMemberIds = memberIds.filter((id) => id !== myId)
+  const otherMemberIds = groupMemberIds.filter((id) => id !== myId)
   const peerName = peerId ? profiles[peerId] ?? '…' : null
   const ownerNameA = ownerA ? profiles[ownerA] ?? '…' : null
   const ownerNameB = ownerB ? profiles[ownerB] ?? '…' : null
@@ -1505,7 +1792,9 @@ export default function Chat({ session }) {
     ? notice.owner
       ? `Owner view · ${profiles[notice.view.aId] ?? '…'} and ${profiles[notice.view.bId] ?? '…'}`
       : notice.view.type === 'group'
-        ? 'Group Chat'
+        ? notice.view.groupId
+          ? groups[notice.view.groupId]?.name ?? 'Group'
+          : 'Group Chat'
         : 'Private message'
     : null
 
@@ -1557,7 +1846,13 @@ export default function Chat({ session }) {
   // ---- chat list rows ----
   const typingIn = (key) =>
     Object.entries(typing.all).some(
-      ([id, t]) => t.until > clock - 1000 && (key === 'group' ? t.to === null : key === `dm:${id}` && t.to === myId),
+      ([id, t]) =>
+        t.until > clock - 1000 &&
+        (key === 'group'
+          ? t.to === null
+          : key.startsWith('group:')
+            ? t.to === `g:${key.slice(6)}`
+            : key === `dm:${id}` && t.to === myId),
     )
   const previewFor = (key, named) => {
     const m = lastByKey[key]
@@ -1573,8 +1868,17 @@ export default function Chat({ session }) {
       view: { type: 'group' },
       title: 'Group Chat',
       avatar: '/logo-192.png',
-      emptyText: 'Say hi to everyone 👋',
+      emptyText: 'Say hi to everyone',
     },
+    ...Object.values(groups)
+      .filter((g) => g.members.includes(myId))
+      .map((g) => ({
+        key: `group:${g.id}`,
+        view: { type: 'group', groupId: g.id },
+        title: g.name,
+        faces: groupFaces(g),
+        emptyText: 'New group · say hi',
+      })),
     ...memberIds
       .filter((id) => id !== myId)
       .map((id) => ({
@@ -1589,13 +1893,28 @@ export default function Chat({ session }) {
   ]
     .map((c) => ({
       ...c,
-      preview: previewFor(c.key, c.key === 'group'),
+      preview: previewFor(c.key, c.key === 'group' || c.key.startsWith('group:')),
+      kind: messageKind(lastByKey[c.key]),
       time: listTime(lastByKey[c.key]?.created_at),
       unread: unread[c.key] ?? 0,
       typing: typingIn(c.key),
     }))
     .sort((a, b) => stamp(b.key) - stamp(a.key) || (a.key === 'group' ? -1 : b.key === 'group' ? 1 : a.title.localeCompare(b.title)))
   if (isOwner) {
+    for (const g of Object.values(groups).filter((x) => !x.members.includes(myId))) {
+      const key = `group:${g.id}`
+      listItems.push({
+        key,
+        owner: true,
+        view: { type: 'group', groupId: g.id },
+        title: g.name,
+        faces: groupFaces(g),
+        preview: previewFor(key, true),
+        time: listTime(lastByKey[key]?.created_at),
+        unread: 0,
+        stamp: stamp(key),
+      })
+    }
     for (const [a, b] of ownerPairList) {
       const key = `owner:${pairKey(a, b)}`
       listItems.push({
@@ -1626,7 +1945,20 @@ export default function Chat({ session }) {
           activeKey={chatActive ? viewKey(view) : null}
           onOpen={openConversation}
           onSettings={() => setShowSettings(true)}
+          onNewGroup={isOwner ? () => setGroupSheet('create') : null}
           Avatar={Avatar}
+          profiles={profiles}
+          avatars={avatars}
+          onOpenMessage={openMessage}
+          chatNameOf={(m) =>
+            m.group_id
+              ? groups[m.group_id]?.name ?? 'Group'
+              : m.recipient_id == null
+                ? 'Group Chat'
+                : m.user_id === myId || m.recipient_id === myId
+                  ? profiles[m.user_id === myId ? m.recipient_id : m.user_id] ?? 'Private chat'
+                  : `${profiles[m.user_id]} & ${profiles[m.recipient_id]}`
+          }
         />
       </div>
     <div className="chat pane-chat" ref={paneRef} inert={!chatActive} {...edgeSwipe}>
@@ -1657,8 +1989,10 @@ export default function Chat({ session }) {
           </button>
         )}
         <button className="topbar-center" onClick={() => setShowMembers(true)}>
-          <span className={`topbar-avatar ${isOwnerView ? 'pair' : ''}`}>
-            {isGroup ? (
+          <span className={`topbar-avatar ${isOwnerView || currentGroup ? 'pair' : ''}`}>
+            {currentGroup ? (
+              groupFaces(currentGroup).map((f) => <Avatar key={f.id} name={f.name} src={f.src} />)
+            ) : isGroup ? (
               <img src="/logo-192.png" alt="" />
             ) : isOwnerView ? (
               <>
@@ -1670,13 +2004,15 @@ export default function Chat({ session }) {
             )}
           </span>
           <span className="glass-pill">
-            <span className="pill-title">{isGroup ? 'Group Chat' : isOwnerView ? ownerPairLabel : peerName}</span>
+            <span className="pill-title">{isGroup ? groupTitle : isOwnerView ? ownerPairLabel : peerName}</span>
             <span className={`pill-sub ${headerTyping ? 'typing' : ''}`}>{headerSubtitle}</span>
           </span>
         </button>
       </header>
 
-      <main className="messages" ref={listRef} onScroll={onScroll} onClick={() => setPickerFor(null)}>
+      <PinStrip pins={pins} profiles={profiles} onJump={(id) => jumpTo(id)} preview={quotePreviewOf} />
+
+      <main className={`messages ${pins.length ? 'has-pins' : ''}`} ref={listRef} onScroll={onScroll} onClick={() => setPickerFor(null)}>
         {hasMore && (
           <button className="load-older" onClick={loadOlder}>
             Load earlier messages
@@ -1687,7 +2023,7 @@ export default function Chat({ session }) {
           <div className="empty">
             <img className="empty-logo" src="/logo.png" alt="" />
             {isGroup ? (
-              <>No messages yet. Say hi 👋</>
+              <>No messages yet. Say hi.</>
             ) : isOwnerView ? (
               <>No messages in this private chat between {ownerPairLabel}.</>
             ) : (
@@ -1708,7 +2044,7 @@ export default function Chat({ session }) {
               last={item.last}
               mine={item.msg.user_id === myId}
               read={
-                !isOwnerView &&
+                !readOnly &&
                 item.msg.user_id === myId &&
                 (isGroup
                   ? otherMemberIds.length > 0 &&
@@ -1717,8 +2053,8 @@ export default function Chat({ session }) {
                     ? (reads[item.msg.id] ?? []).includes(peerId)
                     : false)
               }
-              readOnly={isOwnerView}
-              status={!isOwnerView && item.msg.id === lastOwnId ? readStatus(item.msg) : null}
+              readOnly={readOnly}
+              status={!readOnly && item.msg.id === lastOwnId ? readStatus(item.msg) : null}
               tickState={
                 item.msg._status ??
                 (isGroup
@@ -1749,6 +2085,13 @@ export default function Chat({ session }) {
               onDelete={() => deleteMessage(item.msg)}
               onOpenImage={setLightbox}
               onMediaLoad={scrollToBottom}
+              poll={polls[item.msg.id]}
+              pinned={pins.some((p) => p.id === item.msg.id)}
+              onPin={() => togglePin(item.msg)}
+              onPollChange={() => loadPolls([item.msg.id])}
+              onPollError={setError}
+              avatars={avatars}
+              flash={flashId === item.msg.id}
             />
           ),
         )}
@@ -1793,37 +2136,65 @@ export default function Chat({ session }) {
             </span>
           </button>
           <button className="notice-close" onClick={() => setNotice(null)} aria-label="Dismiss notification">
-            ✕
+            <XIcon size={14} />
           </button>
         </div>
       )}
 
-      {isOwnerView ? (
+      {readOnly ? (
         <div className="owner-readonly" role="note">
-          Read-only owner view · you cannot send, react, or delete here.
+          {notInGroup
+            ? "Read-only · you're not in this group."
+            : 'Read-only owner view · you cannot send, react, or delete here.'}
         </div>
       ) : (
         <>
           {replyTo && (
-            <div className="reply-preview" role="note">
-              <span className="reply-preview-text">
-                <b>Replying to {profiles[replyTo.user_id] ?? '…'}</b>
-                <span>{quotePreviewOf(replyTo)}</span>
-              </span>
-              <button className="reply-preview-cancel" onClick={() => setReplyTo(null)} aria-label="Cancel reply">
-                ✕
+            // Reply mode, like iMessage: the chat blurs away, the message you
+            // are answering stays sharp just above the keyboard. Tap the blur
+            // or ✕ to cancel.
+            <div className="reply-focus" onClick={() => setReplyTo(null)}>
+              <button className="glass-btn right reply-focus-close" onClick={() => setReplyTo(null)} aria-label="Cancel reply">
+                <CloseIcon />
               </button>
+              <div className="reply-focus-msg" onClick={(e) => e.stopPropagation()}>
+                <div className="stamp">
+                  <b>{formatStamp(new Date(replyTo.created_at)).day}</b> {formatStamp(new Date(replyTo.created_at)).time}
+                </div>
+                <Message
+                  msg={replyTo}
+                  first
+                  last
+                  mine={replyTo.user_id === myId}
+                  readOnly
+                  myId={myId}
+                  username={profiles[replyTo.user_id] ?? '…'}
+                  avatar={avatars[replyTo.user_id]}
+                  profiles={profiles}
+                  reactions={reactions[replyTo.id] ?? []}
+                  url={urls[replyTo.attachment_path]}
+                  replyOriginal={replyTo.reply_to_id ? originals.get(replyTo.reply_to_id) ?? null : undefined}
+                  highlightMentions={isGroup}
+                  onOpenImage={setLightbox}
+                  onMediaLoad={() => {}}
+                  tickState={null}
+                />
+              </div>
             </div>
           )}
           <Composer
             onSend={send}
-            placeholder={isGroup ? 'Message' : `Message ${peerName}`}
+            replying={Boolean(replyTo)}
+            focusKey={replyTo?.id}
+            onPoll={createPoll}
+            onSchedule={() => setToolSheet('schedule')}
+            placeholder={replyTo ? 'Reply' : isGroup ? (currentGroup ? `Message ${currentGroup.name}` : 'Message') : `Message ${peerName}`}
             enableMentions={isGroup}
-            members={memberIds
+            members={groupMemberIds
               .slice()
               .sort((a, b) => (profiles[a] ?? '').localeCompare(profiles[b] ?? ''))
               .map((id) => ({ id, username: profiles[id], avatar: avatars[id] }))}
-            viewKey={isGroup ? 'group' : `dm:${peerId}`}
+            viewKey={viewKey(view)}
             onTyping={typing.notify}
             onVoiceError={setError}
           />
@@ -1837,14 +2208,16 @@ export default function Chat({ session }) {
           <div className="sheet" role="dialog" aria-label="Chat info" onClick={(e) => e.stopPropagation()}>
             <div className="sheet-grabber" aria-hidden="true" />
             <div className="sheet-head">
-              <span>{isGroup ? 'Group Chat' : isOwnerView ? 'Private chat' : 'Contact'}</span>
+              <span>{isGroup ? 'Group info' : isOwnerView ? 'Private chat' : 'Contact'}</span>
               <button className="sheet-done" onClick={() => setShowMembers(false)}>
                 Done
               </button>
             </div>
             <div className="info-hero">
-              <span className={`info-avatar ${isOwnerView ? 'pair' : ''}`}>
-                {isGroup ? (
+              <span className={`info-avatar ${isOwnerView || currentGroup ? 'pair' : ''}`}>
+                {currentGroup ? (
+                  groupFaces(currentGroup).map((f) => <Avatar key={f.id} name={f.name} src={f.src} />)
+                ) : isGroup ? (
                   <img src="/logo-192.png" alt="" />
                 ) : isOwnerView ? (
                   <>
@@ -1856,8 +2229,8 @@ export default function Chat({ session }) {
                 )}
               </span>
               <span className="info-name">
-                {isGroup ? 'Group Chat' : isOwnerView ? ownerPairLabel : peerName}
-                {peerId && aiIds.has(peerId) && <span className="ai-badge">AI</span>}
+                {isGroup ? groupTitle : isOwnerView ? ownerPairLabel : peerName}
+                {peerId && aiIds.has(peerId) && <AIBadge />}
               </span>
               <span className="info-sub">{headerSubtitle}</span>
               {peerId && aiIds.has(peerId) && (
@@ -1874,11 +2247,37 @@ export default function Chat({ session }) {
                 </div>
               )}
             </div>
+            <div className="group-actions info-tools">
+              <button onClick={() => { setShowMembers(false); setToolSheet('search') }}>
+                <IconTile icon={SearchGlyph} color="blue" /> <span>Search this chat</span>
+              </button>
+              <button onClick={() => { setShowMembers(false); setToolSheet('notes') }}>
+                <IconTile icon={NoteIcon} color="yellow" /> <span>Notes, tasks & decisions</span>
+              </button>
+              {!readOnly && (
+                <button onClick={() => { setShowMembers(false); setToolSheet('schedule') }}>
+                  <IconTile icon={ClockIcon} color="orange" /> <span>Scheduled messages</span>
+                </button>
+              )}
+              {pins.length > 0 && (
+                <button onClick={() => { setShowMembers(false); jumpTo(pins[0].id) }}>
+                  <IconTile icon={PinIcon} color="red" /> <span>Pinned</span> <span className="tool-count">{pins.length}</span>
+                </button>
+              )}
+            </div>
             {(isGroup || isOwnerView) && (
               <>
-                <div className="sheet-section">{isGroup ? `${memberIds.length} people` : 'In this chat'}</div>
+                <div className="sheet-section">{isGroup ? `${groupMemberIds.length} people` : 'In this chat'}</div>
                 <ul className="member-list">
-                  {(isGroup ? memberIds : [ownerA, ownerB])
+                  {isOwner && currentGroup && (
+                    <li>
+                      <button className="add-people" onClick={() => setGroupSheet('add')}>
+                        <span className="add-people-icon">＋</span>
+                        Add people
+                      </button>
+                    </li>
+                  )}
+                  {(isGroup ? groupMemberIds : [ownerA, ownerB])
                     .slice()
                     .sort((x, y) => (x === myId ? -1 : y === myId ? 1 : (profiles[x] ?? '').localeCompare(profiles[y] ?? '')))
                     .map((id) => (
@@ -1889,7 +2288,7 @@ export default function Chat({ session }) {
                         </span>
                         <span className="member-name">
                           {profiles[id]}
-                          {aiIds.has(id) && <span className="ai-badge">AI</span>}
+                          {aiIds.has(id) && <AIBadge />}
                           {id === myId && <span className="muted"> (you)</span>}
                         </span>
                         {id !== myId && (
@@ -1897,13 +2296,70 @@ export default function Chat({ session }) {
                             Message
                           </button>
                         )}
+                        {isOwner && currentGroup && id !== myId && (
+                          <button className="member-remove" onClick={() => removeFromGroup(id)} aria-label={`Remove ${profiles[id]}`}>
+                            −
+                          </button>
+                        )}
                       </li>
                     ))}
                 </ul>
               </>
             )}
+            {currentGroup && (
+              <div className="group-actions">
+                {isOwner && <button onClick={renameGroup}>Rename group</button>}
+                {currentGroup.members.includes(myId) && (
+                  <button className="danger" onClick={leaveGroup}>
+                    Leave group
+                  </button>
+                )}
+                {isOwner && (
+                  <button className="danger" onClick={deleteGroup}>
+                    Delete group
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         </div>
+      )}
+
+      {toolSheet === 'notes' && (
+        <NotesSheet
+          scope={itemScope(view, myId)}
+          title={isGroup ? `${groupTitle} · Notes` : isOwnerView ? 'Notes' : `Notes with ${peerName}`}
+          readOnly={readOnly}
+          profiles={profiles}
+          onClose={() => setToolSheet(null)}
+          onError={setError}
+        />
+      )}
+      {toolSheet === 'schedule' && (
+        <ScheduleSheet target={{ recipient_id: peerId, group_id: groupId }} onClose={() => setToolSheet(null)} onError={setError} />
+      )}
+      {toolSheet === 'search' && (
+        <ChatSearchSheet
+          view={view}
+          title={isGroup ? groupTitle : isOwnerView ? ownerPairLabel : peerName}
+          profiles={profiles}
+          isMessageForView={isMessageForView}
+          onOpen={openMessage}
+          onClose={() => setToolSheet(null)}
+        />
+      )}
+
+      {groupSheet && (
+        <GroupSheet
+          mode={groupSheet}
+          Avatar={Avatar}
+          people={memberIds
+            .filter((id) => id !== myId && !(groupSheet === 'add' && currentGroup?.members.includes(id)))
+            .sort((x, y) => (profiles[x] ?? '').localeCompare(profiles[y] ?? ''))
+            .map((id) => ({ id, name: profiles[id], avatar: avatars[id], ai: aiIds.has(id) }))}
+          onCancel={() => setGroupSheet(null)}
+          onDone={groupSheet === 'create' ? createGroup : addToGroup}
+        />
       )}
 
       {showSettings && (
@@ -1986,7 +2442,19 @@ export default function Chat({ session }) {
         </div>
       )}
 
-      {lightbox && <MediaViewer item={lightbox} onClose={() => setLightbox(null)} />}
+      {lightbox && (
+        <MediaViewer
+          item={{
+            ...lightbox,
+            sender: lightbox.msg ? (lightbox.msg.user_id === myId ? 'You' : profiles[lightbox.msg.user_id]) : undefined,
+            date: lightbox.msg
+              ? new Date(lightbox.msg.created_at).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+              : undefined,
+          }}
+          onClose={() => setLightbox(null)}
+          onReply={lightbox.msg && !readOnly ? () => startReply(lightbox.msg) : undefined}
+        />
+      )}
       {callWith && (
         <Suspense fallback={<div className="call-screen" />}>
           <CallScreen
@@ -2028,6 +2496,13 @@ function Message({
   tickState = 'sent',
   onRetry,
   uploadProgress,
+  poll,
+  pinned = false,
+  onPin,
+  onPollChange,
+  onPollError,
+  avatars = {},
+  flash = false,
 }) {
   const pressTimer = useRef(null)
   const [copied, setCopied] = useState(false)
@@ -2053,53 +2528,53 @@ function Message({
     setCopied(true)
     setTimeout(() => setCopied(false), 1200)
   }
-  // Swipe-to-reply: a rightward drag on touch. The threshold and the
-  // horizontal-dominance check are the accidental-swipe guards: a small
-  // drag does nothing, and a mostly vertical drag (scrolling) never
-  // triggers a reply. touch-action: pan-y in CSS keeps vertical scrolling
-  // working while the horizontal drag is tracked here.
+  // Swipe-to-reply, like iMessage: drag a bubble to the right and it follows
+  // the finger (with resistance), a curved reply arrow grows in on the left,
+  // and letting go past the threshold starts a reply. A mostly vertical drag
+  // is a scroll and never replies; touch-action: pan-y keeps scrolling smooth.
   const swipeStart = useRef(null)
-  const swipeFired = useRef(false)
+  const swipeArmed = useRef(false)
   const [dragX, setDragX] = useState(0)
-  const SWIPE_THRESHOLD = 60
+  const SWIPE_THRESHOLD = 56
+  const endSwipe = (fire) => {
+    clearTimeout(pressTimer.current)
+    const was = swipeStart.current
+    swipeStart.current = null
+    setDragX(0)
+    if (fire && was?.dragging && swipeArmed.current) onReply?.()
+    swipeArmed.current = false
+  }
   const swipeHandlers = readOnly
     ? {}
     : {
         onPointerDown: (e) => {
           if (e.pointerType === 'mouse') return
-          swipeStart.current = { x: e.clientX, y: e.clientY }
-          swipeFired.current = false
+          swipeStart.current = { x: e.clientX, y: e.clientY, dragging: false }
+          swipeArmed.current = false
           // Swipe handlers replace the long-press gesture handlers on this
           // element, so start the tapback long-press timer here too.
           pressTimer.current = setTimeout(onOpenPicker, LONG_PRESS_MS)
         },
         onPointerMove: (e) => {
           const start = swipeStart.current
-          if (!start || swipeFired.current) return
+          if (!start) return
           const dx = e.clientX - start.x
           const dy = e.clientY - start.y
-          if (dx <= 0 || Math.abs(dy) > Math.abs(dx) * 0.7) {
-            setDragX(0)
-            return
-          }
-          setDragX(Math.min(dx, 64))
-          if (dx >= SWIPE_THRESHOLD) {
-            swipeFired.current = true
+          if (!start.dragging) {
+            if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) return endSwipe(false)
+            if (dx < 8) return
+            start.dragging = true
             clearTimeout(pressTimer.current)
-            setDragX(0)
-            onReply?.()
           }
+          // rubber band: 1:1 up to the threshold, then a third of the extra
+          const x = Math.max(0, dx <= SWIPE_THRESHOLD ? dx : SWIPE_THRESHOLD + (dx - SWIPE_THRESHOLD) / 3)
+          const armed = x >= SWIPE_THRESHOLD
+          if (armed && !swipeArmed.current) navigator.vibrate?.(8)
+          swipeArmed.current = armed
+          setDragX(x)
         },
-        onPointerUp: () => {
-          clearTimeout(pressTimer.current)
-          swipeStart.current = null
-          setDragX(0)
-        },
-        onPointerCancel: () => {
-          clearTimeout(pressTimer.current)
-          swipeStart.current = null
-          setDragX(0)
-        },
+        onPointerUp: () => endSwipe(true),
+        onPointerCancel: () => endSwipe(false),
       }
   const isImage = msg.attachment_type?.startsWith('image/')
   const isVideo = msg.attachment_type?.startsWith('video/')
@@ -2110,6 +2585,12 @@ function Message({
   // An image link in the text (e.g. an AI's generated image) shows as a picture.
   const linkedImages = useMemo(() => (msg.call_duration != null ? [] : imageLinksIn(msg.content)), [msg.content, msg.call_duration])
   const shownText = useMemo(() => withoutMarkdownImages(msg.content), [msg.content])
+  // A scheduled reminder ("⏰ Reminder: …") or a poll still loading ("📊 …")
+  // shows an icon header instead of the emoji.
+  const special = shownText?.startsWith('⏰ Reminder:') ? 'reminder' : shownText?.startsWith('📊 ') ? 'poll' : null
+  const specialText = special === 'reminder' ? shownText.replace(/^⏰ Reminder:\s*/, '') : special === 'poll' ? shownText.slice(2).trim() : null
+  // Just one to three emoji, nothing else: shown big without a bubble.
+  const jumbo = useMemo(() => (msg.attachment_path || msg.call_duration != null ? 0 : emojiOnlyCount(shownText)), [shownText, msg.attachment_path, msg.call_duration])
 
   const grouped = useMemo(() => {
     const map = new Map()
@@ -2173,7 +2654,7 @@ function Message({
   return (
     <div
       id={`msg-${msg.id}`}
-      className={`row ${mine ? 'mine' : 'theirs'} ${first ? 'first' : ''} ${grouped.length ? 'has-tapback' : ''} ${msg._status ? `is-${msg._status}` : ''}`}
+      className={`row ${flash ? 'flash' : ''} ${mine ? 'mine' : 'theirs'} ${first ? 'first' : ''} ${grouped.length ? 'has-tapback' : ''} ${msg._status ? `is-${msg._status}` : ''}`}
     >
       {!mine && <div className="row-avatar">{last && <Avatar name={username} src={avatar} />}</div>}
       <div className="stack">
@@ -2192,7 +2673,7 @@ function Message({
         )}
         <div
           className="pieces"
-          style={dragX ? { transform: `translateX(${dragX}px)` } : undefined}
+          style={dragX ? { transform: `translateX(${dragX}px)`, transition: 'none' } : undefined}
           onClick={(e) => {
             e.stopPropagation()
             if (e.detail === 1) setRevealed((r) => !r)
@@ -2200,7 +2681,15 @@ function Message({
           {...gestures}
           {...swipeHandlers}
         >
-          {dragX > 20 && <span className="swipe-reply-hint" aria-hidden="true">↩</span>}
+          {dragX > 4 && (
+            <span
+              className={`swipe-reply-hint ${dragX >= SWIPE_THRESHOLD ? 'armed' : ''}`}
+              style={{ opacity: Math.min(1, dragX / SWIPE_THRESHOLD), transform: `translateY(-50%) scale(${0.6 + 0.4 * Math.min(1, dragX / SWIPE_THRESHOLD)})` }}
+              aria-hidden="true"
+            >
+              <ReplyArrow />
+            </span>
+          )}
           {isMedia &&
             (url ? (
               isImage ? (
@@ -2210,7 +2699,7 @@ function Message({
                     src={url}
                     alt={msg.attachment_name}
                     onLoad={onMediaLoad}
-                    onClick={() => !msg._status && onOpenImage({ url, name: msg.attachment_name ?? 'photo.jpg', type: 'image' })}
+                    onClick={() => !msg._status && onOpenImage({ url, name: msg.attachment_name ?? 'photo.jpg', type: 'image', msg })}
                   />
                   {msg._status === 'sending' && <UploadRing progress={uploadProgress} />}
                 </span>
@@ -2243,10 +2732,31 @@ function Message({
             </a>
           )}
           {isCall && <CallCard msg={msg} tail={tail(true)} />}
-          {shownText && !isCall && (
-            <div className={`bubble ${tail(!linkedImages.length)}`} title={new Date(msg.created_at).toLocaleString()}>
-              {renderMessageContent(shownText, highlightMentions ? profiles : null)}
+          {poll ? (
+            <PollCard poll={poll} myId={myId} profiles={profiles} avatars={avatars} Avatar={Avatar} readOnly={readOnly} mine={mine} onChange={onPollChange} onError={onPollError} />
+          ) : shownText && !isCall && (jumbo ? (
+            <div className={`jumbo-emoji n${jumbo}`} title={new Date(msg.created_at).toLocaleString()}>
+              {shownText.trim()}
             </div>
+          ) : (
+            <div className={`bubble ${tail(!linkedImages.length)} ${special ? `special ${special}` : ''}`} title={new Date(msg.created_at).toLocaleString()}>
+              {special === 'reminder' && (
+                <span className="special-head">
+                  <AlarmIcon size={15} /> Reminder
+                </span>
+              )}
+              {special === 'poll' && (
+                <span className="special-head">
+                  <PollIcon size={15} /> Poll
+                </span>
+              )}
+              {renderMessageContent(special ? specialText : shownText, highlightMentions ? profiles : null)}
+            </div>
+          ))}
+          {pinned && (
+            <span className="pin-mark" title="Pinned" aria-label="Pinned">
+              <PinIcon size={13} />
+            </span>
           )}
           {linkedImages.map((src) => (
             <img
@@ -2258,7 +2768,7 @@ function Message({
               referrerPolicy="no-referrer"
               onLoad={onMediaLoad}
               onError={(e) => (e.currentTarget.style.display = 'none')}
-              onClick={() => onOpenImage({ url: src, name: decodeURIComponent(src.split('?')[0].split('/').pop() || 'image'), type: 'image' })}
+              onClick={() => onOpenImage({ url: src, name: decodeURIComponent(src.split('?')[0].split('/').pop() || 'image'), type: 'image', msg })}
             />
           ))}
 
@@ -2337,6 +2847,16 @@ function Message({
                 >
                   Reply
                 </button>
+                {onPin && !msg._status && (
+                  <button
+                    onClick={() => {
+                      onClosePicker()
+                      onPin()
+                    }}
+                  >
+                    {pinned ? 'Unpin' : 'Pin'}
+                  </button>
+                )}
                 {mine && (
                   <button
                     className="danger"
@@ -2499,13 +3019,14 @@ function formatReadTime(iso) {
   return `${d.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`
 }
 
-function Composer({ onSend, placeholder = 'Message', enableMentions = false, members = [], viewKey = '', onTyping, onVoiceError }) {
+function Composer({ onSend, replying = false, focusKey, onPoll, onSchedule, placeholder = 'Message', enableMentions = false, members = [], viewKey = '', onTyping, onVoiceError }) {
   const [text, setText] = useState('')
   const [file, setFile] = useState(null)
   const [preview, setPreview] = useState(null)
   const [busy, setBusy] = useState(false)
   const [menu, setMenu] = useState(false)
   const [recording, setRecording] = useState(false)
+  const [pollMode, setPollMode] = useState(false)
   // Mention picker state, group chat only. `at` is the index of the '@'
   // being typed, `query` is the text after it, `active` is the keyboard
   // highlight. Null means no picker is open.
@@ -2515,6 +3036,10 @@ function Composer({ onSend, placeholder = 'Message', enableMentions = false, mem
   const videoInput = useRef(null)
   const fileInput = useRef(null)
   const textRef = useRef(null)
+  // Starting a reply puts the cursor in the box, ready to type.
+  useEffect(() => {
+    if (focusKey != null) textRef.current?.focus()
+  }, [focusKey])
 
   useEffect(() => {
     if (!file?.type.startsWith('image/')) return setPreview(null)
@@ -2655,6 +3180,20 @@ function Composer({ onSend, placeholder = 'Message', enableMentions = false, mem
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) submit(e)
   }
 
+  if (pollMode) {
+    return (
+      <div className="composer">
+        <PollComposer
+          onCancel={() => setPollMode(false)}
+          onSend={async (poll) => {
+            const ok = await onPoll(poll)
+            if (ok) setPollMode(false)
+          }}
+        />
+      </div>
+    )
+  }
+
   if (recording) {
     return (
       <div className="composer">
@@ -2670,7 +3209,7 @@ function Composer({ onSend, placeholder = 'Message', enableMentions = false, mem
 
   return (
     <form
-      className="composer"
+      className={`composer ${replying ? 'replying' : ''}`}
       onSubmit={submit}
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => {
@@ -2690,45 +3229,59 @@ function Composer({ onSend, placeholder = 'Message', enableMentions = false, mem
       </button>
       {menu && (
         <div className="attach-backdrop" onClick={() => setMenu(false)}>
-          <div className="attach-sheet" role="dialog" aria-label="Add to message" onClick={(e) => e.stopPropagation()}>
-            <div className="sheet-grabber" aria-hidden="true" />
-            <div className="attach-tiles">
-              <button type="button" onClick={() => cameraInput.current.click()}>
-                <span className="attach-icon camera"><CameraIcon /></span>
-                Camera
+          {/* iOS 26 style: a frosted glass panel rising from the + button,
+              big round app icons, large labels. */}
+          <div className="attach-pop" role="menu" aria-label="Add to message" onClick={(e) => e.stopPropagation()}>
+            <button type="button" role="menuitem" onClick={() => cameraInput.current.click()}>
+              <AppCamera /> <span>Camera</span>
+            </button>
+            <button type="button" role="menuitem" onClick={() => imageInput.current.click()}>
+              <AppPhotos /> <span>Photos</span>
+            </button>
+            <button type="button" role="menuitem" onClick={() => fileInput.current.click()}>
+              <AppFiles /> <span>Files</span>
+            </button>
+            {canRecordVoice() && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenu(false)
+                  setRecording(true)
+                }}
+              >
+                <AppAudio /> <span>Audio</span>
               </button>
-              <button type="button" onClick={() => imageInput.current.click()}>
-                <span className="attach-icon photos"><PhotosIcon /></span>
-                Photos
+            )}
+            {onPoll && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenu(false)
+                  setPollMode(true)
+                }}
+              >
+                <AppPolls /> <span>Polls</span>
               </button>
-              <button type="button" onClick={() => videoInput.current.click()}>
-                <span className="attach-icon videos"><VideoIcon /></span>
-                Videos
+            )}
+            {onSchedule && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenu(false)
+                  onSchedule()
+                }}
+              >
+                <AppSendLater /> <span>Send Later</span>
               </button>
-            </div>
-            <div className="attach-list">
-              <button type="button" onClick={() => fileInput.current.click()}>
-                <ClipIcon />
-                <span>Add files</span>
-              </button>
-              {canRecordVoice() && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMenu(false)
-                    setRecording(true)
-                  }}
-                >
-                  <MicIcon />
-                  <span>Record a voice note</span>
-                </button>
-              )}
-            </div>
+            )}
           </div>
         </div>
       )}
       <input ref={cameraInput} type="file" accept="image/*" capture="environment" hidden onChange={pick} />
-      <input ref={imageInput} type="file" accept="image/*" multiple hidden onChange={pick} />
+      <input ref={imageInput} type="file" accept="image/*,video/*" multiple hidden onChange={pick} />
       <input ref={videoInput} type="file" accept="video/*" hidden onChange={pick} />
       <input ref={fileInput} type="file" multiple hidden onChange={pick} />
 
@@ -2751,7 +3304,7 @@ function Composer({ onSend, placeholder = 'Message', enableMentions = false, mem
                 onMouseEnter={() => setMention((prev) => (prev ? { ...prev, active: i } : prev))}
               >
                 {m.all ? (
-                  <span className="mention-all-icon" aria-hidden="true">👥</span>
+                  <span className="mention-all-icon" aria-hidden="true"><PeopleIcon size={24} /></span>
                 ) : (
                   <Avatar name={m.username} src={m.avatar} />
                 )}
@@ -2780,7 +3333,7 @@ function Composer({ onSend, placeholder = 'Message', enableMentions = false, mem
               </div>
             )}
             <button type="button" className="pending-remove" onClick={() => setFile(null)} aria-label="Remove">
-              ✕
+              <XIcon size={12} />
             </button>
           </div>
         )}
@@ -3038,4 +3591,72 @@ function renderMessageContent(text, profilesMap) {
 
 function linkify(text) {
   return renderMessageContent(text, null)
+}
+
+// How many emoji a message is, if it is only emoji (1-3), else 0.
+const EMOJI_ONLY = /^(?:\p{Extended_Pictographic}|\p{Emoji_Modifier}|\p{Regional_Indicator}|[\u200d\ufe0f\u20e3#*0-9]|\s)+$/u
+export function emojiOnlyCount(text) {
+  const t = (text ?? '').trim()
+  if (!t || t.length > 40 || !EMOJI_ONLY.test(t) || !/\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(t)) return 0
+  const n =
+    typeof Intl !== 'undefined' && Intl.Segmenter
+      ? [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(t.replace(/\s+/g, ''))].length
+      : [...t.replace(/\s+/g, '')].length
+  return n >= 1 && n <= 3 ? n : 0
+}
+
+const CloseIcon = () => (
+  <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+    <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
+  </svg>
+)
+const ReplyArrow = () => (
+  <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+    <path d="M10 5 4 11l6 6" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M4.5 11H13a7 7 0 0 1 7 7v1" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+  </svg>
+)
+
+// Search one chat's whole history; tap a result to jump to it.
+function ChatSearchSheet({ view, title, profiles, isMessageForView, onOpen, onClose }) {
+  const [q, setQ] = useState('')
+  const filters =
+    view.type === 'group'
+      ? view.groupId
+        ? { p_group: view.groupId }
+        : { p_main: true }
+      : view.type === 'dm'
+        ? { p_with: view.peerId }
+        : {}
+  const { results, loading, query } = useMessageSearch(q, filters)
+  const shown = results.filter((m) => isMessageForView(m, view))
+  return (
+    <div className="sheet-backdrop" onClick={onClose}>
+      <div className="sheet tool-sheet search-sheet" role="dialog" aria-label="Search this chat" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-grabber" aria-hidden="true" />
+        <div className="sheet-head">
+          <span>Search {title}</span>
+          <button className="sheet-done" onClick={onClose}>Done</button>
+        </div>
+        <label className="list-search">
+          <input type="search" placeholder="Words, names, anything said…" value={q} onChange={(e) => setQ(e.target.value)} autoFocus enterKeyHint="search" />
+        </label>
+        {q.trim().length >= 2 && !loading && !shown.length && <p className="setting-note muted">Nothing found for “{q.trim()}”.</p>}
+        {shown.length > 0 && (
+          <ul className="member-list item-list">
+            {shown.map((m) => (
+              <li key={m.id}>
+                <button className="search-hit" onClick={() => onOpen(m)}>
+                  <span className="item-meta">
+                    <b>{profiles[m.user_id] ?? '…'}</b> · {new Date(m.created_at).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                  </span>
+                  <span className="item-text"><Highlighted text={m.content} query={query} /></span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  )
 }

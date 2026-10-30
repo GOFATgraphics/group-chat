@@ -11,8 +11,9 @@ export const TYPING_CHANNEL = 'typing'
 const SHOW_FOR_MS = 6000
 const RESEND_EVERY_MS = 2500
 
-// target: null in the group chat, the peer's id in a private chat, undefined
-// where typing should be neither sent nor shown (the owner's read-only view).
+// target: null in the main group chat, "g:<id>" in a named group, the peer's id
+// in a private chat, undefined where typing should be neither sent nor shown
+// (the owner's read-only view).
 export function useTyping(myId, target) {
   const [typing, setTyping] = useState({}) // userId -> { to, until }
   const channelRef = useRef(null)
@@ -81,7 +82,11 @@ export function useTyping(myId, target) {
   }, [])
 
   const typers = Object.entries(typing)
-    .filter(([id, v]) => (target === null ? v.to === null : target !== undefined && id === target && v.to === myId))
+    .filter(([id, v]) =>
+      target === null || String(target).startsWith('g:')
+        ? v.to === target
+        : target !== undefined && id === target && v.to === myId,
+    )
     .map(([id]) => id)
 
   // Everyone typing anywhere you can see: { userId: { to, until } }, for the chat list.

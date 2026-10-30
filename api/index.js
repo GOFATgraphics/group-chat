@@ -20,6 +20,8 @@ import push from '../server/routes/push.js'
 import pushKey from '../server/routes/push-key.js'
 import call from '../server/routes/call.js'
 import presence from '../server/routes/presence.js'
+import tools from '../server/routes/tools.js'
+import avatar from '../server/routes/avatar.js'
 
 const exact = {
   '': root,
@@ -41,6 +43,15 @@ const exact = {
   'call/check': call.check,
   'ai/check': call.check,
   presence,
+  avatar,
+  search: tools.search,
+  pins: tools.pins,
+  polls: tools.polls,
+  'polls/vote': tools.vote,
+  'polls/choice': tools.choice,
+  notes: tools.notes,
+  schedule: tools.schedule,
+  tasks: tools.tasks,
 }
 
 export default async function handler(req, res) {
