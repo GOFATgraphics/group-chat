@@ -2497,3 +2497,18 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
 .project-page-wide { max-width: none; }
 .project-page-wide .project-table { width: max-content; min-width: 100%; }
 .project-page-wide .project-table th, .project-page-wide .project-table td { white-space: nowrap; overflow-wrap: normal; }
+/* Per-page header colours, option 1 as approved: colour is on the
+   table header (and the active tab pill), not on every row, so rows
+   stay readable. Database is teal like the TradesDB sheet header;
+   References, Notes, and Sync log each get a distinct colour, all
+   with white header text. Queue, Stages, the project list, and the
+   create form have no per-page rule and keep their existing look.
+   Chat rules are untouched. */
+.project-page-database .project-table thead th { background: #0f766e; color: #fff; }
+.project-page-database .project-tab.active { background: #0f766e; border-color: #0f766e; }
+.project-page-references .project-table thead th { background: #1e40af; color: #fff; }
+.project-page-references .project-tab.active { background: #1e40af; border-color: #1e40af; }
+.project-page-notes .project-table thead th { background: #6d28d9; color: #fff; }
+.project-page-notes .project-tab.active { background: #6d28d9; border-color: #6d28d9; }
+.project-page-log .project-table thead th { background: #92400e; color: #fff; }
+.project-page-log .project-tab.active { background: #92400e; border-color: #92400e; }

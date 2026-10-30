@@ -8,8 +8,14 @@ import { useEffect, useState } from 'react'
 // the normal row-level security rules: a project is visible only to its
 // owner, the group owner (username 'mubarak'), or an AI member ('adam'
 // or 'ali'); other members get no rows. There is still no Sheets sync,
-// no Drive folder, and no Apps Script link here: the trade log view is
-// the in-app sync log, not Google Sheets.
+// no Drive folder, and no Apps Script link here: the Sync log tab is
+// the in-app sync log, not Google Sheets, and it is not the Notes log.
+// Sheet tabs as app pages: Database = TradesDB, References = Shadow
+// Reference Bridge (stored fields only), Notes = Shadow Notes Log
+// (stored fields only). The sheet columns that were never seeded into
+// these tables are not shown and not invented: References has no
+// participant-domains column stored, and Notes has no execution stage,
+// action owner, deadline, or counterparty column stored.
 
 async function apiFetch(token, path, method = 'GET', bodyJson) {
   if (!token) throw new Error('You are not signed in. Sign in again to open projects.')
@@ -42,20 +48,30 @@ export async function fetchDashboard(token, projectId) {
   return apiFetch(token, `/api/projects/${projectId}`)
 }
 
-// All trades for a project, paged through the subcollection GET. The
-// dashboard GET caps at 200 rows, and seeded trades are 206, so a single
-// page would silently drop the last trades from the Database view.
-export async function fetchAllTrades(token, projectId) {
+// All rows of one subcollection for a project, paged through the
+// subcollection GET. The dashboard GET caps at 200 rows, and the seeded
+// collections exceed that (trades 206, references 255, notes 1471), so
+// a single page would silently drop rows. The subcollection GET in
+// server/routes/projects.js already handles limit/offset the same way
+// for every collection (order by id, range), with the default exactly
+// the old first-200 behaviour, so no server change was needed here:
+// this helper just pages through it. Response keys are the collection
+// names themselves (trades, references, notes).
+export async function fetchAllCollection(token, projectId, kind) {
   const all = []
   let offset = 0
   for (;;) {
-    const data = await apiFetch(token, `/api/projects/${projectId}/trades?limit=200&offset=${offset}`)
-    const page = Array.isArray(data.trades) ? data.trades : []
+    const data = await apiFetch(token, `/api/projects/${projectId}/${kind}?limit=200&offset=${offset}`)
+    const page = Array.isArray(data[kind]) ? data[kind] : []
     all.push(...page)
     if (page.length < 200) break
     offset += 200
   }
   return all
+}
+
+export async function fetchAllTrades(token, projectId) {
+  return fetchAllCollection(token, projectId, 'trades')
 }
 
 // Whole-page projects list. Back goes to chats.
@@ -68,7 +84,7 @@ export function ProjectsList({ projects, loading, error, onCreate, onOpen, onBac
         </button>
         <h1>project</h1>
       </header>
-      <p className="muted">Projects are containers for trade work. Each project gets its own queue, stages, database view, and trade log view.</p>
+      <p className="muted">Projects are containers for trade work. Each project gets its own queue, stages, database, references, notes, and sync log views.</p>
       <button className="primary project-create-btn" onClick={onCreate}>
         Create new project
       </button>
@@ -167,16 +183,49 @@ const SIMPLE_COLUMNS = [
   ['Stage', 'stage'],
 ]
 
+// Stored fields only, from migration 0019 and the seed payloads.
+// References: shadow_ref, live_refs, external_refs, fingerprint, plus
+// updated_at. The sheet's Associated_Domains_Emails column was not
+// seeded into this table, so it is not shown here.
+// Notes: message_id, trade_id, subject, summary, priority,
+// action_required, plus created_at. The sheet's execution stage, action
+// owner, deadline, and counterparty columns were not seeded into this
+// table, so they are not shown here. trade_id is the in-app trade row
+// id, not a contract ref; null means the note had no matching trade.
+const REFERENCE_COLUMNS = [
+  ['Shadow ref', 'shadow_ref'],
+  ['Live refs', 'live_refs'],
+  ['External refs', 'external_refs'],
+  ['Fingerprint', 'fingerprint'],
+  ['Updated', 'updated_at'],
+]
+const NOTE_COLUMNS = [
+  ['Message ID', 'message_id'],
+  ['Linked trade ID', 'trade_id'],
+  ['Subject', 'subject'],
+  ['Summary', 'summary'],
+  ['Priority', 'priority'],
+  ['Action required', 'action_required'],
+  ['Created', 'created_at'],
+]
+
 export function ProjectDashboard({ project, token, onBack }) {
   const [tab, setTab] = useState('queue')
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  // Database tab loads trades separately, paged, so all 206 seeded
-  // trades appear, not just the dashboard's capped first 200.
+  // Database, References, and Notes tabs load separately, paged, so
+  // all seeded rows appear, not just the dashboard's capped first 200
+  // (trades 206, references 255, notes 1471).
   const [dbTrades, setDbTrades] = useState(null)
   const [dbLoading, setDbLoading] = useState(false)
   const [dbError, setDbError] = useState('')
+  const [refRows, setRefRows] = useState(null)
+  const [refLoading, setRefLoading] = useState(false)
+  const [refError, setRefError] = useState('')
+  const [noteRows, setNoteRows] = useState(null)
+  const [noteLoading, setNoteLoading] = useState(false)
+  const [noteError, setNoteError] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -217,6 +266,46 @@ export function ProjectDashboard({ project, token, onBack }) {
     }
   }, [tab, token, project.id, dbTrades])
 
+  useEffect(() => {
+    if (tab !== 'references' || refRows !== null) return undefined
+    let cancelled = false
+    setRefLoading(true)
+    setRefError('')
+    fetchAllCollection(token, project.id, 'references')
+      .then((rows) => {
+        if (!cancelled) setRefRows(rows)
+      })
+      .catch((err) => {
+        if (!cancelled) setRefError(err.message || 'Could not load references.')
+      })
+      .finally(() => {
+        if (!cancelled) setRefLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [tab, token, project.id, refRows])
+
+  useEffect(() => {
+    if (tab !== 'notes' || noteRows !== null) return undefined
+    let cancelled = false
+    setNoteLoading(true)
+    setNoteError('')
+    fetchAllCollection(token, project.id, 'notes')
+      .then((rows) => {
+        if (!cancelled) setNoteRows(rows)
+      })
+      .catch((err) => {
+        if (!cancelled) setNoteError(err.message || 'Could not load notes.')
+      })
+      .finally(() => {
+        if (!cancelled) setNoteLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [tab, token, project.id, noteRows])
+
   const queue = data?.queue ?? []
   const trades = data?.trades ?? []
   const syncLog = data?.sync_log ?? []
@@ -245,12 +334,14 @@ export function ProjectDashboard({ project, token, onBack }) {
   }
   const dbFullCount = dbRows.filter((t) => t.full_data && typeof t.full_data === 'object').length
 
-  // Database and Trade log tabs are the sheet-like views: they use the
-  // wide page variant (no 900px cap), while Queue, Stages, the project
-  // list and the create form keep the centered page.
-  const wide = tab === 'database' || tab === 'log'
+  // Database, References, Notes, and Sync log tabs are the sheet-like
+  // views: they use the wide page variant (no 900px cap), while Queue,
+  // Stages, the project list and the create form keep the centered
+  // page. The per-tab class on main is only for the per-page header
+  // colour in styles.css; it changes no layout on its own.
+  const wide = tab === 'database' || tab === 'references' || tab === 'notes' || tab === 'log'
   return (
-    <main className={`project-page${wide ? ' project-page-wide' : ''}`} aria-label={`Dashboard for ${project.name}`}>
+    <main className={`project-page${wide ? ' project-page-wide' : ''} project-page-${tab}`} aria-label={`Dashboard for ${project.name}`}>
       <header className="project-header">
         <button className="project-back" onClick={onBack} aria-label="Back to projects">
           &lsaquo; Back to projects
@@ -262,7 +353,9 @@ export function ProjectDashboard({ project, token, onBack }) {
           ['queue', 'Queue'],
           ['stages', 'Stages'],
           ['database', 'Database view'],
-          ['log', 'Trade log view'],
+          ['references', 'References'],
+          ['notes', 'Notes'],
+          ['log', 'Sync log'],
         ].map(([key, label]) => (
           <button key={key} className={`project-tab ${tab === key ? 'active' : ''}`} onClick={() => setTab(key)} aria-selected={tab === key}>
             {label}
@@ -361,10 +454,98 @@ export function ProjectDashboard({ project, token, onBack }) {
             </section>
           )}
 
+          {tab === 'references' && (
+            <section aria-label="References">
+              <h2>References</h2>
+              <p className="muted">
+                Shadow Reference Bridge inside the app, full width like the sheet. Scroll sideways for more columns.
+                {refRows !== null ? ` ${refRows.length} references.` : ''}
+              </p>
+              {refLoading ? (
+                <p className="project-empty">Loading references…</p>
+              ) : refError ? (
+                <p className="project-empty">{refError}</p>
+              ) : (
+                <div className="project-table-wrap">
+                  <table className="project-table">
+                    <thead>
+                      <tr>
+                        {REFERENCE_COLUMNS.map(([h]) => (
+                          <th key={h}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(refRows ?? []).length === 0 ? (
+                        <tr>
+                          <td colSpan={REFERENCE_COLUMNS.length} className="project-empty">
+                            No references saved yet.
+                          </td>
+                        </tr>
+                      ) : (
+                        (refRows ?? []).map((r) => (
+                          <tr key={r.id}>
+                            {REFERENCE_COLUMNS.map(([h, field]) => (
+                              <td key={h}>{field === 'updated_at' ? when(r[field]) : show(r[field])}</td>
+                            ))}
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          )}
+
+          {tab === 'notes' && (
+            <section aria-label="Notes">
+              <h2>Notes</h2>
+              <p className="muted">
+                Shadow Notes Log inside the app, full width like the sheet. Scroll sideways for more columns. A blank linked trade ID means the note had no matching trade.
+                {noteRows !== null ? ` ${noteRows.length} notes.` : ''}
+              </p>
+              {noteLoading ? (
+                <p className="project-empty">Loading notes…</p>
+              ) : noteError ? (
+                <p className="project-empty">{noteError}</p>
+              ) : (
+                <div className="project-table-wrap">
+                  <table className="project-table">
+                    <thead>
+                      <tr>
+                        {NOTE_COLUMNS.map(([h]) => (
+                          <th key={h}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(noteRows ?? []).length === 0 ? (
+                        <tr>
+                          <td colSpan={NOTE_COLUMNS.length} className="project-empty">
+                            No notes saved yet.
+                          </td>
+                        </tr>
+                      ) : (
+                        (noteRows ?? []).map((n) => (
+                          <tr key={n.id}>
+                            {NOTE_COLUMNS.map(([h, field]) => (
+                              <td key={h}>{field === 'created_at' ? when(n[field]) : show(n[field])}</td>
+                            ))}
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+          )}
+
           {tab === 'log' && (
-            <section aria-label="Trade log view">
-              <h2>Trade log view</h2>
-              <p className="muted">In-app log, not Google Sheets. Sheets sync is not in this build.</p>
+            <section aria-label="Sync log">
+              <h2>Sync log</h2>
+              <p className="muted">In-app Sheets sync attempts, not the Notes log. Sheets sync is not in this build.</p>
               {syncLog.length === 0 ? (
                 <p className="project-empty">No log entries yet.</p>
               ) : (
