@@ -119,7 +119,7 @@ function explain(err) {
     return 'Live calls need an AI Gateway API key: create one in Vercel → AI Gateway → API Keys and add it to the project as AI_GATEWAY_API_KEY, then redeploy.'
   }
   if (/insufficient|credit|balance|payment|billing|402/i.test(text) || status === 402) {
-    return 'AI Gateway has no credits for live calls. Add credits in Vercel → AI Gateway.'
+    return 'AI Gateway has no credits. Add credits in Vercel → AI Gateway (they work right away, no redeploy needed).'
   }
   if (status === 401 || status === 403 || /auth|unauthor|forbidden|oidc|api key/i.test(text)) {
     return `AI Gateway refused the request (${status ?? 'auth'}): ${err.message}`
