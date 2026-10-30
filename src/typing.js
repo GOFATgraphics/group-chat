@@ -84,5 +84,6 @@ export function useTyping(myId, target) {
     .filter(([id, v]) => (target === null ? v.to === null : target !== undefined && id === target && v.to === myId))
     .map(([id]) => id)
 
-  return { typers, notify, clear }
+  // Everyone typing anywhere you can see: { userId: { to, until } }, for the chat list.
+  return { typers, notify, clear, all: typing }
 }

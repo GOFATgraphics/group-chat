@@ -1,0 +1,145 @@
+import { useState } from 'react'
+
+// The home screen: every conversation (the group chat, a private chat with
+// each member, and for the owner the read-only view of other members' private
+// chats), newest first, with the last message, its time, unread count, who's
+// online and who's typing. On wide screens it stays beside the open chat.
+
+export default function ChatList({ items, me, myAvatar, activeKey, onOpen, onSettings, Avatar }) {
+  const [query, setQuery] = useState('')
+  const q = query.trim().toLowerCase()
+  const shown = q ? items.filter((c) => c.title.toLowerCase().includes(q) || (c.preview ?? '').toLowerCase().includes(q)) : items
+  const chats = shown.filter((c) => !c.owner)
+  const owner = shown.filter((c) => c.owner)
+
+  return (
+    <aside className="pane-list" aria-label="Chats">
+      <div className="list-top">
+        <button className="list-me" onClick={onSettings} aria-label="Your profile and settings">
+          <Avatar name={me} src={myAvatar} />
+        </button>
+        <h1 className="list-title">Chats</h1>
+      </div>
+      <label className="list-search">
+        <SearchIcon />
+        <input
+          type="search"
+          placeholder="Search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          enterKeyHint="search"
+          autoComplete="off"
+        />
+        {query && (
+          <button className="list-search-clear" onClick={() => setQuery('')} aria-label="Clear search">
+            ✕
+          </button>
+        )}
+      </label>
+      <div className="list-scroll">
+        <ul className="convo-list">
+          {chats.map((c) => (
+            <Row key={c.key} c={c} active={c.key === activeKey} onOpen={onOpen} Avatar={Avatar} />
+          ))}
+        </ul>
+        {owner.length > 0 && (
+          <>
+            <div className="list-section">Owner view · read only</div>
+            <ul className="convo-list">
+              {owner.map((c) => (
+                <Row key={c.key} c={c} active={c.key === activeKey} onOpen={onOpen} Avatar={Avatar} />
+              ))}
+            </ul>
+          </>
+        )}
+        {!shown.length && <div className="list-empty">No chats match “{query}”.</div>}
+      </div>
+    </aside>
+  )
+}
+
+function Row({ c, active, onOpen, Avatar }) {
+  const unread = c.unread > 0
+  return (
+    <li>
+      <button
+        className={`convo ${active ? 'active' : ''} ${unread ? 'unread' : ''}`}
+        onClick={() => onOpen(c.view)}
+        aria-label={`${c.title}${c.online ? ', online' : ''}${unread ? `, ${c.unread} unread` : ''}`}
+        aria-current={active ? 'true' : undefined}
+      >
+        <span className="convo-dot" aria-hidden="true" />
+        <span className="convo-avatar">
+          {c.faces ? (
+            <span className={`convo-faces n${c.faces.length}`}>
+              {c.faces.map((f) => (
+                <Avatar key={f.id} name={f.name} src={f.src} />
+              ))}
+            </span>
+          ) : (
+            <Avatar name={c.title} src={c.avatar} />
+          )}
+          {c.online && <span className="convo-online" />}
+        </span>
+        <span className="convo-body">
+          <span className="convo-line">
+            <span className="convo-title">
+              {c.title}
+              {c.ai && <span className="ai-badge">AI</span>}
+            </span>
+            <span className="convo-time">{c.time}</span>
+            <ChevronRight />
+          </span>
+          <span className={`convo-preview ${c.typing ? 'typing' : ''}`}>
+            {c.typing ? 'typing…' : c.preview || <span className="muted">{c.emptyText}</span>}
+          </span>
+        </span>
+        {unread && <span className="convo-badge">{c.unread > 99 ? '99+' : c.unread}</span>}
+      </button>
+    </li>
+  )
+}
+
+const SearchIcon = () => (
+  <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
+    <circle cx="8.5" cy="8.5" r="6" fill="none" stroke="currentColor" strokeWidth="2" />
+    <path d="M13 13l5 5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+  </svg>
+)
+const ChevronRight = () => (
+  <svg className="convo-chevron" viewBox="0 0 8 14" width="8" height="14" aria-hidden="true">
+    <path d="M1.5 1.5L6.5 7l-5 5.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+)
+
+// "4:19 PM" today, "Yesterday", a weekday within the week, else a short date.
+export function listTime(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  const now = new Date()
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  const diff = Math.round((day(now) - day(d)) / 86400000)
+  if (diff <= 0) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  if (diff === 1) return 'Yesterday'
+  if (diff < 7) return d.toLocaleDateString([], { weekday: 'long' })
+  return d.toLocaleDateString([], { day: 'numeric', month: 'numeric', year: '2-digit' })
+}
+
+// One line describing a message in the list: text, or what was sent.
+export function listPreview(m) {
+  if (!m) return ''
+  if (m.call_duration != null) return '📞 Voice call'
+  const text = m.content?.trim()
+  if (m.attachment_path) {
+    const type = m.attachment_type ?? ''
+    const what = type.startsWith('image/')
+      ? '📷 Photo'
+      : type.startsWith('video/')
+        ? '🎬 Video'
+        : type.startsWith('audio/')
+          ? '🎤 Voice note'
+          : `📎 ${m.attachment_name ?? 'File'}`
+    return text ? `${what} · ${text}` : what
+  }
+  return text ?? ''
+}

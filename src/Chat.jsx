@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { supabase, BUCKET, AVATAR_BUCKET, avatarUrl } from './supabase.js'
 import Splash from './Splash.jsx'
+import ChatList, { listPreview, listTime } from './ChatList.jsx'
 import ApiKeys from './ApiKeys.jsx'
 import { useTyping } from './typing.js'
 import { VoicePlayer, VoiceRecorder, MicIcon, canRecordVoice, formatDuration } from './Voice.jsx'
