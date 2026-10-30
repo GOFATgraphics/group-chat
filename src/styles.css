@@ -1197,12 +1197,20 @@ video.media { cursor: default; }
 .pieces { touch-action: pan-y; }
 .swipe-reply-hint {
   position: absolute;
-  left: -28px;
+  left: -40px;
   top: 50%;
-  transform: translateY(-50%);
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
   color: var(--muted);
-  font-size: 18px;
+  background: var(--fill);
+  transition: background 0.15s, color 0.15s;
 }
+.swipe-reply-hint.armed { background: var(--blue); color: #fff; }
+/* the bubble springs back after a swipe */
+.pieces { transition: transform 0.32s cubic-bezier(0.34, 1.4, 0.44, 1); }
 .reply-hint {
   position: absolute;
   top: 50%;
@@ -2009,3 +2017,30 @@ video.media { cursor: default; }
   right: 0;
   border-top: 0.5px solid var(--separator);
 }
+
+/* ---- big emoji (1-3 emoji, no bubble) ---- */
+.jumbo-emoji { line-height: 1.05; padding: 2px 2px 0; font-size: 56px; }
+.jumbo-emoji.n2 { font-size: 46px; }
+.jumbo-emoji.n3 { font-size: 38px; }
+.row.mine .jumbo-emoji { text-align: right; }
+
+/* ---- reply mode: the chat blurs, the quoted message stays sharp ---- */
+.reply-focus {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 0 14px calc(78px + env(safe-area-inset-bottom));
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
+  backdrop-filter: blur(22px) saturate(140%);
+  animation: fade 0.2s ease-out;
+}
+.reply-focus-close { z-index: 2; }
+.reply-focus-msg { animation: reply-rise 0.32s cubic-bezier(0.22, 0.8, 0.25, 1); }
+.reply-focus-msg .stamp { margin-bottom: 6px; }
+.reply-focus-msg .row { margin-top: 0; }
+@keyframes reply-rise { from { transform: translateY(14px) scale(0.97); opacity: 0; } }
+.composer { z-index: 9; }
