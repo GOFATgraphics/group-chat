@@ -15,6 +15,12 @@ import {
   PeopleIcon,
   XIcon,
   messageKind,
+  AppCamera,
+  AppPhotos,
+  AppFiles,
+  AppAudio,
+  AppPolls,
+  AppSendLater,
 } from './icons.jsx'
 import { PinStrip, PollCard, PollComposer, NotesSheet, ScheduleSheet, useMessageSearch, Highlighted, itemScope } from './Tools.jsx'
 import ApiKeys from './ApiKeys.jsx'
@@ -3223,69 +3229,59 @@ function Composer({ onSend, replying = false, focusKey, onPoll, onSchedule, plac
       </button>
       {menu && (
         <div className="attach-backdrop" onClick={() => setMenu(false)}>
-          <div className="attach-sheet" role="dialog" aria-label="Add to message" onClick={(e) => e.stopPropagation()}>
-            <div className="sheet-grabber" aria-hidden="true" />
-            <div className="attach-tiles">
-              <button type="button" onClick={() => cameraInput.current.click()}>
-                <span className="attach-icon camera"><CameraIcon /></span>
-                Camera
+          {/* iOS 26 style: a frosted glass panel rising from the + button,
+              big round app icons, large labels. */}
+          <div className="attach-pop" role="menu" aria-label="Add to message" onClick={(e) => e.stopPropagation()}>
+            <button type="button" role="menuitem" onClick={() => cameraInput.current.click()}>
+              <AppCamera /> <span>Camera</span>
+            </button>
+            <button type="button" role="menuitem" onClick={() => imageInput.current.click()}>
+              <AppPhotos /> <span>Photos</span>
+            </button>
+            <button type="button" role="menuitem" onClick={() => fileInput.current.click()}>
+              <AppFiles /> <span>Files</span>
+            </button>
+            {canRecordVoice() && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenu(false)
+                  setRecording(true)
+                }}
+              >
+                <AppAudio /> <span>Audio</span>
               </button>
-              <button type="button" onClick={() => imageInput.current.click()}>
-                <span className="attach-icon photos"><PhotosIcon /></span>
-                Photos
+            )}
+            {onPoll && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenu(false)
+                  setPollMode(true)
+                }}
+              >
+                <AppPolls /> <span>Polls</span>
               </button>
-              <button type="button" onClick={() => videoInput.current.click()}>
-                <span className="attach-icon videos"><VideoIcon /></span>
-                Videos
+            )}
+            {onSchedule && (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMenu(false)
+                  onSchedule()
+                }}
+              >
+                <AppSendLater /> <span>Send Later</span>
               </button>
-            </div>
-            <div className="attach-list">
-              <button type="button" onClick={() => fileInput.current.click()}>
-                <ClipIcon />
-                <span>Add files</span>
-              </button>
-              {canRecordVoice() && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMenu(false)
-                    setRecording(true)
-                  }}
-                >
-                  <MicIcon />
-                  <span>Record a voice note</span>
-                </button>
-              )}
-              {onPoll && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMenu(false)
-                    setPollMode(true)
-                  }}
-                >
-                  <PollIcon size={24} />
-                  <span>Poll</span>
-                </button>
-              )}
-              {onSchedule && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMenu(false)
-                    onSchedule()
-                  }}
-                >
-                  <ClockIcon size={24} />
-                  <span>Schedule a message or reminder</span>
-                </button>
-              )}
-            </div>
+            )}
           </div>
         </div>
       )}
       <input ref={cameraInput} type="file" accept="image/*" capture="environment" hidden onChange={pick} />
-      <input ref={imageInput} type="file" accept="image/*" multiple hidden onChange={pick} />
+      <input ref={imageInput} type="file" accept="image/*,video/*" multiple hidden onChange={pick} />
       <input ref={videoInput} type="file" accept="video/*" hidden onChange={pick} />
       <input ref={fileInput} type="file" multiple hidden onChange={pick} />
 

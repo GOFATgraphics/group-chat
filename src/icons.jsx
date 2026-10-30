@@ -151,3 +151,118 @@ export function messageKind(m) {
   return 'file'
 }
 export const KIND_ICON = { call: PhoneIcon, poll: PollIcon, reminder: AlarmIcon, photo: PhotoIcon, video: VideoIcon, voice: WaveIcon, file: ClipIcon }
+
+// ---- big round "app" icons for the + menu (iOS 26 style) ----------------
+// Drawn with gradients so they read as real app icons, not line glyphs.
+
+export function AppCamera({ size = 46 }) {
+  return (
+    <svg viewBox="0 0 48 48" width={size} height={size} aria-hidden="true">
+      <defs>
+        <radialGradient id="cam-bezel" cx="40%" cy="30%" r="75%">
+          <stop offset="0" stopColor="#f4f4f6" />
+          <stop offset="0.55" stopColor="#b9b9be" />
+          <stop offset="1" stopColor="#6e6e73" />
+        </radialGradient>
+        <radialGradient id="cam-glass" cx="42%" cy="38%" r="65%">
+          <stop offset="0" stopColor="#3b4a7a" />
+          <stop offset="0.45" stopColor="#14182c" />
+          <stop offset="1" stopColor="#020205" />
+        </radialGradient>
+        <radialGradient id="cam-shine" cx="50%" cy="50%" r="50%">
+          <stop offset="0" stopColor="#9fd0ff" stopOpacity="0.95" />
+          <stop offset="1" stopColor="#9fd0ff" stopOpacity="0" />
+        </radialGradient>
+      </defs>
+      <circle cx="24" cy="24" r="23" fill="url(#cam-bezel)" />
+      <circle cx="24" cy="24" r="17.5" fill="#1c1c1f" />
+      <circle cx="24" cy="24" r="14.5" fill="url(#cam-glass)" />
+      <circle cx="24" cy="24" r="8" fill="#0a0c18" stroke="#2c3560" strokeWidth="1.2" />
+      <ellipse cx="19.5" cy="18.5" rx="5.5" ry="3.6" fill="url(#cam-shine)" transform="rotate(-30 19.5 18.5)" />
+      <circle cx="28.5" cy="28.5" r="1.6" fill="#6fa8ff" opacity="0.6" />
+    </svg>
+  )
+}
+
+export function AppPhotos({ size = 46 }) {
+  const petals = ['#ff9f0a', '#ffd60a', '#a4d93a', '#34c759', '#5ac8fa', '#2f7bff', '#7d5cff', '#ff375f']
+  return (
+    <svg viewBox="0 0 48 48" width={size} height={size} aria-hidden="true">
+      <circle cx="24" cy="24" r="23" fill="#fff" stroke="rgba(0,0,0,.08)" />
+      {petals.map((c, i) => (
+        <ellipse key={i} cx="24" cy="15.2" rx="5" ry="8.4" fill={c} opacity="0.86" transform={`rotate(${i * 45} 24 24)`} style={{ mixBlendMode: 'multiply' }} />
+      ))}
+    </svg>
+  )
+}
+
+export function AppFiles({ size = 46 }) {
+  return (
+    <svg viewBox="0 0 48 48" width={size} height={size} aria-hidden="true">
+      <defs>
+        <linearGradient id="files-bg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#ffffff" />
+          <stop offset="1" stopColor="#eef2f8" />
+        </linearGradient>
+        <linearGradient id="files-folder" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#4fb0ff" />
+          <stop offset="1" stopColor="#1677ff" />
+        </linearGradient>
+      </defs>
+      <circle cx="24" cy="24" r="23" fill="url(#files-bg)" stroke="rgba(0,0,0,.08)" />
+      <path d="M12 16.5a2 2 0 0 1 2-2h6.2l2.4 2.6H34a2 2 0 0 1 2 2V32a2 2 0 0 1-2 2H14a2 2 0 0 1-2-2z" fill="url(#files-folder)" />
+      <path d="M12 20.5h24" stroke="#ffffff" strokeOpacity="0.55" strokeWidth="1.2" />
+    </svg>
+  )
+}
+
+export function AppAudio({ size = 46 }) {
+  const bars = [6, 11, 17, 11, 7, 13, 6]
+  return (
+    <svg viewBox="0 0 48 48" width={size} height={size} aria-hidden="true">
+      <defs>
+        <linearGradient id="audio-bg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#ff7a5c" />
+          <stop offset="1" stopColor="#ef3b2d" />
+        </linearGradient>
+      </defs>
+      <circle cx="24" cy="24" r="23" fill="url(#audio-bg)" />
+      {bars.map((h, i) => (
+        <rect key={i} x={13.6 + i * 3.3} y={24 - h / 2} width="2" height={h} rx="1" fill="#fff" />
+      ))}
+    </svg>
+  )
+}
+
+export function AppPolls({ size = 46 }) {
+  return (
+    <svg viewBox="0 0 48 48" width={size} height={size} aria-hidden="true">
+      <defs>
+        <linearGradient id="polls-bg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#ffcf4a" />
+          <stop offset="1" stopColor="#f5a623" />
+        </linearGradient>
+      </defs>
+      <circle cx="24" cy="24" r="23" fill="url(#polls-bg)" />
+      <rect x="13" y="15.5" width="17" height="4.2" rx="2.1" fill="#fff" />
+      <rect x="13" y="21.9" width="22" height="4.2" rx="2.1" fill="#fff" />
+      <rect x="13" y="28.3" width="11" height="4.2" rx="2.1" fill="#fff" />
+    </svg>
+  )
+}
+
+export function AppSendLater({ size = 46 }) {
+  return (
+    <svg viewBox="0 0 48 48" width={size} height={size} aria-hidden="true">
+      <defs>
+        <radialGradient id="later-bg" cx="45%" cy="35%" r="70%">
+          <stop offset="0" stopColor="#8fd3ff" />
+          <stop offset="1" stopColor="#3aa3f5" />
+        </radialGradient>
+      </defs>
+      <circle cx="24" cy="24" r="21.5" fill="none" stroke="#3aa3f5" strokeWidth="2.6" strokeDasharray="5.2 3.2" strokeLinecap="round" />
+      <circle cx="24" cy="24" r="16" fill="url(#later-bg)" />
+      <path d="M24 16v8.5l5.5 3.2" fill="none" stroke="#fff" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
