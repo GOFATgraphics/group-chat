@@ -33,7 +33,7 @@ function data() {
 }
 
 async function setup(page, opts = {}) {
-  const state = { msgs: data(), reads: opts.reads ?? [], reactions: opts.reactions ?? [], groups: [], members: [], ws: null }
+  const state = { msgs: data(), reads: opts.reads ?? [], reactions: opts.reactions ?? [], groups: [], members: [], ws: null, t: opts.t ?? {} }
   if (opts.withGroup !== false) {
     state.groups.push({ id: GROUP, name: 'Launch Team', created_by: ME, created_at: t(21) })
     for (const u of [ME, ADAM, ALI, MUD]) state.members.push({ group_id: GROUP, user_id: u, added_at: t(21) })
@@ -65,6 +65,31 @@ async function setup(page, opts = {}) {
       return sp.get('id') ? json(all.filter((x) => 'eq.' + x.id === sp.get('id'))) : json(all)
     }
     if (p === '/rest/v1/message_reads' && method === 'GET') return json(state.reads)
+    if (p === '/rest/v1/rpc/search_messages') {
+      const b = JSON.parse(req.postData() || '{}'); const words = b.p_query.toLowerCase().split(/\s+/).filter(Boolean)
+      return json(state.msgs.filter((m) => m.content && words.every((w) => m.content.toLowerCase().includes(w))).sort((a, b) => b.id - a.id))
+    }
+    if (p === '/rest/v1/rpc/add_poll_option') return json([])
+    const TOOL = { polls: 1, poll_votes: 1, message_pins: 1, chat_items: 1, scheduled_messages: 1 }
+    const tname = p.slice(9)
+    if (p.startsWith('/rest/v1/') && TOOL[tname]) {
+      const rows = (state.t[tname] ??= [])
+      if (method === 'GET') {
+        let out = rows
+        if (tname === 'message_pins') out = rows.map((r) => ({ ...r, messages: state.msgs.find((m) => m.id === r.message_id) }))
+        if (tname === 'polls') out = rows.map((r) => ({ ...r, poll_votes: (state.t.poll_votes ?? []).filter((v) => v.poll_id === r.id) }))
+        return json(out)
+      }
+      if (method === 'POST') {
+        const b = JSON.parse(req.postData()); const items = (Array.isArray(b) ? b : [b]).map((r) => ({ id: tname + rows.length + 'x', user_id: ME, created_by: ME, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), done: false, ...r }))
+        rows.push(...items); return json((req.headers()['accept'] || '').includes('vnd.pgrst.object') ? items[0] : items, 201)
+      }
+      if (method === 'DELETE') {
+        const f = [...sp.entries()].filter(([k]) => k !== 'select').map(([k, v]) => [k, v.replace(/^eq\./, '')])
+        state.t[tname] = rows.filter((r) => !f.every(([k, v]) => String(r[k]) === v)); return json([])
+      }
+      return json([])
+    }
     if (p === '/rest/v1/reactions' && method === 'GET') return json(state.reactions)
     if (p === '/rest/v1/chat_groups' && method === 'GET') return json(state.groups)
     if (p === '/rest/v1/chat_group_members' && method === 'GET') return json(state.members)
@@ -93,6 +118,12 @@ async function setup(page, opts = {}) {
       return json(sp.get('select') === 'id' ? out.map((m) => ({ id: m.id })) : out)
     }
     if (method === 'GET') return json([])
+    if (p === '/rest/v1/messages' && method === 'POST') {
+      const body = JSON.parse(req.postData())
+      const row = { id: Math.max(...state.msgs.map((m) => m.id)) + 1, user_id: ME, recipient_id: null, group_id: null, created_at: new Date().toISOString(), ...body }
+      state.msgs.push(row)
+      return json((req.headers()['accept'] || '').includes('vnd.pgrst.object') ? row : [row], 201)
+    }
     return route.fulfill({ status: 201, body: '' })
   })
   return state
@@ -113,4 +144,7 @@ async function login(page, url = 'http://localhost:4185') {
   await page.click('button.primary')
   await page.waitForSelector('.convo')
 }
-module.exports = { setup, push, typing, login, ME, ADAM, MUD, ALI, GROUP, t }
+function rt(state, table, record, type = 'INSERT') {
+  state.ws?.send(JSON.stringify([null, null, state.chatTopic, 'postgres_changes', { data: { type, schema: 'public', table, record, commit_timestamp: new Date().toISOString(), columns: [], errors: null }, ids: [] }]))
+}
+module.exports = { rt, setup, push, typing, login, ME, ADAM, MUD, ALI, GROUP, t }

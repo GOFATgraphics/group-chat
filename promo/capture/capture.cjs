@@ -53,7 +53,7 @@ const rt = (state, table, record) => state.ws.send(JSON.stringify([null, null, s
     await page.click('.plus-btn')
     await settle(page, 600)
     await shot(page, 'attach')
-    layout.attach = { sheet: await box(page, '.attach-sheet') }
+    layout.attach = { sheet: await box(page, '.attach-pop') }
     await page.click('.attach-backdrop', { position: { x: 20, y: 30 } })
 
     // private chat with Adam (AI): voice notes + a photo
@@ -67,6 +67,12 @@ const rt = (state, table, record) => state.ws.send(JSON.stringify([null, null, s
     await page.click('img.media')
     await settle(page, 900)
     await shot(page, 'viewer')
+    await page.evaluate(() => {
+      const el = document.querySelector('.viewer-stage')
+      for (const type of ['pointerdown', 'pointerup']) el.dispatchEvent(new PointerEvent(type, { pointerType: 'touch', clientX: 195, clientY: 400, bubbles: true, pointerId: 9 }))
+    })
+    await page.waitForTimeout(500)
+    await shot(page, 'viewer-chrome')
     await page.keyboard.press('Escape')
     await settle(page, 400)
     await page.close()
@@ -115,6 +121,59 @@ const rt = (state, table, record) => state.ws.send(JSON.stringify([null, null, s
     for (const name of ['adam', 'ali', 'mudassir']) await page.click(`.pick-list li:has-text("${name}") label`)
     await shot(page, 'newgroup-1')
     layout.newgroup = { sheet: await box(page, '.group-sheet'), checks: await page.$$eval('.pick-check', (els) => els.map((e) => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height } })), create: await box(page, '.sheet-done') }
+    await page.close()
+  }
+
+  // ---- poll, notes and search in the Launch Team group ----
+  {
+    const page = await browser.newPage({ ...PHONE, colorScheme: 'light' })
+    const st = await setup(page)
+    await login(page)
+    await settle(page, 900)
+    await page.fill('.list-search input', 'launch')
+    await settle(page, 900)
+    await shot(page, 'search')
+    await page.fill('.list-search input', '')
+    await page.click('.convo:has(.convo-title:text-is("Launch Team"))')
+    await settle(page, 900)
+    await page.click('.plus-btn')
+    await page.waitForTimeout(400)
+    await page.click('.attach-pop button:has-text("Polls")')
+    await page.waitForTimeout(400)
+    await page.fill('.poll-compose-choices input >> nth=0', 'Friday 5 PM')
+    await page.fill('.poll-compose-choices input >> nth=1', 'Saturday noon')
+    await page.fill('.poll-compose-choices input >> nth=2', 'Monday 9 AM')
+    await page.fill('.poll-compose-send input', 'When do we launch?')
+    await page.locator('.poll-compose-send input').blur()
+    await shot(page, 'poll-compose')
+    layout.pollCompose = { box: await box(page, '.poll-compose') }
+    await page.click('.poll-compose-send .send-btn')
+    await settle(page, 900)
+    await shot(page, 'poll-0')
+    const poll = st.t.polls[0]
+    const votes = [[ADAM, 0], [ALI, 0], [MUD, 1], [ME, 0]]
+    for (const [u, o] of votes) {
+      st.t.poll_votes = [...(st.t.poll_votes ?? []), { poll_id: poll.id, user_id: u, option: o }]
+    }
+    rt(st, 'poll_votes', { poll_id: poll.id })
+    await settle(page, 1200)
+    await shot(page, 'poll-1')
+    layout.poll = { card: await box(page, '.ipoll') }
+    await page.click('.topbar-center')
+    await settle(page, 500)
+    await page.click('.info-tools button:has-text("Notes")')
+    await settle(page, 500)
+    await page.fill('.tool-add-row input', 'Send the press kit')
+    await page.click('.tool-add-row button')
+    await page.fill('.tool-add-row input', 'Record the intro video')
+    await page.click('.tool-add-row button')
+    await page.waitForTimeout(400)
+    await page.click('.segmented button:has-text("Decisions")')
+    await page.fill('.tool-add-row input', 'We launch Friday at 5 PM')
+    await page.click('.tool-add-row button')
+    await page.waitForTimeout(400)
+    await page.locator('.tool-add-row input').blur()
+    await shot(page, 'notes')
     await page.close()
   }
 
