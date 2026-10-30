@@ -29,6 +29,9 @@ const POLL_MS = 150
 //   { "text": "yes!", "reply_to_id": 123 }             quoted reply
 //   { "text": "caption", "file": { "name": "a.png", "type": "image/png", "base64": "..." } }
 //   { "text": "caption", "file_url": "https://...", "file_name": "report.pdf" }
+//   { "text": "caption", "files": [{ "name": "a.png", "type": "image/png", "base64": "..." }, ...] }
+//   files[] is one message with up to 5 attachments, in order. The first
+//   file is also kept in the legacy attachment_* columns (see 0018).
 export default route({
   async GET(req) {
     const { sb, userId } = await auth(req)
@@ -106,7 +109,15 @@ export default route({
         : !original.recipient_id && (original.group_id ?? null) === groupId
       if (!sameConversation) throw new HttpError(400, 'reply_to_id must be a message in the same conversation')
     }
-    let file = await readFile(b)
+    // Multi-file: up to 5, one message. Checked before the single-file path.
+    let files = null
+    if (Array.isArray(b.files)) {
+      if (b.files.length === 0) throw new HttpError(400, 'Send "text", "file" or "files"')
+      if (b.files.length > 5) throw new HttpError(400, 'Maximum 5 files at a time')
+      if (b.as_voice) throw new HttpError(400, 'Use either as_voice or files, not both')
+      files = await readFiles(b.files)
+    }
+    let file = files ? null : await readFile(b)
     let voiceDuration = null
     let voiceError = null
     if (b.as_voice) {
@@ -124,7 +135,7 @@ export default route({
         voiceError = err.message
       }
     }
-    if (!text && !file) throw new HttpError(400, 'Send "text", "file" or "file_url"')
+    if (!text && !file && !files) throw new HttpError(400, 'Send "text", "file" or "file_url"')
     if (file && voiceDuration == null && /^audio\/(mpeg|mp3)$/.test(file.type) && !(Number(b.duration ?? b.file?.duration) > 0)) {
       // Uploaded mp3 without a length: measure it so the voice note shows its time.
       try {
@@ -135,11 +146,37 @@ export default route({
     }
 
     let attachment = {}
-    if (file) {
+    let uploadedPaths = []
+    if (files) {
+      // Upload every file first, in order, then save one message row.
+      const uploaded = []
+      for (const f of files) {
+        const safeName = f.name.replace(/[^\w.-]+/g, '_').slice(-120) || 'file'
+        const path = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeName}`
+        const { error } = await sb.storage.from(BUCKET).upload(path, f.bytes, { contentType: f.type })
+        if (error) {
+          if (uploadedPaths.length) await sb.storage.from(BUCKET).remove(uploadedPaths)
+          throw new HttpError(400, `Upload failed: ${error.message}`)
+        }
+        uploadedPaths.push(path)
+        uploaded.push({ ...f, path })
+      }
+      const first = uploaded[0]
+      attachment = {
+        attachment_path: first.path,
+        attachment_name: first.name,
+        attachment_type: first.type,
+        attachment_size: first.bytes.length,
+      }
+      // Saved after the message row below, so a failed message insert
+      // never leaves attachment rows pointing at a missing message.
+      files = uploaded
+    } else if (file) {
       const safeName = file.name.replace(/[^\w.-]+/g, '_').slice(-120) || 'file'
       const path = `${userId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeName}`
       const { error } = await sb.storage.from(BUCKET).upload(path, file.bytes, { contentType: file.type })
       if (error) throw new HttpError(400, `Upload failed: ${error.message}`)
+      uploadedPaths.push(path)
       attachment = {
         attachment_path: path,
         attachment_name: file.name,
@@ -157,13 +194,44 @@ export default route({
       .select()
       .single()
     if (error) {
-      if (attachment.attachment_path) await sb.storage.from(BUCKET).remove([attachment.attachment_path])
+      if (uploadedPaths.length) await sb.storage.from(BUCKET).remove(uploadedPaths)
       check({ error })
+    }
+    if (files) {
+      // Best-effort extra rows: the message itself is already saved with
+      // the first file in its legacy columns, so a missing extra row is
+      // never a lost message, only a missing second picture. Report it
+      // in the response rather than deleting the whole message.
+      const { error: attErr } = await sb.from('message_attachments').insert(
+        files.map((f, i) => ({
+          message_id: data.id,
+          position: i,
+          attachment_path: f.path,
+          attachment_name: f.name,
+          attachment_type: f.type,
+          attachment_size: f.bytes.length,
+        })),
+      )
+      if (attErr) {
+        const [message] = await present(sb, [data])
+        return { message, attachments_warning: `Message saved, but extra attachments could not be saved: ${attErr.message}` }
+      }
     }
     const [message] = await present(sb, [data])
     return voiceError ? { message, voice_error: `Sent as text instead: ${voiceError}` } : { message }
   },
 })
+
+export async function readFiles(list) {
+  const out = []
+  for (const item of list) {
+    if (!item?.base64) throw new HttpError(400, 'Each file in "files" needs base64, name and type')
+    const bytes = Buffer.from(item.base64, 'base64')
+    if (bytes.length > MAX_FILE_BYTES) throw new HttpError(413, 'Files must be 25 MB or smaller')
+    out.push({ bytes, name: item.name || 'file', type: item.type || 'application/octet-stream' })
+  }
+  return out
+}
 
 export async function readFile(b) {
   if (b.file?.base64) {

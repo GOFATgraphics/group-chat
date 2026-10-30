@@ -199,11 +199,28 @@ export function body(req) {
 }
 
 // Adds usernames, reactions and short-lived download URLs to message rows.
+// A message can carry up to 5 attachments in message_attachments (0018);
+// the legacy single attachment columns stay as the first attachment.
 export async function present(sb, rows) {
   if (!rows.length) return []
   const ids = rows.map((m) => m.id)
-  const paths = rows.map((m) => m.attachment_path).filter(Boolean)
+  const legacyPaths = rows.map((m) => m.attachment_path).filter(Boolean)
   const groupIds = [...new Set(rows.map((m) => m.group_id).filter(Boolean))]
+  // Best-effort: before migration 0018 runs, this table does not exist,
+  // so fall back to the legacy single attachment only, never fail the read.
+  let extraRows = []
+  try {
+    const { data, error } = await sb
+      .from('message_attachments')
+      .select('message_id, position, attachment_path, attachment_name, attachment_type, attachment_size, attachment_duration')
+      .in('message_id', ids)
+      .order('position')
+    if (!error) extraRows = data ?? []
+  } catch {
+    extraRows = []
+  }
+  const extraPaths = extraRows.map((r) => r.attachment_path).filter(Boolean)
+  const paths = [...new Set([...legacyPaths, ...extraPaths])]
   const [profiles, reactions, signed, groups] = await Promise.all([
     sb.from('profiles').select('id, username').then((r) => check(r)),
     sb.from('reactions').select('message_id, user_id, emoji').in('message_id', ids).then((r) => check(r)),
@@ -217,7 +234,41 @@ export async function present(sb, rows) {
   const groupNames = Object.fromEntries(groups.map((g) => [g.id, g.name]))
   const names = Object.fromEntries(profiles.map((p) => [p.id, p.username]))
   const urls = Object.fromEntries(signed.map((s) => [s.path, s.signedUrl]))
-  return rows.map((m) => ({
+  const extraByMessage = new Map()
+  for (const r of extraRows) {
+    const list = extraByMessage.get(r.message_id) ?? []
+    list.push({
+      path: r.attachment_path,
+      name: r.attachment_name,
+      type: r.attachment_type,
+      size: r.attachment_size,
+      duration: r.attachment_duration ?? null,
+      url: urls[r.attachment_path] ?? null,
+      position: r.position,
+    })
+    extraByMessage.set(r.message_id, list)
+  }
+  return rows.map((m) => {
+    const attachments = extraByMessage.get(m.id) ?? []
+    const legacy = m.attachment_path
+      ? {
+          path: m.attachment_path,
+          name: m.attachment_name,
+          type: m.attachment_type,
+          size: m.attachment_size,
+          duration: m.attachment_duration ?? null,
+          url: urls[m.attachment_path] ?? null,
+        }
+      : null
+    // attachments[] is the full set (up to 5, in order); attachment is
+    // the first one, kept for backward compatibility.
+    const all = attachments.length ? attachments : legacy ? [legacy] : []
+    const kind = m.call_duration != null
+      ? 'call'
+      : all.length && all.every((a) => (a.type ?? '').startsWith('image/'))
+        ? 'photo'
+        : kindOf(m)
+    return {
     id: m.id,
     conversation: m.recipient_id ? 'direct' : 'group',
     // null for the main group chat; a named group's id and name otherwise
@@ -229,25 +280,18 @@ export async function present(sb, rows) {
     recipient_username: m.recipient_id ? names[m.recipient_id] ?? null : null,
     reply_to_id: m.reply_to_id ?? null,
     text: m.content,
-    kind: kindOf(m),
+    kind,
     call_duration: m.call_duration ?? null,
-    attachment: m.attachment_path
-      ? {
-          path: m.attachment_path,
-          name: m.attachment_name,
-          type: m.attachment_type,
-          size: m.attachment_size,
-          duration: m.attachment_duration ?? null,
-          url: urls[m.attachment_path] ?? null,
-        }
-      : null,
+    attachment: all[0] ?? null,
+    attachments: all,
     poll: presentPoll(polls.find((p) => p.message_id === m.id), names),
     pinned: pins.some((p) => p.message_id === m.id),
     reactions: reactions
       .filter((r) => r.message_id === m.id)
       .map((r) => ({ emoji: r.emoji, user_id: r.user_id, username: names[r.user_id] ?? null })),
     created_at: m.created_at,
-  }))
+    }
+  })
 }
 
 // "text", "voice" (a voice note: transcribe attachment.url yourself), "photo",

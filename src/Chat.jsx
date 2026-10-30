@@ -122,6 +122,11 @@ export default function Chat({ session }) {
   const [ownerPairs, setOwnerPairs] = useState([])
   const [lightbox, setLightbox] = useState(null) // { url, name, type } for the full-screen viewer
   const [uploadProgress, setUploadProgress] = useState({}) // draft id -> 0..1
+  // Jump to latest: shown only while the user has scrolled up away from
+  // the bottom. It never force-scrolls while reading older messages;
+  // stickToBottom (below) is what keeps new messages pinned, and only
+  // when the user is already at the bottom.
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false)
   const [aiIds, setAiIds] = useState(() => new Set()) // AI members (can be called)
   const [callWith, setCallWith] = useState(null) // { id, username } during a live call
   const [sounds, setSounds] = useState(soundsEnabled)
@@ -199,6 +204,37 @@ export default function Chat({ session }) {
       return next
     })
   }, [])
+
+  // Enrich loaded messages with their extra attachments (0018).
+  // Best-effort: if the table does not exist yet (migration not run),
+  // the query errors and loading continues with legacy attachments only.
+  const loadAttachments = useCallback(async (ids) => {
+    const numeric = (ids ?? []).filter((id) => typeof id === 'number')
+    if (!numeric.length) return
+    let rows
+    try {
+      const { data, error } = await supabase
+        .from('message_attachments')
+        .select('message_id, position, attachment_path, attachment_name, attachment_type, attachment_size, attachment_duration')
+        .in('message_id', numeric)
+        .order('position')
+      if (error || !data) return
+      rows = data
+    } catch {
+      return
+    }
+    if (!rows.length) return
+    const byId = new Map()
+    for (const r of rows) {
+      const list = byId.get(r.message_id) ?? []
+      list.push(r)
+      byId.set(r.message_id, list)
+    }
+    await signUrls(rows.map((r) => r.attachment_path))
+    setMessages((prev) =>
+      prev.map((m) => (byId.has(m.id) ? { ...m, attachments: byId.get(m.id) } : m)),
+    )
+  }, [signUrls])
 
   const loadReactions = useCallback(async (ids) => {
     if (!ids.length) return
@@ -538,6 +574,7 @@ export default function Chat({ session }) {
       const text = m.content.trim()
       return text.length > 80 ? `${text.slice(0, 80)}…` : text
     }
+    if (attachmentsOf(m).length > 1) return `sent ${attachmentsOf(m).length} photos`
     if (m.attachment_path) {
       if (m.attachment_type?.startsWith('image/')) return 'sent a photo'
       if (m.attachment_type?.startsWith('video/')) return 'sent a video'
@@ -936,8 +973,9 @@ export default function Chat({ session }) {
       setReactions((prev) => (prev[msg.id] ? prev : { ...prev, [msg.id]: [] }))
       ensureProfile(msg.user_id)
       if (msg.attachment_path) signUrls([msg.attachment_path])
+      if (typeof msg.id === 'number') loadAttachments([msg.id])
     },
-    [ensureProfile, signUrls],
+    [ensureProfile, signUrls, loadAttachments],
   )
 
   const applyReaction = useCallback((messageId, userId, emoji, present) => {
@@ -1049,6 +1087,7 @@ export default function Chat({ session }) {
       loadReads(rows.map((m) => m.id))
       markAsRead(rows)
       signUrls(rows.map((m) => m.attachment_path))
+      loadAttachments(rows.map((m) => m.id))
       if (pendingJumpRef.current) {
         const id = pendingJumpRef.current
         pendingJumpRef.current = null
@@ -1295,6 +1334,7 @@ export default function Chat({ session }) {
     loadReads(rows.map((m) => m.id))
     markAsRead(rows)
     signUrls(rows.map((m) => m.attachment_path))
+    loadAttachments(rows.map((m) => m.id))
   }
 
   // ---- team tools ----------------------------------------------------------
@@ -1385,6 +1425,7 @@ export default function Chat({ session }) {
     setHasMore((older ?? []).length === 60)
     loadReactions(page.map((m) => m.id))
     signUrls(page.map((m) => m.attachment_path))
+    loadAttachments(page.map((m) => m.id))
     setTimeout(show, 60)
   }
 
@@ -1451,12 +1492,35 @@ export default function Chat({ session }) {
 
   function onScroll() {
     const el = listRef.current
-    stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+    if (!el) return
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    stickToBottom.current = distanceFromBottom < 120
+    // Jump to latest appears only when scrolled up away from the bottom.
+    // It never appears at the bottom, and it never scrolls on its own:
+    // only a tap on it scrolls, so reading older messages is undisturbed.
+    setShowJumpToLatest(distanceFromBottom >= 120)
+  }
+
+  function jumpToLatest() {
+    const el = listRef.current
+    stickToBottom.current = true
+    setShowJumpToLatest(false)
+    // The user has now seen the newest messages: clear this conversation's
+    // unread count and mark what is on screen as read, as opening the
+    // conversation does elsewhere.
+    try {
+      clearUnread(viewKey(view))
+    } catch {
+      // clearUnread is a no-op if the conversation key is unavailable
+    }
+    markAsRead(messagesRef.current)
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    else scrollToBottom()
   }
 
   // ---- actions -------------------------------------------------------------
 
-  async function send({ text, file, duration }) {
+  async function send({ text, file, files, duration }) {
     // Owner view is read-only; the composer is hidden there, and this is
     // the second line of defence if send is ever called from that view.
     if (viewRef.current.type === 'owner') return false
@@ -1466,6 +1530,42 @@ export default function Chat({ session }) {
     // line: if the quoted message is no longer in this view, send plain.
     const replyToId =
       replyTo && messages.some((m) => m.id === replyTo.id && !m._status) ? replyTo.id : null
+    // Multiple pictures: one message, up to 5, never 5 separate messages.
+    if (Array.isArray(files) && files.length) {
+      const picked = files.slice(0, MAX_ATTACHMENTS)
+      if (files.length > MAX_ATTACHMENTS) setError('Maximum 5 pictures at a time')
+      if (picked.some((f) => f.size > MAX_FILE_BYTES)) {
+        setError('Files must be 25 MB or smaller.')
+        return false
+      }
+      if (picked.length === 1) return send({ text, file: picked[0], duration })
+      const tempId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+      const localUrls = picked.map((f) => URL.createObjectURL(f))
+      const draft = {
+        id: tempId,
+        user_id: myId,
+        recipient_id: peerId,
+        group_id: groupId,
+        reply_to_id: replyToId,
+        content: text || null,
+        created_at: new Date().toISOString(),
+        attachment_path: `pending/${tempId}`,
+        attachment_name: picked[0].name,
+        attachment_type: picked[0].type || 'application/octet-stream',
+        attachment_size: picked[0].size,
+        _status: 'sending',
+        _files: picked,
+        _localUrls: localUrls,
+        _localUrl: localUrls[0],
+      }
+      stickToBottom.current = true
+      setMessages((prev) => [...prev, draft])
+      bumpLast(draft)
+      setReplyTo(null)
+      playSend()
+      deliver(draft)
+      return true
+    }
 
     // Text: show it straight away, save in the background (deliver below).
     if (!file) {
@@ -1525,6 +1625,84 @@ export default function Chat({ session }) {
   // the real message (or is dropped if realtime already delivered it); on
   // failure it stays, marked "Not delivered", with Tap to retry.
   async function deliver(draft) {
+    // Multi-file draft: upload each file, save one message with the
+    // first file in its legacy columns, then save every file in
+    // message_attachments (0018). On failure, remove what was uploaded
+    // and mark the draft failed, never leave orphan uploads unreported.
+    if (Array.isArray(draft._files) && draft._files.length) {
+      const uploaded = []
+      try {
+        for (let i = 0; i < draft._files.length; i++) {
+          const f = draft._files[i]
+          const prepared = await prepareForUpload(f)
+          const safeName = prepared.name.replace(/[^\w.-]+/g, '_').slice(-120) || 'file'
+          const path = `${myId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeName}`
+          await uploadWithProgress(path, prepared, (p) =>
+            setUploadProgress((prev) => ({ ...prev, [draft.id]: (i + p) / draft._files.length })),
+          )
+          uploaded.push({ path, name: prepared.name, type: prepared.type || f.type, size: prepared.size })
+        }
+      } catch (err) {
+        setError(err.message)
+        if (uploaded.length) supabase.storage.from(BUCKET).remove(uploaded.map((u) => u.path))
+        setMessages((prev) => prev.map((m) => (m.id === draft.id ? { ...m, _status: 'failed' } : m)))
+        return
+      }
+      setUrls((prev) => {
+        const next = { ...prev }
+        uploaded.forEach((u, i) => { next[u.path] = draft._localUrls?.[i] ?? draft._localUrl })
+        return next
+      })
+      setMessages((prev) =>
+        prev.map((m) => (m.id === draft.id ? { ...m, attachment_path: uploaded[0].path, _uploadedPaths: uploaded.map((u) => u.path), _uploads: uploaded } : m)),
+      )
+      const first = uploaded[0]
+      const { data, error: insErr } = await supabase
+        .from('messages')
+        .insert({
+          content: draft.content,
+          recipient_id: draft.recipient_id,
+          group_id: draft.group_id ?? null,
+          reply_to_id: draft.reply_to_id,
+          attachment_path: first.path,
+          attachment_name: first.name,
+          attachment_type: first.type,
+          attachment_size: first.size,
+        })
+        .select()
+        .single()
+      setUploadProgress((prev) => {
+        if (!(draft.id in prev)) return prev
+        const next = { ...prev }
+        delete next[draft.id]
+        return next
+      })
+      if (insErr || !data) {
+        supabase.storage.from(BUCKET).remove(uploaded.map((u) => u.path))
+        setMessages((prev) => prev.map((m) => (m.id === draft.id ? { ...m, _status: 'failed' } : m)))
+        if (insErr) setError(insErr.message)
+        return
+      }
+      const { error: attErr } = await supabase.from('message_attachments').insert(
+        uploaded.map((u, i) => ({
+          message_id: data.id,
+          position: i,
+          attachment_path: u.path,
+          attachment_name: u.name,
+          attachment_type: u.type,
+          attachment_size: u.size,
+        })),
+      )
+      if (attErr) setError(`Message saved, but extra pictures could not be saved: ${attErr.message}`)
+      const saved = { ...data, attachments: uploaded.map((u, i) => ({ ...u, position: i })) }
+      setMessages((prev) =>
+        prev.some((m) => m.id === data.id)
+          ? prev.filter((m) => m.id !== draft.id)
+          : prev.map((m) => (m.id === draft.id ? saved : m)),
+      )
+      setReactions((prev) => (prev[data.id] ? prev : { ...prev, [data.id]: [] }))
+      return
+    }
     let attachment = {}
     if (draft._file) {
       // Upload once; a retry after a failed save reuses the uploaded file.
@@ -1661,7 +1839,8 @@ export default function Chat({ session }) {
     const { error: err } = await supabase.from('messages').delete().eq('id', msg.id)
     if (err) return setError(err.message)
     setMessages((prev) => prev.filter((m) => m.id !== msg.id))
-    if (msg.attachment_path) supabase.storage.from(BUCKET).remove([msg.attachment_path])
+    const paths = [...new Set(attachmentsOf(msg).map((a) => a.attachment_path).filter(Boolean))]
+    if (paths.length) supabase.storage.from(BUCKET).remove(paths)
   }
 
   // ---- render --------------------------------------------------------------
@@ -2077,6 +2256,7 @@ export default function Chat({ session }) {
               profiles={profiles}
               reactions={reactions[item.msg.id] ?? []}
               url={urls[item.msg.attachment_path] ?? item.msg._localUrl}
+              urls={urls}
               uploadProgress={uploadProgress[item.msg.id]}
               pickerOpen={pickerFor === item.msg.id}
               onOpenPicker={() => !item.msg._status && setPickerFor(item.msg.id)}
@@ -2113,6 +2293,12 @@ export default function Chat({ session }) {
           </div>
         ))}
       </main>
+
+      {showJumpToLatest && !loading && (
+        <button type="button" className="jump-to-latest" onClick={jumpToLatest} aria-label="Jump to latest message">
+          ↓ Jump to latest
+        </button>
+      )}
 
       {error && (
         <div className="toast" onClick={() => setError('')}>
@@ -2173,6 +2359,7 @@ export default function Chat({ session }) {
                   profiles={profiles}
                   reactions={reactions[replyTo.id] ?? []}
                   url={urls[replyTo.attachment_path]}
+                  urls={urls}
                   replyOriginal={replyTo.reply_to_id ? originals.get(replyTo.reply_to_id) ?? null : undefined}
                   highlightMentions={isGroup}
                   onOpenImage={setLightbox}
@@ -2483,6 +2670,7 @@ function Message({
   profiles,
   reactions,
   url,
+  urls = {},
   pickerOpen,
   onOpenPicker,
   onClosePicker,
@@ -2576,12 +2764,18 @@ function Message({
         onPointerUp: () => endSwipe(true),
         onPointerCancel: () => endSwipe(false),
       }
-  const isImage = msg.attachment_type?.startsWith('image/')
-  const isVideo = msg.attachment_type?.startsWith('video/')
-  const isMedia = msg.attachment_path && (isImage || isVideo)
-  const isVoice = msg.attachment_path && msg.attachment_type?.startsWith('audio/')
+  // Multi-attachment (0018): more than one attachment renders as a grid,
+  // never as just the first picture. A single attachment keeps the exact
+  // legacy rendering below, so old messages do not change.
+  const allAttachments = attachmentsOf(msg)
+  const hasMulti = allAttachments.length > 1
+  const multiUrl = (a) => a._url ?? a._localUrl ?? urls[a.attachment_path] ?? url
+  const isImage = !hasMulti && msg.attachment_type?.startsWith('image/')
+  const isVideo = !hasMulti && msg.attachment_type?.startsWith('video/')
+  const isMedia = !hasMulti && msg.attachment_path && (isImage || isVideo)
+  const isVoice = !hasMulti && msg.attachment_path && msg.attachment_type?.startsWith('audio/')
   const isCall = msg.call_duration != null
-  const isFile = msg.attachment_path && !isMedia && !isVoice
+  const isFile = !hasMulti && msg.attachment_path && !isMedia && !isVoice
   // An image link in the text (e.g. an AI's generated image) shows as a picture.
   const linkedImages = useMemo(() => (msg.call_duration != null ? [] : imageLinksIn(msg.content)), [msg.content, msg.call_duration])
   const shownText = useMemo(() => withoutMarkdownImages(msg.content), [msg.content])
@@ -2590,7 +2784,7 @@ function Message({
   const special = shownText?.startsWith('⏰ Reminder:') ? 'reminder' : shownText?.startsWith('📊 ') ? 'poll' : null
   const specialText = special === 'reminder' ? shownText.replace(/^⏰ Reminder:\s*/, '') : special === 'poll' ? shownText.slice(2).trim() : null
   // Just one to three emoji, nothing else: shown big without a bubble.
-  const jumbo = useMemo(() => (msg.attachment_path || msg.call_duration != null ? 0 : emojiOnlyCount(shownText)), [shownText, msg.attachment_path, msg.call_duration])
+  const jumbo = useMemo(() => (hasMulti || msg.attachment_path || msg.call_duration != null ? 0 : emojiOnlyCount(shownText)), [shownText, msg.attachment_path, msg.call_duration, hasMulti])
 
   const grouped = useMemo(() => {
     const map = new Map()
@@ -2638,6 +2832,8 @@ function Message({
       const text = m.content.trim()
       return text.length > 60 ? `${text.slice(0, 60)}…` : text
     }
+    const atts = attachmentsOf(m)
+    if (atts.length > 1) return `${atts.length} photos`
     if (m.attachment_path) {
       if (m.attachment_type?.startsWith('image/')) return 'photo'
       if (m.attachment_type?.startsWith('video/')) return 'video'
@@ -2689,6 +2885,52 @@ function Message({
             >
               <ReplyArrow />
             </span>
+          )}
+          {hasMulti && (
+            <div className="media-grid" aria-label={`${allAttachments.length} attachments`}>
+              {allAttachments.map((a, i) => {
+                const aUrl = multiUrl(a)
+                const aType = a.attachment_type ?? ''
+                if (aType.startsWith('image/')) {
+                  return aUrl ? (
+                    <span className="media-wrap media-grid-item" key={a.attachment_path ?? i}>
+                      <img
+                        className="media"
+                        src={aUrl}
+                        alt={a.attachment_name ?? 'photo'}
+                        onLoad={onMediaLoad}
+                        onClick={() => !msg._status && onOpenImage({ url: aUrl, name: a.attachment_name ?? 'photo.jpg', type: 'image', msg })}
+                      />
+                      {msg._status === 'sending' && <UploadRing progress={uploadProgress} />}
+                    </span>
+                  ) : (
+                    <div className="media placeholder media-grid-item" key={a.attachment_path ?? i} />
+                  )
+                }
+                if (aType.startsWith('video/')) {
+                  return (
+                    <span className="media-wrap media-grid-item" key={a.attachment_path ?? i}>
+                      <video className="media" src={aUrl} controls playsInline preload="metadata" onLoadedMetadata={onMediaLoad} />
+                    </span>
+                  )
+                }
+                return (
+                  <a
+                    key={a.attachment_path ?? i}
+                    className="bubble file media-grid-item"
+                    href={aUrl ? `${aUrl}&download=${encodeURIComponent(a.attachment_name ?? 'file')}` : undefined}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <FileIcon />
+                    <span className="file-info">
+                      <span className="file-name">{a.attachment_name}</span>
+                      <span className="file-size">{formatSize(a.attachment_size)}</span>
+                    </span>
+                  </a>
+                )
+              })}
+            </div>
           )}
           {isMedia &&
             (url ? (
@@ -3022,6 +3264,9 @@ function formatReadTime(iso) {
 function Composer({ onSend, replying = false, focusKey, onPoll, onSchedule, placeholder = 'Message', enableMentions = false, members = [], viewKey = '', onTyping, onVoiceError }) {
   const [text, setText] = useState('')
   const [file, setFile] = useState(null)
+  const [files, setFiles] = useState([])
+  const [filePreviews, setFilePreviews] = useState([])
+  const [composerNotice, setComposerNotice] = useState('')
   const [preview, setPreview] = useState(null)
   const [busy, setBusy] = useState(false)
   const [menu, setMenu] = useState(false)
@@ -3048,6 +3293,14 @@ function Composer({ onSend, replying = false, focusKey, onPoll, onSchedule, plac
     return () => URL.revokeObjectURL(u)
   }, [file])
 
+  // Preview thumbnails for a multi-file selection (up to 5 pictures).
+  useEffect(() => {
+    if (!files.length) return setFilePreviews([])
+    const urls = files.map((f) => (f.type?.startsWith('image/') ? URL.createObjectURL(f) : null))
+    setFilePreviews(urls)
+    return () => urls.forEach((u) => u && URL.revokeObjectURL(u))
+  }, [files])
+
   useEffect(() => {
     const el = textRef.current
     if (!el) return
@@ -3061,7 +3314,7 @@ function Composer({ onSend, replying = false, focusKey, onPoll, onSchedule, plac
     setMention(null)
   }, [viewKey])
 
-  const canSend = !busy && (text.trim() || file)
+  const canSend = !busy && (text.trim() || file || files.length > 0)
 
   // Members matching the typed query, prefix matches first, then the rest
   // alphabetically. An empty query lists everyone, in username order.
@@ -3121,27 +3374,57 @@ function Composer({ onSend, replying = false, focusKey, onPoll, onSchedule, plac
   // appearing from typing '@' alone.
   async function submit(e) {
     e?.preventDefault()
+    // Long text typed (not pasted) into the box: do NOT try to insert
+    // it, which would fail the 4000-character check. Turn it into the
+    // same pasted-code file, clear the box, and let the user press Send
+    // again with a short caption. Never auto-send without that press.
+    if (!file && !files.length && text.length > 4000) {
+      const f = pastedCodeFile(text)
+      setFile(f)
+      setText('')
+      setComposerNotice(`Long text saved as ${f.name}. Add a short caption and press Send.`)
+      return
+    }
+    if ((file || files.length) && text.length > 4000) {
+      // A caption over 4000 characters would fail the DB check even with
+      // pictures attached. Stop here instead of sending a doomed message.
+      setComposerNotice('That caption is over 4000 characters. Shorten it, or paste the long text on its own so it becomes a file.')
+      return
+    }
     if (!canSend) return
     setBusy(true)
     onTyping?.(false)
-    const ok = await onSend({ text: text.trim(), file })
+    const ok = await onSend({ text: text.trim(), file, files: files.length ? files : undefined })
     setBusy(false)
     if (ok) {
       setText('')
       setFile(null)
+      setFiles([])
+      setComposerNotice('')
       setMention(null)
       textRef.current?.focus()
     }
   }
 
-  // One file: preview it in the box with room for a caption. Several (from
-  // Photos or Files): send each straight away, in the order picked.
+  // One file: preview it in the box with room for a caption. Several
+  // (from Photos or Files): preview them as one set, up to 5, and send
+  // them as ONE message when the user presses Send, not as 5 messages.
   async function pick(e) {
-    const files = [...(e.target.files ?? [])]
+    const picked = [...(e.target.files ?? [])]
     e.target.value = ''
     setMenu(false)
-    if (files.length === 1) return setFile(files[0])
-    for (const f of files) await onSend({ text: '', file: f })
+    if (picked.length === 0) return
+    if (picked.length === 1) {
+      setFiles([])
+      return setFile(picked[0])
+    }
+    if (picked.length > MAX_ATTACHMENTS) {
+      setComposerNotice(`Maximum 5 pictures at a time. The first ${MAX_ATTACHMENTS} were kept.`)
+    } else {
+      setComposerNotice('')
+    }
+    setFile(null)
+    setFiles(picked.slice(0, MAX_ATTACHMENTS))
   }
 
   function onPaste(e) {
@@ -3149,6 +3432,17 @@ function Composer({ onSend, replying = false, focusKey, onPoll, onSchedule, plac
     if (f) {
       e.preventDefault()
       setFile(f)
+      return
+    }
+    // Long pasted code / JSON becomes a file the user can send, instead
+    // of pasting into the textarea. Existing caption text is left intact.
+    const pasted = e.clipboardData?.getData('text') ?? ''
+    if (pasted && shouldConvertPasteToFile(pasted)) {
+      e.preventDefault()
+      const f = pastedCodeFile(pasted)
+      setFile(f)
+      setFiles([])
+      setComposerNotice(`Long paste saved as ${f.name}. Add a short caption and press Send.`)
     }
   }
 
@@ -3214,8 +3508,16 @@ function Composer({ onSend, replying = false, focusKey, onPoll, onSchedule, plac
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => {
         e.preventDefault()
-        const f = e.dataTransfer.files?.[0]
-        if (f) setFile(f)
+        const dropped = [...(e.dataTransfer.files ?? [])]
+        if (!dropped.length) return
+        if (dropped.length === 1) {
+          setFiles([])
+          setFile(dropped[0])
+        } else {
+          if (dropped.length > MAX_ATTACHMENTS) setComposerNotice(`Maximum 5 pictures at a time. The first ${MAX_ATTACHMENTS} were kept.`)
+          setFile(null)
+          setFiles(dropped.slice(0, MAX_ATTACHMENTS))
+        }
       }}
     >
       <button
@@ -3318,7 +3620,38 @@ function Composer({ onSend, replying = false, focusKey, onPoll, onSchedule, plac
         </div>
       )}
 
-      <div className={`input-pill ${file ? 'with-file' : ''}`}>
+      <div className={`input-pill ${file || files.length ? 'with-file' : ''}`}>
+        {files.length > 0 && (
+          <div className="pending pending-multi">
+            <div className="pending-grid">
+              {files.map((f, i) => (
+                <div className="pending-grid-item" key={`${f.name}-${i}`}>
+                  {filePreviews[i] ? (
+                    <img src={filePreviews[i]} alt="" />
+                  ) : (
+                    <div className="pending-file">
+                      <FileIcon />
+                      <span className="file-info">
+                        <span className="file-name">{f.name}</span>
+                        <span className="file-size">{formatSize(f.size)}</span>
+                      </span>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    className="pending-remove"
+                    onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))}
+                    aria-label={`Remove ${f.name}`}
+                  >
+                    <XIcon size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <span className="pending-count">{files.length} of {MAX_ATTACHMENTS} pictures</span>
+          </div>
+        )}
+        {composerNotice && <div className="composer-notice" role="status">{composerNotice}</div>}
         {file && (
           <div className="pending">
             {preview ? (
@@ -3542,6 +3875,76 @@ function formatSize(bytes) {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+// ---- multiple attachments (0018) -----------------------------------------
+// One message can carry up to 5 attachments, in order. The legacy single
+// attachment columns are the first attachment, so attachmentsOf() always
+// returns a list, even for old messages, and no rendering path ever sees
+// only the first picture and hides the rest.
+const MAX_ATTACHMENTS = 5
+function attachmentsOf(msg) {
+  if (!msg) return []
+  if (Array.isArray(msg._files) && msg._files.length) {
+    return msg._files.map((f, i) => ({
+      attachment_path: msg._localPaths?.[i] ?? `pending/${msg.id}-${i}`,
+      attachment_name: f.name,
+      attachment_type: f.type || 'application/octet-stream',
+      attachment_size: f.size,
+      _localUrl: msg._localUrls?.[i] ?? msg._localUrl,
+    }))
+  }
+  if (Array.isArray(msg.attachments) && msg.attachments.length) {
+    return msg.attachments.map((a) => ({
+      attachment_path: a.attachment_path ?? a.path,
+      attachment_name: a.attachment_name ?? a.name,
+      attachment_type: a.attachment_type ?? a.type,
+      attachment_size: a.attachment_size ?? a.size,
+      attachment_duration: a.attachment_duration ?? a.duration ?? null,
+      _url: a.url ?? null,
+    }))
+  }
+  if (msg.attachment_path) {
+    return [{
+      attachment_path: msg.attachment_path,
+      attachment_name: msg.attachment_name,
+      attachment_type: msg.attachment_type,
+      attachment_size: msg.attachment_size,
+      attachment_duration: msg.attachment_duration ?? null,
+    }]
+  }
+  return []
+}
+
+// ---- long pasted code / JSON becomes a file -------------------------------
+// A paste longer than 4000 characters would fail the messages content
+// check, and a long script pasted as plain text is hard to read and to
+// answer about. Turn it into a file the user can caption and send, so
+// the AI receives it as a readable attachment (see agent-api.md).
+function looksLikeCode(text) {
+  const t = text.trim()
+  if (!t.includes('\n')) return false
+  return /[{}\[\];]/.test(t) && /(function|const |let |var |def |class |import |export |return |=>)/.test(t)
+}
+function pastedCodeFile(text) {
+  const t = text.trim()
+  let isJson = false
+  try {
+    JSON.parse(t)
+    isJson = t.startsWith('{') || t.startsWith('[')
+  } catch {
+    isJson = false
+  }
+  const name = isJson ? 'pasted-code.json' : 'pasted-code.txt'
+  const type = isJson ? 'application/json' : 'text/plain'
+  return new File([t], name, { type })
+}
+function shouldConvertPasteToFile(text) {
+  if (text.length > 4000) return true
+  if (text.length <= 2000) return false
+  const t = text.trim()
+  if ((t.startsWith('{') || t.startsWith('[')) && (() => { try { JSON.parse(t); return true } catch { return false } })()) return true
+  return looksLikeCode(text)
 }
 
 // Render a sent message: links stay links, and, in the group chat only,

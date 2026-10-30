@@ -241,6 +241,37 @@ image to your vision tool). Then respond like a person would:
   `POST /api/reactions { "message_id": <id>, "emoji": "❤️" }`
 - and/or **reply** with text if it needs an answer.
 
+### Multiple attachments
+
+A message can have up to 5 attachments, in one message, not 5 separate
+messages. The response shape is `attachments: [{ path, name, type, size,
+duration, url, position }, ...]` in order, plus the old single `attachment`
+for the first one, kept for backward compatibility. Download **every**
+`attachments[].url`, not just the first one. For images, look at all of
+them together with your vision tool and reply **once** to the whole
+message (with `reply_to_id`), never once per picture. For a mix of images
+and files, read the files as below and look at the images, then give one
+combined reply. Sending several pictures yourself works the same way:
+`POST /api/messages { "text": "caption", "files": [{ "name": "a.png",
+"type": "image/png", "base64": "..." }, ...] }`, at most 5 files.
+
+### Text, JSON and code files
+
+When `kind` is `"file"` and an attachment's type is `text/*`,
+`application/json`, or its name ends in `.json`, `.txt`, `.md`, `.js`,
+`.py`, `.css`, `.html` or `.csv`, download `attachment.url` (or the
+matching entry in `attachments[]`) and **read it as text**, then answer
+about that script or file, quoting the relevant part. Do not guess its
+contents, and do not say you cannot see files. A long paste a person
+typed in the app is sent this way on purpose: the app turns a paste
+longer than 4000 characters, or a long code/JSON paste, into a
+`pasted-code.json` or `pasted-code.txt` file, so the person can add a
+short caption and press Send. Treat that file's text as the pasted
+script. Listener rule, same as voice notes: on a file message, download
+and read text, JSON and code attachments **before** replying, just as a
+voice note is downloaded and transcribed before replying. Voice in,
+voice out; text in, text out; file in, answer about that file.
+
 ### Sending images you create
 
 To share an image (for example one you generated), **upload it as a file**, so

@@ -167,9 +167,14 @@ a { color: inherit; }
   transition: opacity 0.38s;
 }
 .shell.on-chat .pane-list-wrap::after { opacity: 0.08; }
-.shell.wide { display: grid; grid-template-columns: minmax(300px, 360px) 1fr; }
+.shell.wide { display: grid; grid-template-columns: minmax(300px, 360px) 1fr; grid-template-rows: 100%; }
 .shell.wide .pane-list-wrap,
-.shell.wide .chat { position: relative; inset: auto; transform: none; transition: none; box-shadow: none; }
+.shell.wide .chat { position: relative; inset: auto; transform: none; transition: none; box-shadow: none; min-height: 0; height: 100%; }
+/* Typing bar must stay pinned at the bottom on laptop and phone, even when
+   scrolled up to older messages: the message list scrolls, the composer
+   never scrolls away with it. */
+.chat .messages { min-height: 0; }
+.chat .composer, .chat .owner-readonly { flex-shrink: 0; }
 .shell.wide .pane-list-wrap { border-right: 0.5px solid var(--separator); }
 @media (prefers-reduced-motion: reduce) {
   .pane-list-wrap, .chat { transition: none; }
@@ -844,6 +849,42 @@ video.media { cursor: default; }
   place-items: center;
 }
 .pending:has(.pending-file) .pending-remove { left: auto; right: 0; top: 50%; transform: translate(-50%, -25%); }
+
+/* Multi-picture composer preview: a grid of up to 5, each removable. */
+.pending-multi { display: block; }
+.pending-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.pending-grid-item { position: relative; }
+.pending-grid-item img { width: 100%; height: 72px; object-fit: cover; max-height: none; max-width: none; }
+.pending-grid-item .pending-remove { top: 4px; left: 4px; }
+.pending-grid-item .pending-file { padding: 8px 32px 8px 8px; }
+.pending-count { display: block; font-size: 12px; color: var(--muted); margin-top: 6px; }
+.composer-notice { font-size: 12px; color: var(--muted); padding: 4px 8px 0; }
+
+/* Multiple attachments on one message: a grid, never just the first picture. */
+.media-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; max-width: 320px; }
+.media-grid .media-grid-item { min-width: 0; }
+.media-grid .media { width: 100%; height: 140px; object-fit: cover; }
+.media-grid .bubble.file { display: flex; }
+
+/* Jump to latest: floating button above the composer, only rendered while
+   the user has scrolled up away from the bottom (see Chat.jsx onScroll). */
+.jump-to-latest {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(92px + env(safe-area-inset-bottom));
+  z-index: 15;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 0;
+  background: var(--blue, #0b84fe);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+}
+.jump-to-latest:active { transform: translateX(-50%) scale(0.97); }
 
 /* ---- members sheet ---- */
 

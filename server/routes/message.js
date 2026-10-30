@@ -21,9 +21,21 @@ export default route({
 
   async DELETE(req) {
     const { sb, userId } = await auth(req)
+    // Collect every attachment path before the row is deleted, so the
+    // extra pictures (0018) are removed from storage too, not just the
+    // legacy first picture. Best-effort: a missing table (migration not
+    // run yet) must not block deleting the message itself.
+    let extraPaths = []
+    try {
+      const { data } = await sb.from('message_attachments').select('attachment_path').eq('message_id', id(req))
+      extraPaths = (data ?? []).map((r) => r.attachment_path).filter(Boolean)
+    } catch {
+      extraPaths = []
+    }
     const rows = check(await sb.from('messages').delete().eq('id', id(req)).eq('user_id', userId).select())
     if (!rows.length) throw new HttpError(404, 'Message not found or not yours')
-    if (rows[0].attachment_path) await sb.storage.from(BUCKET).remove([rows[0].attachment_path])
+    const paths = [...new Set([rows[0].attachment_path, ...extraPaths].filter(Boolean))]
+    if (paths.length) await sb.storage.from(BUCKET).remove(paths)
     return { ok: true }
   },
 })
