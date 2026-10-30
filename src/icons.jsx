@@ -251,21 +251,6 @@ export function AppPolls({ size = 46 }) {
   )
 }
 
-export function AppTask({ size = 46 }) {
-  return (
-    <svg viewBox="0 0 48 48" width={size} height={size} aria-hidden="true">
-      <defs>
-        <linearGradient id="task-bg" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#7ed492" />
-          <stop offset="1" stopColor="#34a853" />
-        </linearGradient>
-      </defs>
-      <circle cx="24" cy="24" r="23" fill="url(#task-bg)" />
-      <path d="M15 24.5 21 30.5 33 17.5" fill="none" stroke="#fff" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  )
-}
-
 export function AppSendLater({ size = 46 }) {
   return (
     <svg viewBox="0 0 48 48" width={size} height={size} aria-hidden="true">

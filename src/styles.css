@@ -2394,33 +2394,3 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
 }
 .attach-pop button:active { background: color-mix(in srgb, var(--text) 8%, transparent); }
 .attach-pop button svg { flex-shrink: 0; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.12)); }
-
-/* ---- AI task cards ---- */
-.task-card { --task: #34a853; --task-soft: #e8f5e9; --task-ink: #1e7e34; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; width: min(330px, 78vw); padding: 12px 14px; border-radius: 18px; background: var(--task-soft); color: var(--text); }
-.task-card.done { --task: #34a853; }
-.task-card.failed { --task: #d93025; --task-soft: #fce8e6; --task-ink: #a50e0e; }
-.task-card.cancelled { --task: #8e8e93; --task-soft: var(--fill); --task-ink: var(--muted); }
-@media (prefers-color-scheme: dark) {
-  .task-card { --task-soft: #1e3a24; --task-ink: #7ed492; }
-  .task-card.failed { --task-soft: #3a1f1d; --task-ink: #f28b82; }
-  .task-card.cancelled { --task-soft: var(--fill); }
-}
-.task-head { display: flex; align-items: flex-start; gap: 8px; font-size: 17px; font-weight: 600; }
-.task-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--task); flex-shrink: 0; margin-top: 5px; }
-.task-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.task-who { font-size: 13px; color: var(--muted); }
-.task-due { color: var(--muted); }
-.task-status { font-size: 14px; font-weight: 600; color: var(--task-ink); display: flex; align-items: center; gap: 6px; }
-.task-status.assigned { color: var(--muted); }
-.task-spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--task); border-top-color: transparent; animation: task-spin 0.8s linear infinite; }
-@keyframes task-spin { to { transform: rotate(360deg); } }
-.task-log { display: flex; flex-direction: column; gap: 4px; font-size: 14px; color: var(--muted); width: 100%; }
-.task-log-row { display: flex; flex-wrap: wrap; gap: 4px; align-items: baseline; }
-.task-log-by { font-size: 12px; }
-.task-result { font-size: 15px; white-space: pre-wrap; overflow-wrap: anywhere; width: 100%; }
-.task-files { display: flex; flex-wrap: wrap; gap: 6px; }
-.task-more { border: 0; background: var(--task); color: #fff; border-radius: 14px; padding: 5px 10px; font-size: 13px; font-weight: 600; }
-.task-cancel { border: 0; background: none; padding: 2px 0; color: var(--task-ink); font-size: 14px; font-weight: 600; }
-.task-pick { width: 100%; text-align: left; }
-.task-pick.on { background: var(--fill); font-weight: 600; }
-.task-pick .avatar { width: 30px; height: 30px; font-size: 13px; flex-shrink: 0; }

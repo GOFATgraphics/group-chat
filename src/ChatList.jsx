@@ -187,7 +187,6 @@ export function listPreview(m) {
     return text.startsWith('Poll:') ? text : `Poll: ${text}`
   }
   if (text.startsWith('⏰ ')) return text.slice(2).trim()
-  if (text.startsWith('🗂 ')) return text.slice(2).trim()
   if (m.attachment_path) {
     const type = m.attachment_type ?? ''
     const what = type.startsWith('image/')

@@ -21,9 +21,8 @@ import {
   AppAudio,
   AppPolls,
   AppSendLater,
-  AppTask,
 } from './icons.jsx'
-import { PinStrip, PollCard, PollComposer, TaskCard, TaskSheet, NotesSheet, ScheduleSheet, useMessageSearch, Highlighted, itemScope } from './Tools.jsx'
+import { PinStrip, PollCard, PollComposer, NotesSheet, ScheduleSheet, useMessageSearch, Highlighted, itemScope } from './Tools.jsx'
 import ApiKeys from './ApiKeys.jsx'
 import { useTyping } from './typing.js'
 import { VoicePlayer, VoiceRecorder, MicIcon, canRecordVoice, formatDuration } from './Voice.jsx'
@@ -116,7 +115,6 @@ export default function Chat({ session }) {
   // which tool sheet is open ('notes' | 'schedule' | 'poll' | 'search').
   const [pins, setPins] = useState([])
   const [polls, setPolls] = useState({})
-  const [tasks, setTasks] = useState({}) // AI tasks by card message id
   const [toolSheet, setToolSheet] = useState(null)
   const [flashId, setFlashId] = useState(null)
   const pendingJumpRef = useRef(null)
@@ -536,7 +534,6 @@ export default function Chat({ session }) {
     if (m.call_duration != null) return 'Voice call'
     if (m.content?.startsWith('📊 ')) return `Poll: ${m.content.slice(2).trim().replace(/^Poll:\s*/, '')}`
     if (m.content?.startsWith('⏰ ')) return m.content.slice(2).trim()
-    if (m.content?.startsWith('🗂 ')) return m.content.slice(2).trim()
     if (m.content?.trim()) {
       const text = m.content.trim()
       return text.length > 80 ? `${text.slice(0, 80)}…` : text
@@ -631,7 +628,7 @@ export default function Chat({ session }) {
     if (!m) return 'Original message not loaded'
     if (m.call_duration != null) return 'voice call'
     if (m.content?.trim()) {
-      const text = m.content.trim().replace(/^📊\s*/, 'Poll: ').replace(/^Poll: Poll:/, 'Poll:').replace(/^⏰\s*/, '').replace(/^🗂\s*/, '')
+      const text = m.content.trim().replace(/^📊\s*/, 'Poll: ').replace(/^Poll: Poll:/, 'Poll:').replace(/^⏰\s*/, '')
       return text.length > 60 ? `${text.slice(0, 60)}…` : text
     }
     if (m.attachment_path) {
@@ -1244,8 +1241,6 @@ export default function Chat({ session }) {
       )
       .on('postgres_changes', { event: '*', schema: 'public', table: 'message_pins' }, () => reloadToolsRef.current())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'polls' }, () => reloadToolsRef.current())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'ai_tasks' }, () => reloadToolsRef.current())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'ai_task_updates' }, () => reloadToolsRef.current())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'poll_votes' }, () => reloadToolsRef.current())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_groups' }, () => loadGroups())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_group_members' }, () => {
@@ -1325,51 +1320,6 @@ export default function Chat({ session }) {
       return next
     })
   }, [])
-  // AI task cards on screen (their text starts with 🗂 Task:), with updates.
-  const loadTasks = useCallback(async (ids) => {
-    if (!ids.length) return
-    const { data } = await supabase.from('ai_tasks').select('*, ai_task_updates(*)').in('message_id', ids)
-    setTasks((prev) => {
-      const next = { ...prev }
-      for (const t of data ?? []) next[t.message_id] = t
-      return next
-    })
-    const paths = (data ?? []).flatMap((t) => (t.ai_task_updates ?? []).map((u) => u.attachment_path)).filter(Boolean)
-    if (paths.length) signUrls(paths)
-  }, [signUrls])
-  const taskIds = messages.filter((m) => typeof m.id === 'number' && m.content?.startsWith('🗂 Task:')).map((m) => m.id)
-  const taskKey = taskIds.join(',')
-  useEffect(() => {
-    loadTasks(taskIds)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [taskKey, loadTasks])
-
-  async function createTask({ assignee, title, due }) {
-    const { data: msg, error: err } = await supabase
-      .from('messages')
-      .insert({ content: `🗂 Task: ${title}`.slice(0, 4000), recipient_id: peerId, group_id: groupId })
-      .select()
-      .single()
-    if (err) return setError(err.message)
-    const { error: tErr } = await supabase.from('ai_tasks').insert({ message_id: msg.id, assignee, title, due_at: due })
-    if (tErr) {
-      await supabase.from('messages').delete().eq('id', msg.id)
-      return setError(tErr.message)
-    }
-    stickToBottom.current = true
-    addMessage(msg)
-    loadTasks([msg.id])
-    playSend()
-    setToolSheet(null)
-  }
-  async function cancelTask(task) {
-    if (!window.confirm('Cancel this task?')) return
-    const { error: err } = await supabase.from('ai_tasks').update({ status: 'cancelled', updated_at: new Date().toISOString() }).eq('id', task.id)
-    if (err) return setError(err.message)
-    await supabase.from('ai_task_updates').insert({ task_id: task.id, status: 'cancelled', note: 'Cancelled' })
-    loadTasks([task.message_id])
-  }
-
   const pollIds = messages.filter((m) => typeof m.id === 'number' && m.content?.startsWith('📊 ')).map((m) => m.id)
   const pollKey = pollIds.join(',')
   useEffect(() => {
@@ -1380,7 +1330,6 @@ export default function Chat({ session }) {
   reloadToolsRef.current = () => {
     loadPins()
     loadPolls(pollIds)
-    loadTasks(taskIds)
   }
 
   async function togglePin(msg) {
@@ -1830,10 +1779,6 @@ export default function Chat({ session }) {
   // Everyone else in the group, used only for the read-receipt rule:
   // a group message is blue only once every one of these has read it.
   const otherMemberIds = groupMemberIds.filter((id) => id !== myId)
-  // AI members you can give a task to in this chat.
-  const chatAIs = (isGroup ? groupMemberIds : peerId ? [peerId] : [])
-    .filter((id) => aiIds.has(id) && id !== myId)
-    .map((id) => ({ id, name: profiles[id] }))
   const peerName = peerId ? profiles[peerId] ?? '…' : null
   const ownerNameA = ownerA ? profiles[ownerA] ?? '…' : null
   const ownerNameB = ownerB ? profiles[ownerB] ?? '…' : null
@@ -2141,9 +2086,6 @@ export default function Chat({ session }) {
               onOpenImage={setLightbox}
               onMediaLoad={scrollToBottom}
               poll={polls[item.msg.id]}
-              task={tasks[item.msg.id]}
-              urls={urls}
-              onCancelTask={cancelTask}
               pinned={pins.some((p) => p.id === item.msg.id)}
               onPin={() => togglePin(item.msg)}
               onPollChange={() => loadPolls([item.msg.id])}
@@ -2245,7 +2187,6 @@ export default function Chat({ session }) {
             replying={Boolean(replyTo)}
             focusKey={replyTo?.id}
             onPoll={createPoll}
-            onTask={chatAIs.length ? () => setToolSheet('task') : undefined}
             onSchedule={() => setToolSheet('schedule')}
             placeholder={replyTo ? 'Reply' : isGroup ? (currentGroup ? `Message ${currentGroup.name}` : 'Message') : `Message ${peerName}`}
             enableMentions={isGroup}
@@ -2384,16 +2325,6 @@ export default function Chat({ session }) {
         </div>
       )}
 
-      {toolSheet === 'task' && (
-        <TaskSheet
-          ais={chatAIs}
-          defaultTo={peerId && aiIds.has(peerId) ? peerId : undefined}
-          Avatar={Avatar}
-          avatars={avatars}
-          onCreate={createTask}
-          onCancel={() => setToolSheet(null)}
-        />
-      )}
       {toolSheet === 'notes' && (
         <NotesSheet
           scope={itemScope(view, myId)}
@@ -2570,9 +2501,6 @@ function Message({
   onPin,
   onPollChange,
   onPollError,
-  task,
-  urls: allUrls = {},
-  onCancelTask,
   avatars = {},
   flash = false,
 }) {
@@ -2659,15 +2587,8 @@ function Message({
   const shownText = useMemo(() => withoutMarkdownImages(msg.content), [msg.content])
   // A scheduled reminder ("⏰ Reminder: …") or a poll still loading ("📊 …")
   // shows an icon header instead of the emoji.
-  const special = shownText?.startsWith('⏰ Reminder:') ? 'reminder' : shownText?.startsWith('📊 ') ? 'poll' : shownText?.startsWith('🗂 Task:') ? 'task' : null
-  const specialText =
-    special === 'reminder'
-      ? shownText.replace(/^⏰ Reminder:\s*/, '')
-      : special === 'poll'
-        ? shownText.slice(2).trim()
-        : special === 'task'
-          ? shownText.replace(/^🗂 Task:\s*/, '')
-          : null
+  const special = shownText?.startsWith('⏰ Reminder:') ? 'reminder' : shownText?.startsWith('📊 ') ? 'poll' : null
+  const specialText = special === 'reminder' ? shownText.replace(/^⏰ Reminder:\s*/, '') : special === 'poll' ? shownText.slice(2).trim() : null
   // Just one to three emoji, nothing else: shown big without a bubble.
   const jumbo = useMemo(() => (msg.attachment_path || msg.call_duration != null ? 0 : emojiOnlyCount(shownText)), [shownText, msg.attachment_path, msg.call_duration])
 
@@ -2811,18 +2732,7 @@ function Message({
             </a>
           )}
           {isCall && <CallCard msg={msg} tail={tail(true)} />}
-          {task ? (
-            <TaskCard
-              task={task}
-              myId={myId}
-              profiles={profiles}
-              urls={allUrls}
-              Avatar={Avatar}
-              avatars={avatars}
-              onCancel={readOnly ? undefined : () => onCancelTask?.(task)}
-              onOpenFile={(u) => onOpenImage({ url: allUrls[u.attachment_path], name: u.attachment_name, type: 'image' })}
-            />
-          ) : poll ? (
+          {poll ? (
             <PollCard poll={poll} myId={myId} profiles={profiles} avatars={avatars} Avatar={Avatar} readOnly={readOnly} mine={mine} onChange={onPollChange} onError={onPollError} />
           ) : shownText && !isCall && (jumbo ? (
             <div className={`jumbo-emoji n${jumbo}`} title={new Date(msg.created_at).toLocaleString()}>
@@ -2833,11 +2743,6 @@ function Message({
               {special === 'reminder' && (
                 <span className="special-head">
                   <AlarmIcon size={15} /> Reminder
-                </span>
-              )}
-              {special === 'task' && (
-                <span className="special-head">
-                  <PollIcon size={15} /> Task
                 </span>
               )}
               {special === 'poll' && (
@@ -3114,7 +3019,7 @@ function formatReadTime(iso) {
   return `${d.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`
 }
 
-function Composer({ onSend, replying = false, focusKey, onPoll, onSchedule, onTask, placeholder = 'Message', enableMentions = false, members = [], viewKey = '', onTyping, onVoiceError }) {
+function Composer({ onSend, replying = false, focusKey, onPoll, onSchedule, placeholder = 'Message', enableMentions = false, members = [], viewKey = '', onTyping, onVoiceError }) {
   const [text, setText] = useState('')
   const [file, setFile] = useState(null)
   const [preview, setPreview] = useState(null)
@@ -3346,18 +3251,6 @@ function Composer({ onSend, replying = false, focusKey, onPoll, onSchedule, onTa
                 }}
               >
                 <AppAudio /> <span>Audio</span>
-              </button>
-            )}
-            {onTask && (
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setMenu(false)
-                  onTask()
-                }}
-              >
-                <AppTask /> <span>AI Task</span>
               </button>
             )}
             {onPoll && (

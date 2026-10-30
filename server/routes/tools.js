@@ -10,11 +10,7 @@
 //   GET    /api/schedule                         DELETE /api/schedule { id }
 //   POST   /api/schedule { text, at, kind?: message|reminder|task, repeat?: daily|weekly, to?|group? }
 //   GET    /api/tasks  -> your due AI tasks (and marks them handled)
-//   POST   /api/assignments { to, text, due?, group? }  -> give someone (an AI) a task
-//   GET    /api/assignments                -> tasks given to you that are still open
-//   POST   /api/assignments/update { task_id, status?, note?, result?, file?|file_url? }
-import { route, auth, body, check, present, conversationFor, presentPoll, presentTask, userIdFor, HttpError, BUCKET } from '../lib.js'
-import { readFile } from './messages.js'
+import { route, auth, body, check, present, conversationFor, presentPoll, userIdFor, HttpError } from '../lib.js'
 
 const args = (req) => ({ ...req.query, ...body(req) })
 const where = (query, conv, { pairCols = false } = {}) => {
@@ -204,85 +200,4 @@ const tasks = route({
   },
 })
 
-const TASK_STATUSES = ['assigned', 'working', 'done', 'failed', 'cancelled']
-const names = async (sb) => Object.fromEntries(check(await sb.from('profiles').select('id, username')).map((p) => [p.id, p.username]))
-
-// Open tasks given to you, oldest first; marks them delivered.
-export async function takeAssignedTasks(sb, userId, { all = false } = {}) {
-  let q = sb.from('ai_tasks').select('*, ai_task_updates(status, note, attachment_name, attachment_type, created_at, user_id)').eq('assignee', userId).in('status', ['assigned', 'working']).order('created_at')
-  if (!all) q = q.is('delivered_at', null)
-  const { data } = await q
-  if (!data?.length) return []
-  const fresh = data.filter((t) => !t.delivered_at).map((t) => t.id)
-  if (fresh.length) await sb.from('ai_tasks').update({ delivered_at: new Date().toISOString() }).in('id', fresh)
-  const n = await names(sb)
-  return data.map((t) => presentTask(t, n))
-}
-
-const assignments = route({
-  async GET(req) {
-    const { sb, userId } = await auth(req)
-    return { tasks: await takeAssignedTasks(sb, userId, { all: true }) }
-  },
-  async POST(req) {
-    const { sb, userId } = await auth(req)
-    const b = args(req)
-    const title = String(b.text ?? b.title ?? '').trim()
-    if (!title) throw new HttpError(400, 'text (what to do) is required')
-    if (!b.to && !b.assignee) throw new HttpError(400, 'to (who should do it) is required')
-    const assignee = await userIdFor(sb, b.assignee ?? b.to)
-    // The card goes in a named group if given, else the private chat with the assignee.
-    const conv = b.group ? await conversationFor(sb, userId, { group: b.group }) : { group_id: null, recipient_id: assignee === userId ? null : assignee }
-    const due = b.due ? new Date(b.due) : null
-    if (due && Number.isNaN(due.getTime())) throw new HttpError(400, 'due must be a date/time')
-    const msg = check(await sb.from('messages').insert({ content: `🗂 Task: ${title}`.slice(0, 4000), recipient_id: conv.recipient_id, group_id: conv.group_id }).select().single())
-    const { error } = await sb.from('ai_tasks').insert({ message_id: msg.id, assignee, title, due_at: due?.toISOString() ?? null })
-    if (error) {
-      await sb.from('messages').delete().eq('id', msg.id)
-      check({ error })
-    }
-    const [message] = await present(sb, [msg])
-    return { message }
-  },
-})
-
-const assignmentUpdate = route({
-  async POST(req) {
-    const { sb, userId } = await auth(req)
-    const b = args(req)
-    const task = check(await sb.from('ai_tasks').select('*').eq('id', b.task_id).maybeSingle())
-    if (!task) throw new HttpError(404, 'Task not found')
-    if (task.assignee !== userId && task.created_by !== userId) throw new HttpError(403, 'Only the assignee or the creator can update this task')
-    if (b.status && !TASK_STATUSES.includes(b.status)) throw new HttpError(400, `status must be one of ${TASK_STATUSES.join(', ')}`)
-    const note = b.note != null ? String(b.note).trim().slice(0, 4000) : null
-    const result = b.result != null ? String(b.result).trim().slice(0, 20000) : null
-
-    let file = await readFile(b)
-    let attachment = {}
-    if (file) {
-      const safe = file.name.replace(/[^\w.-]+/g, '_').slice(-120) || 'file'
-      const path = `${userId}/${Date.now()}-task-${safe}`
-      const { error } = await sb.storage.from(BUCKET).upload(path, file.bytes, { contentType: file.type })
-      if (error) throw new HttpError(400, `Upload failed: ${error.message}`)
-      attachment = { attachment_path: path, attachment_name: file.name, attachment_type: file.type }
-    }
-    check(await sb.from('ai_task_updates').insert({ task_id: task.id, status: b.status ?? null, note: note ?? (result ? result.slice(0, 4000) : null), ...attachment }))
-    const patch = { updated_at: new Date().toISOString() }
-    if (b.status) patch.status = b.status
-    if (note) patch.progress = note.slice(0, 1000)
-    if (result) patch.result = result
-    check(await sb.from('ai_tasks').update(patch).eq('id', task.id))
-
-    // Finishing (or failing) posts a reply under the card, so everyone is notified.
-    if (b.status === 'done' || b.status === 'failed') {
-      const card = check(await sb.from('messages').select('recipient_id, group_id, user_id').eq('id', task.message_id).single())
-      const recipient = card.recipient_id ? (card.user_id === userId ? card.recipient_id : card.user_id) : null
-      const text = `${b.status === 'done' ? '✅ Done' : '⚠️ Could not finish'}: ${result || note || task.title}`.slice(0, 4000)
-      await sb.from('messages').insert({ content: text, reply_to_id: task.message_id, recipient_id: recipient, group_id: card.group_id, ...attachment })
-    }
-    const full = check(await sb.from('ai_tasks').select('*, ai_task_updates(status, note, attachment_name, attachment_type, created_at, user_id)').eq('id', task.id).single())
-    return { task: presentTask(full, await names(sb)) }
-  },
-})
-
-export default { search, pins, polls, vote, choice, notes, schedule, tasks, assignments, assignmentUpdate }
+export default { search, pins, polls, vote, choice, notes, schedule, tasks }

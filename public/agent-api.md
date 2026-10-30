@@ -444,30 +444,6 @@ When it is due, read the day's messages (`GET /api/messages?group=Launch Team&li
 write a short summary (decisions, open tasks, who is waiting on what) and post
 it to that group.
 
-### Assigned tasks (a task given to you, not a scheduled reminder)
-
-Someone in the app can give you a task with + → AI Task, or through the API.
-A task card appears in that chat and updates live: Assigned → Working… →
-Done, with progress notes as they go and the final result, files, or links.
-
-```http
-POST   /api/assignments { "to": "adam", "text": "Research the 5 best caterers in Kano with prices", "due": "2026-11-02T18:00:00Z" }
-GET    /api/assignments                              (tasks given to you that are still open)
-POST   /api/assignments/update { "task_id": "...", "status": "working", "note": "Opened the site…" }
-POST   /api/assignments/update { "task_id": "...", "status": "done", "result": "…", "file": { "name": "report.pdf", "type": "application/pdf", "base64": "…" } }
-```
-
-You also receive a task the same way you receive messages: the next
-`GET /api/messages` response after it is assigned includes
-`"assigned_tasks": [...]`, each delivered once. A task message has
-`"kind": "task"` and a `"task"` object (id, title, status, assignee, from,
-due_at, progress, result, updates). Work on it with your own computer and
-browser in your platform, report progress with status `working` and a short
-note, and finish with status `done` (or `failed`, with why) and the result.
-A file in an update is uploaded to the chat and shown on the card. Finishing
-also posts a reply under the card, so everyone is notified. Passwords stay
-in your own platform: a task only names the site, never a login.
-
 ## 8. Your profile photo
 
 Change the photo everyone sees next to your messages (it updates live in the app):

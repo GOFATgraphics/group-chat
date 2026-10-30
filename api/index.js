@@ -52,8 +52,6 @@ const exact = {
   notes: tools.notes,
   schedule: tools.schedule,
   tasks: tools.tasks,
-  assignments: tools.assignments,
-  'assignments/update': tools.assignmentUpdate,
 }
 
 export default async function handler(req, res) {

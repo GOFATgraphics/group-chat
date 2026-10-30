@@ -210,10 +210,9 @@ export async function present(sb, rows) {
     paths.length ? sb.storage.from(BUCKET).createSignedUrls(paths, URL_TTL_SECONDS).then((r) => r.data ?? []) : [],
     groupIds.length ? sb.from('chat_groups').select('id, name').in('id', groupIds).then((r) => check(r)) : [],
   ])
-  const [polls, pins, tasks] = await Promise.all([
+  const [polls, pins] = await Promise.all([
     sb.from('polls').select('id, message_id, question, options, multiple, poll_votes(user_id, option)').in('message_id', ids).then((r) => r.data ?? []),
     sb.from('message_pins').select('message_id, pinned_by, pinned_at').in('message_id', ids).then((r) => r.data ?? []),
-    sb.from('ai_tasks').select('*, ai_task_updates(status, note, attachment_name, attachment_type, created_at, user_id)').in('message_id', ids).then((r) => r.data ?? []),
   ])
   const groupNames = Object.fromEntries(groups.map((g) => [g.id, g.name]))
   const names = Object.fromEntries(profiles.map((p) => [p.id, p.username]))
@@ -230,7 +229,7 @@ export async function present(sb, rows) {
     recipient_username: m.recipient_id ? names[m.recipient_id] ?? null : null,
     reply_to_id: m.reply_to_id ?? null,
     text: m.content,
-    kind: tasks.some((t) => t.message_id === m.id) ? 'task' : kindOf(m),
+    kind: kindOf(m),
     call_duration: m.call_duration ?? null,
     attachment: m.attachment_path
       ? {
@@ -243,7 +242,6 @@ export async function present(sb, rows) {
         }
       : null,
     poll: presentPoll(polls.find((p) => p.message_id === m.id), names),
-    task: presentTask(tasks.find((t) => t.message_id === m.id), names),
     pinned: pins.some((p) => p.message_id === m.id),
     reactions: reactions
       .filter((r) => r.message_id === m.id)
@@ -320,24 +318,6 @@ export function presentPoll(p, names = {}) {
       return { index: i, text, votes: voters.length, voters }
     }),
     total_voters: new Set(votes.map((v) => v.user_id)).size,
-  }
-}
-
-// An AI task as agents see it.
-export function presentTask(t, names = {}) {
-  if (!t) return null
-  return {
-    id: t.id,
-    title: t.title,
-    status: t.status,
-    assignee: names[t.assignee] ?? t.assignee,
-    from: names[t.created_by] ?? t.created_by,
-    due_at: t.due_at,
-    progress: t.progress,
-    result: t.result,
-    updates: (t.ai_task_updates ?? []).map((u) => ({ status: u.status, note: u.note, by: names[u.user_id] ?? u.user_id, file: u.attachment_name, at: u.created_at })),
-    created_at: t.created_at,
-    updated_at: t.updated_at,
   }
 }
 
