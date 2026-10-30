@@ -2482,3 +2482,18 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
 .project-table-wrap { overflow-x: auto; overflow-y: hidden; max-width: 100%; -webkit-overflow-scrolling: touch; }
 .project-table { width: 100%; border-collapse: collapse; min-width: 640px; }
 .project-table th, .project-table td { text-align: left; padding: 10px 8px; border-bottom: 0.5px solid var(--separator); font-size: 14px; overflow-wrap: anywhere; }
+/* Full-width sheet-like views (Database and Trade log tabs only).
+   The centered 900px page is what squeezed the Database table into the
+   middle of the screen and broke headers letter by letter (Contract ref,
+   Quantity, Stage). The wide variant removes the cap, so the table
+   spreads across the screen like the TradesDB sheet. Wide-table cells
+   do not wrap mid-word: they stay on one line at a readable width and
+   the table grows to its content width, scrolling horizontally inside
+   its wrap (which the scroll fix already made the horizontal container,
+   with the page itself overflow-x hidden, so the page never slides
+   sideways). Vertical scrolling is unchanged: the page itself is still
+   the vertical scroll container. Queue, Stages, the project list and
+   the create form keep the centered page; chat rules are untouched. */
+.project-page-wide { max-width: none; }
+.project-page-wide .project-table { width: max-content; min-width: 100%; }
+.project-page-wide .project-table th, .project-page-wide .project-table td { white-space: nowrap; overflow-wrap: normal; }

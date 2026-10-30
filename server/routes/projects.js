@@ -41,7 +41,12 @@ const WRITABLE = {
 }
 const PATCHABLE = {
   queue: ['sender', 'subject', 'body', 'status', 'attempts', 'last_error', 'credit_used'],
-  trades: ['queue_id', 'contract_ref', 'buyer', 'seller', 'commodity', 'quantity', 'disport', 'lifecycle_stage', 'sub_stage', 'action_owner', 'deadline', 'fingerprint', 'stage'],
+  // full_data is the full TradesDB row for this trade (migration 0020,
+  // draft only until approved and applied). It is updated through this
+  // existing PATCH route only, never through POST, and only as a plain
+  // JSON object; see the validation in item.PATCH below. Reads need no
+  // change: the dashboard and subcollection GETs already select('*').
+  trades: ['queue_id', 'contract_ref', 'buyer', 'seller', 'commodity', 'quantity', 'disport', 'lifecycle_stage', 'sub_stage', 'action_owner', 'deadline', 'fingerprint', 'stage', 'full_data'],
 }
 
 function projectId(req) {
@@ -162,7 +167,18 @@ const subcollection = route({
     const id = projectId(req)
     const kind = collection(req)
     await visibleProject(sb, id)
-    const rows = check(await sb.from(TABLES[kind]).select('*').eq('project_id', id).order('id').limit(200))
+    // Pagination is backward compatible: the default is exactly the old
+    // behaviour (first 200 rows by id). It exists because the seeded
+    // trades are 206 rows, so a single uncapped page cannot return them
+    // all, and the backfill must see every trade id in insertion order.
+    // limit is clamped to 1..200, offset must be >= 0; invalid values 400.
+    const rawLimit = req.query.limit
+    const rawOffset = req.query.offset
+    const limit = rawLimit === undefined ? 200 : Number(rawLimit)
+    const offset = rawOffset === undefined ? 0 : Number(rawOffset)
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new HttpError(400, 'limit must be an integer between 1 and 200')
+    if (!Number.isInteger(offset) || offset < 0) throw new HttpError(400, 'offset must be an integer of 0 or more')
+    const rows = check(await sb.from(TABLES[kind]).select('*').eq('project_id', id).order('id').range(offset, offset + limit - 1))
     return { project_id: id, [kind === 'sync-log' ? 'sync_log' : kind]: rows }
   },
 
@@ -205,6 +221,14 @@ const item = route({
     const rid = rowId(req)
     await visibleProject(sb, id)
     const b = body(req)
+    // full_data, when present, must be a plain JSON object (the full
+    // TradesDB row). Arrays, strings, numbers and null are rejected, so
+    // a bad backfill payload cannot overwrite the column with junk, and
+    // clean() below cannot trim or reshape an object it should not touch.
+    if (kind === 'trades' && b.full_data !== undefined) {
+      const fd = b.full_data
+      if (fd === null || Array.isArray(fd) || typeof fd !== 'object') throw new HttpError(400, 'full_data must be a JSON object')
+    }
     const row = clean(b, PATCHABLE[kind])
     if (row.status !== undefined && !QUEUE_STATUSES.includes(row.status)) throw new HttpError(400, `status must be one of: ${QUEUE_STATUSES.join(', ')}`)
     if (row.stage !== undefined && !TRADE_STAGES.includes(row.stage)) throw new HttpError(400, `stage must be one of: ${TRADE_STAGES.join(', ')}`)

@@ -42,6 +42,22 @@ export async function fetchDashboard(token, projectId) {
   return apiFetch(token, `/api/projects/${projectId}`)
 }
 
+// All trades for a project, paged through the subcollection GET. The
+// dashboard GET caps at 200 rows, and seeded trades are 206, so a single
+// page would silently drop the last trades from the Database view.
+export async function fetchAllTrades(token, projectId) {
+  const all = []
+  let offset = 0
+  for (;;) {
+    const data = await apiFetch(token, `/api/projects/${projectId}/trades?limit=200&offset=${offset}`)
+    const page = Array.isArray(data.trades) ? data.trades : []
+    all.push(...page)
+    if (page.length < 200) break
+    offset += 200
+  }
+  return all
+}
+
 // Whole-page projects list. Back goes to chats.
 export function ProjectsList({ projects, loading, error, onCreate, onOpen, onBack }) {
   return (
@@ -139,11 +155,28 @@ const when = (v) => {
 // Stage counts come from server data, not local counts: trades in that
 // stage, plus queue rows in the same status that have no trade yet (a
 // queue row linked to a trade is counted once, under the trade).
+// Simplified fallback columns, used only when no trade has full_data
+// yet (before the backfill runs). Each entry is [header, field].
+const SIMPLE_COLUMNS = [
+  ['Contract ref', 'contract_ref'],
+  ['Buyer', 'buyer'],
+  ['Seller', 'seller'],
+  ['Commodity', 'commodity'],
+  ['Quantity', 'quantity'],
+  ['Disport', 'disport'],
+  ['Stage', 'stage'],
+]
+
 export function ProjectDashboard({ project, token, onBack }) {
   const [tab, setTab] = useState('queue')
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  // Database tab loads trades separately, paged, so all 206 seeded
+  // trades appear, not just the dashboard's capped first 200.
+  const [dbTrades, setDbTrades] = useState(null)
+  const [dbLoading, setDbLoading] = useState(false)
+  const [dbError, setDbError] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -164,6 +197,26 @@ export function ProjectDashboard({ project, token, onBack }) {
     }
   }, [token, project.id])
 
+  useEffect(() => {
+    if (tab !== 'database' || dbTrades !== null) return undefined
+    let cancelled = false
+    setDbLoading(true)
+    setDbError('')
+    fetchAllTrades(token, project.id)
+      .then((rows) => {
+        if (!cancelled) setDbTrades(rows)
+      })
+      .catch((err) => {
+        if (!cancelled) setDbError(err.message || 'Could not load trades.')
+      })
+      .finally(() => {
+        if (!cancelled) setDbLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [tab, token, project.id, dbTrades])
+
   const queue = data?.queue ?? []
   const trades = data?.trades ?? []
   const syncLog = data?.sync_log ?? []
@@ -172,8 +225,32 @@ export function ProjectDashboard({ project, token, onBack }) {
     trades.filter((t) => t.stage === key).length +
     queue.filter((q) => q.status === key && !linkedQueueIds.has(q.id)).length
 
+  // Database columns are dynamic, not hardcoded: they come from the
+  // full_data keys of the first trade that has full_data, in the order
+  // the backfill stored them (sheet header order), plus the app Stage
+  // column at the end, which is not a TradesDB column. Trades without
+  // full_data render '—' in the full columns and still show Stage, so
+  // the page works before the backfill runs. If no trade has full_data
+  // at all, the old simplified columns are used instead.
+  const dbRows = dbTrades ?? trades
+  const firstFull = dbRows.find((t) => t.full_data && typeof t.full_data === 'object' && !Array.isArray(t.full_data))
+  const dbColumns = firstFull
+    ? [...Object.keys(firstFull.full_data), 'Stage']
+    : SIMPLE_COLUMNS.map(([h]) => h)
+  const dbCell = (t, col) => {
+    if (col === 'Stage') return show(t.stage)
+    if (firstFull) return t.full_data && typeof t.full_data === 'object' ? show(t.full_data[col]) : '—'
+    const field = SIMPLE_COLUMNS.find(([h]) => h === col)?.[1]
+    return show(field ? t[field] : undefined)
+  }
+  const dbFullCount = dbRows.filter((t) => t.full_data && typeof t.full_data === 'object').length
+
+  // Database and Trade log tabs are the sheet-like views: they use the
+  // wide page variant (no 900px cap), while Queue, Stages, the project
+  // list and the create form keep the centered page.
+  const wide = tab === 'database' || tab === 'log'
   return (
-    <main className="project-page" aria-label={`Dashboard for ${project.name}`}>
+    <main className={`project-page${wide ? ' project-page-wide' : ''}`} aria-label={`Dashboard for ${project.name}`}>
       <header className="project-header">
         <button className="project-back" onClick={onBack} aria-label="Back to projects">
           &lsaquo; Back to projects
@@ -239,43 +316,48 @@ export function ProjectDashboard({ project, token, onBack }) {
           {tab === 'database' && (
             <section aria-label="Database view">
               <h2>Database view</h2>
-              <p className="muted">Own database view inside the app.</p>
-              <div className="project-table-wrap">
-                <table className="project-table">
-                  <thead>
-                    <tr>
-                      <th>Contract ref</th>
-                      <th>Buyer</th>
-                      <th>Seller</th>
-                      <th>Commodity</th>
-                      <th>Quantity</th>
-                      <th>Disport</th>
-                      <th>Stage</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {trades.length === 0 ? (
+              <p className="muted">
+                Own database view inside the app, full width like the TradesDB sheet. Scroll sideways for more columns.
+                {dbRows.length > 0 && firstFull
+                  ? ` ${dbFullCount} of ${dbRows.length} trades have full trade data; the rest show — until the backfill runs.`
+                  : dbRows.length > 0
+                    ? ' Full trade data has not been backfilled yet, so the simplified columns are shown.'
+                    : ''}
+              </p>
+              {dbLoading ? (
+                <p className="project-empty">Loading trades…</p>
+              ) : dbError ? (
+                <p className="project-empty">{dbError}</p>
+              ) : (
+                <div className="project-table-wrap">
+                  <table className="project-table">
+                    <thead>
                       <tr>
-                        <td colSpan="7" className="project-empty">
-                          No trades saved yet.
-                        </td>
+                        {dbColumns.map((col) => (
+                          <th key={col}>{col}</th>
+                        ))}
                       </tr>
-                    ) : (
-                      trades.map((t) => (
-                        <tr key={t.id}>
-                          <td>{show(t.contract_ref)}</td>
-                          <td>{show(t.buyer)}</td>
-                          <td>{show(t.seller)}</td>
-                          <td>{show(t.commodity)}</td>
-                          <td>{show(t.quantity)}</td>
-                          <td>{show(t.disport)}</td>
-                          <td>{show(t.stage)}</td>
+                    </thead>
+                    <tbody>
+                      {dbRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={Math.max(dbColumns.length, 1)} className="project-empty">
+                            No trades saved yet.
+                          </td>
                         </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
+                      ) : (
+                        dbRows.map((t) => (
+                          <tr key={t.id}>
+                            {dbColumns.map((col) => (
+                              <td key={col}>{dbCell(t, col)}</td>
+                            ))}
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </section>
           )}
 
