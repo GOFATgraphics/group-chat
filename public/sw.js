@@ -61,6 +61,7 @@ function notificationTag(view) {
   if (!view) return 'group'
   if (view.type === 'dm') return `dm:${view.peerId}`
   if (view.type === 'owner') return `owner:${[view.aId, view.bId].sort().join('|')}`
+  if (view.type === 'group' && view.groupId) return `group:${view.groupId}`
   return 'group'
 }
 
@@ -70,5 +71,6 @@ function viewUrl(view) {
   if (view.type === 'owner' && view.aId && view.bId) {
     return `/?view=owner&a=${encodeURIComponent(view.aId)}&b=${encodeURIComponent(view.bId)}`
   }
+  if (view.type === 'group' && view.groupId) return `/?view=group&group=${encodeURIComponent(view.groupId)}`
   return '/?view=group'
 }

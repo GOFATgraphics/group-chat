@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import { supabase, BUCKET, AVATAR_BUCKET, avatarUrl } from './supabase.js'
 import Splash from './Splash.jsx'
 import ChatList, { listPreview, listTime } from './ChatList.jsx'
+import GroupSheet from './Groups.jsx'
 import ApiKeys from './ApiKeys.jsx'
 import { useTyping } from './typing.js'
 import { VoicePlayer, VoiceRecorder, MicIcon, canRecordVoice, formatDuration } from './Voice.jsx'
@@ -52,6 +53,7 @@ export default function Chat({ session }) {
     try {
       const params = new URLSearchParams(window.location.search)
       if (params.get('view') === 'dm' && params.get('peer')) return { type: 'dm', peerId: params.get('peer') }
+      if (params.get('view') === 'group' && params.get('group')) return { type: 'group', groupId: params.get('group') }
       if (params.get('view') === 'owner' && params.get('a') && params.get('b')) {
         return { type: 'owner', aId: params.get('a'), bId: params.get('b') }
       }
@@ -83,6 +85,12 @@ export default function Chat({ session }) {
   const [showSettings, setShowSettings] = useState(false)
   // Conversation key -> its newest message, for the chat list.
   const [lastByKey, setLastByKey] = useState({})
+  // Named groups you can see: id -> { id, name, created_by, members: [user ids] }
+  const [groups, setGroups] = useState({})
+  const groupsRef = useRef(groups)
+  groupsRef.current = groups
+  const groupsLoadedRef = useRef(false)
+  const [groupSheet, setGroupSheet] = useState(null) // 'create' | 'add' | null
   const [dmPeers, setDmPeers] = useState([])
   const [ownerPairs, setOwnerPairs] = useState([])
   const [lightbox, setLightbox] = useState(null) // { url, name, type } for the full-screen viewer
@@ -211,14 +219,16 @@ export default function Chat({ session }) {
   profilesRef.current = profiles
 
   // ---- conversations -------------------------------------------------------
-  // view is { type: 'group' }, { type: 'dm', peerId }, or
+  // view is { type: 'group' } (the main group chat), { type: 'group', groupId }
+  // (a named group), { type: 'dm', peerId }, or
   // { type: 'owner', aId, bId } for a read-only owner view of a private
   // chat between two other members. The owner never appears as a
   // participant in an owner view.
   const isGroup = view.type === 'group'
   const peerId = view.type === 'dm' ? view.peerId : null
   const isOwnerView = view.type === 'owner'
-  const typing = useTyping(myId, isGroup ? null : peerId ?? undefined)
+  const groupId = isGroup ? view.groupId ?? null : null
+  const typing = useTyping(myId, isGroup ? (groupId ? `g:${groupId}` : null) : peerId ?? undefined)
   const clearTyping = typing.clear
   const ownerA = isOwnerView ? view.aId : null
   const ownerB = isOwnerView ? view.bId : null
@@ -232,7 +242,7 @@ export default function Chat({ session }) {
 
   const isMessageForView = useCallback(
     (msg, v) => {
-      if (v.type === 'group') return msg.recipient_id == null
+      if (v.type === 'group') return msg.recipient_id == null && (msg.group_id ?? null) === (v.groupId ?? null)
       if (v.type === 'owner') {
         return (
           (msg.user_id === v.aId && msg.recipient_id === v.bId) ||
@@ -259,6 +269,7 @@ export default function Chat({ session }) {
     (rows) => {
       const v = viewRef.current
       if (!v || v.type === 'owner' || !activeRef.current) return
+      if (v.type === 'group' && v.groupId && !groupsRef.current[v.groupId]?.members.includes(myId)) return
       const todo = (rows ?? []).filter(
         (m) => m && m.user_id !== myId && isMessageForView(m, v) && !markedReadRef.current.has(m.id),
       )
@@ -314,7 +325,7 @@ export default function Chat({ session }) {
   // message, is what the panel badge and the document title count, so a
   // message in the currently viewed conversation never creates a count.
   const viewKey = (v) => {
-    if (v.type === 'group') return 'group'
+    if (v.type === 'group') return v.groupId ? `group:${v.groupId}` : 'group'
     if (v.type === 'owner') return `owner:${[v.aId, v.bId].sort().join('|')}`
     return `dm:${v.peerId}`
   }
@@ -334,6 +345,9 @@ export default function Chat({ session }) {
   // only the owner, labelled as an owner view, never as a participant DM.
   const notifyTarget = useCallback(
     (m) => {
+      if (m.group_id) {
+        return { key: `group:${m.group_id}`, view: { type: 'group', groupId: m.group_id }, label: groupsRef.current[m.group_id]?.name ?? 'Group', owner: false }
+      }
       if (m.recipient_id == null) return { key: 'group', view: { type: 'group' }, label: 'Group Chat', owner: false }
       if (m.user_id !== myId && m.recipient_id !== myId) {
         const [a, b] = [m.user_id, m.recipient_id].sort()
@@ -366,9 +380,9 @@ export default function Chat({ session }) {
   const loadInbox = useCallback(async () => {
     if (!myId) return
     const [{ data: groupRows }, { data: dmRows }, { data: readRows }] = await Promise.all([
-      supabase.from('messages').select(PREVIEW_FIELDS).is('recipient_id', null).order('id', { ascending: false }).limit(150),
+      supabase.from('messages').select(PREVIEW_FIELDS).is('recipient_id', null).order('id', { ascending: false }).limit(300),
       supabase.from('messages').select(PREVIEW_FIELDS).not('recipient_id', 'is', null).order('id', { ascending: false }).limit(600),
-      supabase.from('message_reads').select('message_id').eq('user_id', myId).order('message_id', { ascending: false }).limit(600),
+      supabase.from('message_reads').select('message_id').eq('user_id', myId).order('message_id', { ascending: false }).limit(800),
     ])
     const readIds = new Set((readRows ?? []).map((r) => r.message_id))
     const byKey = {}
@@ -407,6 +421,87 @@ export default function Chat({ session }) {
   useEffect(() => {
     loadInbox()
   }, [loadInbox])
+
+  const loadGroups = useCallback(async () => {
+    const [{ data: rows, error: gErr }, { data: members }] = await Promise.all([
+      supabase.from('chat_groups').select('id, name, created_by, created_at').order('created_at'),
+      supabase.from('chat_group_members').select('group_id, user_id, added_at').order('added_at'),
+    ])
+    if (gErr) return // before migration 0014: no named groups yet
+    const next = {}
+    for (const g of rows ?? []) next[g.id] = { ...g, members: [] }
+    for (const m of members ?? []) next[m.group_id]?.members.push(m.user_id)
+    groupsLoadedRef.current = true
+    setGroups(next)
+  }, [])
+  useEffect(() => {
+    if (myId) loadGroups()
+  }, [myId, loadGroups])
+
+  // ---- named groups (the owner makes and manages them) ----
+  async function createGroup({ name, ids }) {
+    const { data: g, error: err } = await supabase.from('chat_groups').insert({ name }).select().single()
+    if (err) return setError(err.message)
+    const { error: mErr } = await supabase
+      .from('chat_group_members')
+      .insert([...new Set([myId, ...ids])].map((user_id) => ({ group_id: g.id, user_id })))
+    if (mErr) setError(mErr.message)
+    await loadGroups()
+    setGroupSheet(null)
+    openConversation({ type: 'group', groupId: g.id })
+  }
+  async function addToGroup({ ids }) {
+    const { error: err } = await supabase
+      .from('chat_group_members')
+      .insert(ids.map((user_id) => ({ group_id: view.groupId, user_id })))
+    if (err) setError(err.message)
+    await loadGroups()
+    setGroupSheet(null)
+  }
+  async function removeFromGroup(userId) {
+    const g = groups[view.groupId]
+    if (!g || !window.confirm(`Remove ${profiles[userId]} from ${g.name}?`)) return
+    const { error: err } = await supabase.from('chat_group_members').delete().match({ group_id: g.id, user_id: userId })
+    if (err) setError(err.message)
+    loadGroups()
+  }
+  async function leaveGroup() {
+    const g = groups[view.groupId]
+    if (!g || !window.confirm(`Leave ${g.name}? You won't see its messages anymore.`)) return
+    const { error: err } = await supabase.from('chat_group_members').delete().match({ group_id: g.id, user_id: myId })
+    if (err) return setError(err.message)
+    setShowMembers(false)
+    await loadGroups()
+  }
+  async function renameGroup() {
+    const g = groups[view.groupId]
+    const name = window.prompt('Group name', g?.name ?? '')?.trim()
+    if (!g || !name || name === g.name) return
+    const { error: err } = await supabase.from('chat_groups').update({ name: name.slice(0, 60) }).eq('id', g.id)
+    if (err) setError(err.message)
+    loadGroups()
+  }
+  async function deleteGroup() {
+    const g = groups[view.groupId]
+    if (!g || !window.confirm(`Delete ${g.name} and all its messages for everyone? This can't be undone.`)) return
+    const { error: err } = await supabase.from('chat_groups').delete().eq('id', g.id)
+    if (err) return setError(err.message)
+    setShowMembers(false)
+    goBack()
+    setView({ type: 'group' })
+    await loadGroups()
+    loadInbox()
+  }
+
+  // Removed from (or deleted) the group you're looking at: go back to the list.
+  useEffect(() => {
+    if (!groupsLoadedRef.current || view.type !== 'group' || !view.groupId) return
+    if (!groups[view.groupId]) {
+      setView({ type: 'group' })
+      setScreen('list')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groups])
 
   const previewOf = (m) => {
     if (m.call_duration != null) return '📞 Voice call'
@@ -669,7 +764,7 @@ export default function Chat({ session }) {
     const onServiceWorkerMessage = (e) => {
       const v = e.data?.view
       if (e.data?.type !== 'open-conversation' || !v) return
-      if (v.type === 'group') openConversation({ type: 'group' })
+      if (v.type === 'group') openConversation(v.groupId ? { type: 'group', groupId: v.groupId } : { type: 'group' })
       else if (v.type === 'dm' && v.peerId) openConversation({ type: 'dm', peerId: v.peerId })
       else if (v.type === 'owner' && v.aId && v.bId && isOwnerRef.current) {
         openConversation({ type: 'owner', aId: v.aId, bId: v.bId })
@@ -748,7 +843,9 @@ export default function Chat({ session }) {
   }
 
   function filterConversation(query, v) {
-    if (v.type === 'group') return query.is('recipient_id', null)
+    if (v.type === 'group') {
+      return v.groupId ? query.eq('group_id', v.groupId) : query.is('recipient_id', null).is('group_id', null)
+    }
     if (v.type === 'owner') {
       return query.or(
         `and(user_id.eq.${v.aId},recipient_id.eq.${v.bId}),and(user_id.eq.${v.bId},recipient_id.eq.${v.aId})`,
@@ -798,7 +895,8 @@ export default function Chat({ session }) {
             (msg.attachment_path
               ? m.attachment_path === msg.attachment_path
               : !m._file && (m.content ?? null) === (msg.content ?? null)) &&
-            (m.recipient_id ?? null) === (msg.recipient_id ?? null),
+            (m.recipient_id ?? null) === (msg.recipient_id ?? null) &&
+            (m.group_id ?? null) === (msg.group_id ?? null),
         )
         if (pending === -1) return [...prev, msg]
         const next = prev.slice()
@@ -1049,7 +1147,10 @@ export default function Chat({ session }) {
           return
         } else if (!isMessageForView(m, viewRef.current)) {
           // A group message arriving while another conversation is viewed:
-          // it is not added to the current view, but it does notify.
+          // it is not added to the current view, but it does notify (named
+          // groups: only their members; the owner can see others silently).
+          if (m.group_id && !groupsRef.current[m.group_id]) loadGroups()
+          if (m.group_id && groupsRef.current[m.group_id] && !groupsRef.current[m.group_id].members.includes(myId)) return
           if (m.user_id !== myId) {
             playReceive()
             notify(m)
@@ -1087,6 +1188,11 @@ export default function Chat({ session }) {
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'reactions' }, ({ old: r }) =>
         applyReaction(r.message_id, r.user_id, r.emoji, false),
       )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_groups' }, () => loadGroups())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_group_members' }, () => {
+        loadGroups()
+        loadInbox()
+      })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, ({ new: row }) => {
         if (row?.id) applyProfile(row)
       })
@@ -1112,7 +1218,7 @@ export default function Chat({ session }) {
       incomingRef.current = null
       supabase.removeChannel(channel)
     }
-  }, [myId, catchUp, refreshReads, addMessage, applyReaction, dmPeerOf, addDmPeer, addOwnerPair, ensureProfile, isMessageForView, notify, markAsRead, bumpLast, loadInbox])
+  }, [myId, catchUp, refreshReads, addMessage, applyReaction, dmPeerOf, addDmPeer, addOwnerPair, ensureProfile, isMessageForView, notify, markAsRead, bumpLast, loadInbox, loadGroups])
 
   async function loadOlder() {
     const oldest = messages[0]
@@ -1198,6 +1304,7 @@ export default function Chat({ session }) {
         id: `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         user_id: myId,
         recipient_id: peerId,
+        group_id: groupId,
         reply_to_id: replyToId,
         content: text || null,
         created_at: new Date().toISOString(),
@@ -1223,6 +1330,7 @@ export default function Chat({ session }) {
       id: tempId,
       user_id: myId,
       recipient_id: peerId,
+      group_id: groupId,
       reply_to_id: replyToId,
       content: text || null,
       created_at: new Date().toISOString(),
@@ -1282,7 +1390,13 @@ export default function Chat({ session }) {
     }
     const { data, error: insErr } = await supabase
       .from('messages')
-      .insert({ content: draft.content, recipient_id: draft.recipient_id, reply_to_id: draft.reply_to_id, ...attachment })
+      .insert({
+        content: draft.content,
+        recipient_id: draft.recipient_id,
+        group_id: draft.group_id ?? null,
+        reply_to_id: draft.reply_to_id,
+        ...attachment,
+      })
       .select()
       .single()
     setUploadProgress((prev) => {
@@ -1442,7 +1556,7 @@ export default function Chat({ session }) {
     const time = latest ? formatReadTime(latest) : ''
     if (view.type === 'group') {
       if (!readers.length) return { label: 'Delivered' }
-      const others = Object.keys(profiles).filter((id) => id !== myId)
+      const others = otherMemberIds
       if (others.length && others.every((id) => readers.includes(id))) return { label: 'Read by everyone', time, read: true }
       return { label: `Read by ${readers.map((id) => profiles[id] ?? 'someone').join(', ')}`, time, read: true }
     }
@@ -1450,6 +1564,21 @@ export default function Chat({ session }) {
   }
 
   const memberIds = Object.keys(profiles)
+  const currentGroup = groupId ? groups[groupId] ?? null : null
+  // People in the conversation on screen: the named group's members, or everyone.
+  const groupMemberIds = currentGroup ? currentGroup.members.filter((id) => profiles[id]) : memberIds
+  // The owner can look into a named group they're not in, read only.
+  const notInGroup = Boolean(groupId && currentGroup && !currentGroup.members.includes(myId))
+  const readOnly = isOwnerView || notInGroup
+  const groupTitle = groupId ? currentGroup?.name ?? 'Group' : 'Group Chat'
+  const groupFaces = (g) => {
+    const others = g.members.filter((id) => id !== myId && profiles[id])
+    return (others.length >= 2 ? others.slice(0, 2) : [...others, myId].slice(0, 2)).map((id) => ({
+      id,
+      name: profiles[id],
+      src: avatars[id],
+    }))
+  }
   // (Plain code after the early returns, not a hook.)
   const ONLINE_WINDOW_MS = 2 * 60 * 1000
   const online = [
@@ -1467,7 +1596,11 @@ export default function Chat({ session }) {
       ? `${typingNames.join(', ')} ${typingNames.length > 1 ? 'are' : 'is'} typing…`
       : 'typing…'
     : isGroup
-      ? `${Object.keys(profiles).length} people${online.length ? ` · ${online.length} online` : ''}`
+      ? `${groupMemberIds.length} people${
+          groupMemberIds.filter((id) => online.includes(id)).length
+            ? ` · ${groupMemberIds.filter((id) => online.includes(id)).length} online`
+            : ''
+        }${notInGroup ? ' · read only' : ''}`
       : isOwnerView
         ? 'Owner view · read only'
         : online.includes(peerId)
@@ -1476,7 +1609,7 @@ export default function Chat({ session }) {
 
   // Everyone else in the group, used only for the read-receipt rule:
   // a group message is blue only once every one of these has read it.
-  const otherMemberIds = memberIds.filter((id) => id !== myId)
+  const otherMemberIds = groupMemberIds.filter((id) => id !== myId)
   const peerName = peerId ? profiles[peerId] ?? '…' : null
   const ownerNameA = ownerA ? profiles[ownerA] ?? '…' : null
   const ownerNameB = ownerB ? profiles[ownerB] ?? '…' : null
@@ -1490,7 +1623,9 @@ export default function Chat({ session }) {
     ? notice.owner
       ? `Owner view · ${profiles[notice.view.aId] ?? '…'} and ${profiles[notice.view.bId] ?? '…'}`
       : notice.view.type === 'group'
-        ? 'Group Chat'
+        ? notice.view.groupId
+          ? groups[notice.view.groupId]?.name ?? 'Group'
+          : 'Group Chat'
         : 'Private message'
     : null
 
@@ -1542,7 +1677,13 @@ export default function Chat({ session }) {
   // ---- chat list rows ----
   const typingIn = (key) =>
     Object.entries(typing.all).some(
-      ([id, t]) => t.until > clock - 1000 && (key === 'group' ? t.to === null : key === `dm:${id}` && t.to === myId),
+      ([id, t]) =>
+        t.until > clock - 1000 &&
+        (key === 'group'
+          ? t.to === null
+          : key.startsWith('group:')
+            ? t.to === `g:${key.slice(6)}`
+            : key === `dm:${id}` && t.to === myId),
     )
   const previewFor = (key, named) => {
     const m = lastByKey[key]
@@ -1560,6 +1701,15 @@ export default function Chat({ session }) {
       avatar: '/logo-192.png',
       emptyText: 'Say hi to everyone 👋',
     },
+    ...Object.values(groups)
+      .filter((g) => g.members.includes(myId))
+      .map((g) => ({
+        key: `group:${g.id}`,
+        view: { type: 'group', groupId: g.id },
+        title: g.name,
+        faces: groupFaces(g),
+        emptyText: 'New group · say hi 👋',
+      })),
     ...memberIds
       .filter((id) => id !== myId)
       .map((id) => ({
@@ -1574,13 +1724,27 @@ export default function Chat({ session }) {
   ]
     .map((c) => ({
       ...c,
-      preview: previewFor(c.key, c.key === 'group'),
+      preview: previewFor(c.key, c.key === 'group' || c.key.startsWith('group:')),
       time: listTime(lastByKey[c.key]?.created_at),
       unread: unread[c.key] ?? 0,
       typing: typingIn(c.key),
     }))
     .sort((a, b) => stamp(b.key) - stamp(a.key) || (a.key === 'group' ? -1 : b.key === 'group' ? 1 : a.title.localeCompare(b.title)))
   if (isOwner) {
+    for (const g of Object.values(groups).filter((x) => !x.members.includes(myId))) {
+      const key = `group:${g.id}`
+      listItems.push({
+        key,
+        owner: true,
+        view: { type: 'group', groupId: g.id },
+        title: g.name,
+        faces: groupFaces(g),
+        preview: previewFor(key, true),
+        time: listTime(lastByKey[key]?.created_at),
+        unread: 0,
+        stamp: stamp(key),
+      })
+    }
     for (const [a, b] of ownerPairList) {
       const key = `owner:${pairKey(a, b)}`
       listItems.push({
@@ -1611,6 +1775,7 @@ export default function Chat({ session }) {
           activeKey={chatActive ? viewKey(view) : null}
           onOpen={openConversation}
           onSettings={() => setShowSettings(true)}
+          onNewGroup={isOwner ? () => setGroupSheet('create') : null}
           Avatar={Avatar}
         />
       </div>
@@ -1642,8 +1807,10 @@ export default function Chat({ session }) {
           </button>
         )}
         <button className="topbar-center" onClick={() => setShowMembers(true)}>
-          <span className={`topbar-avatar ${isOwnerView ? 'pair' : ''}`}>
-            {isGroup ? (
+          <span className={`topbar-avatar ${isOwnerView || currentGroup ? 'pair' : ''}`}>
+            {currentGroup ? (
+              groupFaces(currentGroup).map((f) => <Avatar key={f.id} name={f.name} src={f.src} />)
+            ) : isGroup ? (
               <img src="/logo-192.png" alt="" />
             ) : isOwnerView ? (
               <>
@@ -1655,7 +1822,7 @@ export default function Chat({ session }) {
             )}
           </span>
           <span className="glass-pill">
-            <span className="pill-title">{isGroup ? 'Group Chat' : isOwnerView ? ownerPairLabel : peerName}</span>
+            <span className="pill-title">{isGroup ? groupTitle : isOwnerView ? ownerPairLabel : peerName}</span>
             <span className={`pill-sub ${headerTyping ? 'typing' : ''}`}>{headerSubtitle}</span>
           </span>
         </button>
@@ -1693,7 +1860,7 @@ export default function Chat({ session }) {
               last={item.last}
               mine={item.msg.user_id === myId}
               read={
-                !isOwnerView &&
+                !readOnly &&
                 item.msg.user_id === myId &&
                 (isGroup
                   ? otherMemberIds.length > 0 &&
@@ -1702,8 +1869,8 @@ export default function Chat({ session }) {
                     ? (reads[item.msg.id] ?? []).includes(peerId)
                     : false)
               }
-              readOnly={isOwnerView}
-              status={!isOwnerView && item.msg.id === lastOwnId ? readStatus(item.msg) : null}
+              readOnly={readOnly}
+              status={!readOnly && item.msg.id === lastOwnId ? readStatus(item.msg) : null}
               tickState={
                 item.msg._status ??
                 (isGroup
@@ -1783,9 +1950,11 @@ export default function Chat({ session }) {
         </div>
       )}
 
-      {isOwnerView ? (
+      {readOnly ? (
         <div className="owner-readonly" role="note">
-          Read-only owner view · you cannot send, react, or delete here.
+          {notInGroup
+            ? "Read-only · you're not in this group."
+            : 'Read-only owner view · you cannot send, react, or delete here.'}
         </div>
       ) : (
         <>
@@ -1802,13 +1971,13 @@ export default function Chat({ session }) {
           )}
           <Composer
             onSend={send}
-            placeholder={isGroup ? 'Message' : `Message ${peerName}`}
+            placeholder={isGroup ? (currentGroup ? `Message ${currentGroup.name}` : 'Message') : `Message ${peerName}`}
             enableMentions={isGroup}
-            members={memberIds
+            members={groupMemberIds
               .slice()
               .sort((a, b) => (profiles[a] ?? '').localeCompare(profiles[b] ?? ''))
               .map((id) => ({ id, username: profiles[id], avatar: avatars[id] }))}
-            viewKey={isGroup ? 'group' : `dm:${peerId}`}
+            viewKey={viewKey(view)}
             onTyping={typing.notify}
             onVoiceError={setError}
           />
@@ -1822,14 +1991,16 @@ export default function Chat({ session }) {
           <div className="sheet" role="dialog" aria-label="Chat info" onClick={(e) => e.stopPropagation()}>
             <div className="sheet-grabber" aria-hidden="true" />
             <div className="sheet-head">
-              <span>{isGroup ? 'Group Chat' : isOwnerView ? 'Private chat' : 'Contact'}</span>
+              <span>{isGroup ? 'Group info' : isOwnerView ? 'Private chat' : 'Contact'}</span>
               <button className="sheet-done" onClick={() => setShowMembers(false)}>
                 Done
               </button>
             </div>
             <div className="info-hero">
-              <span className={`info-avatar ${isOwnerView ? 'pair' : ''}`}>
-                {isGroup ? (
+              <span className={`info-avatar ${isOwnerView || currentGroup ? 'pair' : ''}`}>
+                {currentGroup ? (
+                  groupFaces(currentGroup).map((f) => <Avatar key={f.id} name={f.name} src={f.src} />)
+                ) : isGroup ? (
                   <img src="/logo-192.png" alt="" />
                 ) : isOwnerView ? (
                   <>
@@ -1841,7 +2012,7 @@ export default function Chat({ session }) {
                 )}
               </span>
               <span className="info-name">
-                {isGroup ? 'Group Chat' : isOwnerView ? ownerPairLabel : peerName}
+                {isGroup ? groupTitle : isOwnerView ? ownerPairLabel : peerName}
                 {peerId && aiIds.has(peerId) && <span className="ai-badge">AI</span>}
               </span>
               <span className="info-sub">{headerSubtitle}</span>
@@ -1861,9 +2032,17 @@ export default function Chat({ session }) {
             </div>
             {(isGroup || isOwnerView) && (
               <>
-                <div className="sheet-section">{isGroup ? `${memberIds.length} people` : 'In this chat'}</div>
+                <div className="sheet-section">{isGroup ? `${groupMemberIds.length} people` : 'In this chat'}</div>
                 <ul className="member-list">
-                  {(isGroup ? memberIds : [ownerA, ownerB])
+                  {isOwner && currentGroup && (
+                    <li>
+                      <button className="add-people" onClick={() => setGroupSheet('add')}>
+                        <span className="add-people-icon">＋</span>
+                        Add people
+                      </button>
+                    </li>
+                  )}
+                  {(isGroup ? groupMemberIds : [ownerA, ownerB])
                     .slice()
                     .sort((x, y) => (x === myId ? -1 : y === myId ? 1 : (profiles[x] ?? '').localeCompare(profiles[y] ?? '')))
                     .map((id) => (
@@ -1882,13 +2061,46 @@ export default function Chat({ session }) {
                             Message
                           </button>
                         )}
+                        {isOwner && currentGroup && id !== myId && (
+                          <button className="member-remove" onClick={() => removeFromGroup(id)} aria-label={`Remove ${profiles[id]}`}>
+                            −
+                          </button>
+                        )}
                       </li>
                     ))}
                 </ul>
               </>
             )}
+            {currentGroup && (
+              <div className="group-actions">
+                {isOwner && <button onClick={renameGroup}>Rename group</button>}
+                {currentGroup.members.includes(myId) && (
+                  <button className="danger" onClick={leaveGroup}>
+                    Leave group
+                  </button>
+                )}
+                {isOwner && (
+                  <button className="danger" onClick={deleteGroup}>
+                    Delete group
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         </div>
+      )}
+
+      {groupSheet && (
+        <GroupSheet
+          mode={groupSheet}
+          Avatar={Avatar}
+          people={memberIds
+            .filter((id) => id !== myId && !(groupSheet === 'add' && currentGroup?.members.includes(id)))
+            .sort((x, y) => (profiles[x] ?? '').localeCompare(profiles[y] ?? ''))
+            .map((id) => ({ id, name: profiles[id], avatar: avatars[id], ai: aiIds.has(id) }))}
+          onCancel={() => setGroupSheet(null)}
+          onDone={groupSheet === 'create' ? createGroup : addToGroup}
+        />
       )}
 
       {showSettings && (

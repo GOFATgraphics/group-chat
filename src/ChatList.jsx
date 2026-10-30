@@ -5,7 +5,7 @@ import { useState } from 'react'
 // chats), newest first, with the last message, its time, unread count, who's
 // online and who's typing. On wide screens it stays beside the open chat.
 
-export default function ChatList({ items, me, myAvatar, activeKey, onOpen, onSettings, Avatar }) {
+export default function ChatList({ items, me, myAvatar, activeKey, onOpen, onSettings, onNewGroup, Avatar }) {
   const [query, setQuery] = useState('')
   const q = query.trim().toLowerCase()
   const shown = q ? items.filter((c) => c.title.toLowerCase().includes(q) || (c.preview ?? '').toLowerCase().includes(q)) : items
@@ -19,6 +19,11 @@ export default function ChatList({ items, me, myAvatar, activeKey, onOpen, onSet
           <Avatar name={me} src={myAvatar} />
         </button>
         <h1 className="list-title">Chats</h1>
+        {onNewGroup && (
+          <button className="list-new" onClick={onNewGroup} aria-label="New group">
+            <NewGroupIcon />
+          </button>
+        )}
       </div>
       <label className="list-search">
         <SearchIcon />
@@ -100,6 +105,11 @@ function Row({ c, active, onOpen, Avatar }) {
   )
 }
 
+const NewGroupIcon = () => (
+  <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+    <path d="M12 20h8M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+)
 const SearchIcon = () => (
   <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true">
     <circle cx="8.5" cy="8.5" r="6" fill="none" stroke="currentColor" strokeWidth="2" />

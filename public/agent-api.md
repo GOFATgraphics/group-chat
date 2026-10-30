@@ -270,14 +270,34 @@ A private message (only that person sees it):
 { "text": "Sent you the details privately", "to": "mom" }
 ```
 
+A message in a **named group** (see "Named groups" below), by its id or name:
+
+```json
+{ "text": "Morning team!", "group": "Launch Team" }
+```
+
 A quoted reply (shows the original above the answer, like swipe-to-reply in the
-app). The quoted message must be in the same conversation, so for a private
-reply include `to` as well:
+app). With only `reply_to_id`, the reply goes to **the same conversation as the
+quoted message** (group, named group or private chat), so this is the safest
+way to answer anything:
 
 ```json
 { "text": "Yes, done!", "reply_to_id": 412 }
-{ "text": "Yes, done!", "reply_to_id": 415, "to": "mom" }
 ```
+
+### Named groups
+
+Besides the main group chat, Mubarak can make **named groups** with some of the
+members (for example "Launch Team" with Mubarak, Adam and Ali). You only see
+the groups you're in. A named group's messages have `"conversation": "group"`
+plus its `"group_id"` and `"group_name"`; in the main group chat both are
+`null`. Always answer in the conversation a message came from: reply with
+`reply_to_id`, or send with `"group": "<group_id>"`. Never answer a named
+group's message in the main group chat (others there can't see the context).
+
+- Read one named group: `GET /api/messages?group=<group_id or name>`
+- The main group chat only: `GET /api/messages?conversation=group`
+- Typing in a named group: `POST /api/typing { "group": "<group_id>" }`
 
 A photo or file you have as bytes (keep it under about 3 MB because of Vercel's request size limit):
 
@@ -301,13 +321,14 @@ Delete one of the agent's own messages: `DELETE /api/messages/412`.
 While you work on a reply, show the "…" typing bubble, like a person would:
 
 ```http
-POST /api/typing                    (group chat)
-POST /api/typing  { "to": "mom" }   (your private chat with mom)
+POST /api/typing                          (main group chat)
+POST /api/typing  { "to": "mom" }         (your private chat with mom)
+POST /api/typing  { "group": "<id>" }     (a named group)
 ```
 
 The bubble lasts about 6 seconds, so call it again every 3-4 seconds while you
 are still writing. Sending your message hides it straight away; to hide it
-without sending, post `{ "typing": false }` (with the same `to`).
+without sending, post `{ "typing": false }` (with the same `to` or `group`).
 
 ### Online status
 
@@ -404,8 +425,8 @@ while True:
                 answer["duration"] = seconds
             else:
                 answer["text"] = text
-            if m["conversation"] == "direct":
-                answer["to"] = m["username"]  # answer privately
+            # reply_to_id alone keeps the answer in the same conversation:
+            # main group, named group, or private chat.
             call("POST", "/messages", json=answer)
 ```
 
@@ -423,7 +444,7 @@ app.post('/chat-webhook', (req, res) => {
   res.sendStatus(200) // acknowledge first, then think
   const { message } = req.body
   handle(message) // call your AI, then POST /api/messages with the reply
-  // (add "to": message.username when message.conversation === 'direct')
+  // (send it with "reply_to_id": message.id so it lands in the same conversation)
   // and POST /api/read { message_ids: [message.id] } for the blue ticks
 })
 

@@ -179,16 +179,22 @@ export async function present(sb, rows) {
   if (!rows.length) return []
   const ids = rows.map((m) => m.id)
   const paths = rows.map((m) => m.attachment_path).filter(Boolean)
-  const [profiles, reactions, signed] = await Promise.all([
+  const groupIds = [...new Set(rows.map((m) => m.group_id).filter(Boolean))]
+  const [profiles, reactions, signed, groups] = await Promise.all([
     sb.from('profiles').select('id, username').then((r) => check(r)),
     sb.from('reactions').select('message_id, user_id, emoji').in('message_id', ids).then((r) => check(r)),
     paths.length ? sb.storage.from(BUCKET).createSignedUrls(paths, URL_TTL_SECONDS).then((r) => r.data ?? []) : [],
+    groupIds.length ? sb.from('chat_groups').select('id, name').in('id', groupIds).then((r) => check(r)) : [],
   ])
+  const groupNames = Object.fromEntries(groups.map((g) => [g.id, g.name]))
   const names = Object.fromEntries(profiles.map((p) => [p.id, p.username]))
   const urls = Object.fromEntries(signed.map((s) => [s.path, s.signedUrl]))
   return rows.map((m) => ({
     id: m.id,
     conversation: m.recipient_id ? 'direct' : 'group',
+    // null for the main group chat; a named group's id and name otherwise
+    group_id: m.group_id ?? null,
+    group_name: m.group_id ? groupNames[m.group_id] ?? null : null,
     user_id: m.user_id,
     username: names[m.user_id] ?? null,
     recipient_id: m.recipient_id ?? null,
@@ -246,7 +252,8 @@ export async function markRead(sb, userId, rows) {
 
 // Shows (or hides) the "typing…" bubble for this member in a conversation,
 // via the same Realtime broadcast channel the app listens on (src/typing.js).
-// to: null for the group chat, or the recipient's user id.
+// to: null for the main group chat, the recipient's user id for a private
+// chat, or "g:<group id>" for a named group.
 export async function broadcastTyping(token, userId, to, typing = true) {
   const res = await fetch(`${SUPABASE_URL}/realtime/v1/api/broadcast`, {
     method: 'POST',
@@ -256,4 +263,14 @@ export async function broadcastTyping(token, userId, to, typing = true) {
     }),
   })
   if (!res.ok) throw new HttpError(502, `Typing broadcast failed (HTTP ${res.status})`)
+}
+
+// A named group by id or (case-insensitive) name, among the groups this
+// member can see. Returns its id.
+export async function groupIdFor(sb, group) {
+  const value = String(group).trim()
+  const rows = check(await sb.from('chat_groups').select('id, name'))
+  const hit = rows.find((g) => g.id === value) ?? rows.find((g) => g.name.toLowerCase() === value.toLowerCase())
+  if (!hit) throw new HttpError(404, `No group "${group}" that you are in`)
+  return hit.id
 }

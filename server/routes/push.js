@@ -1,6 +1,6 @@
 // Push sender. The database POSTs every new message here (see migration
 // 0010); we work out who should hear about it and send them a web push.
-//   Group message: every member except the sender.
+//   Group message: every member except the sender (a named group: its members).
 //   Direct message: the recipient only (never the owner of the group, never
 //   anyone else; see docs/web-push.md).
 // Subscriptions that the push service reports as gone are deleted.
@@ -42,11 +42,21 @@ export async function send(cfg, m) {
   const { data: profiles } = await adm.from('profiles').select('id, username')
   const names = Object.fromEntries((profiles ?? []).map((p) => [p.id, p.username]))
 
+  let group = null
+  if (m.group_id) {
+    const [{ data: g }, { data: members }] = await Promise.all([
+      adm.from('chat_groups').select('id, name').eq('id', m.group_id).maybeSingle(),
+      adm.from('chat_group_members').select('user_id').eq('group_id', m.group_id),
+    ])
+    group = { name: g?.name ?? 'Group', members: (members ?? []).map((x) => x.user_id) }
+  }
   const recipients = m.recipient_id
     ? m.recipient_id !== m.user_id
       ? [m.recipient_id]
       : []
-    : (profiles ?? []).map((p) => p.id).filter((id) => id !== m.user_id)
+    : group
+      ? group.members.filter((id) => id !== m.user_id)
+      : (profiles ?? []).map((p) => p.id).filter((id) => id !== m.user_id)
   if (!recipients.length) return { sent: 0 }
 
   const { data: subs } = await adm
@@ -57,9 +67,13 @@ export async function send(cfg, m) {
 
   const sender = names[m.user_id] ?? 'Someone'
   const payload = JSON.stringify({
-    title: m.recipient_id ? sender : `${sender} · Group Chat`,
+    title: m.recipient_id ? sender : `${sender} · ${group ? group.name : 'Group Chat'}`,
     body: preview(m),
-    view: m.recipient_id ? { type: 'dm', peerId: m.user_id } : { type: 'group' },
+    view: m.recipient_id
+      ? { type: 'dm', peerId: m.user_id }
+      : group
+        ? { type: 'group', groupId: m.group_id }
+        : { type: 'group' },
   })
   const host = productionHost()
   const options = {

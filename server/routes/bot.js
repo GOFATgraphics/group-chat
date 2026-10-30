@@ -166,6 +166,7 @@ async function setup() {
 async function respond(bot, incoming, llm) {
   const { sb, userId } = bot
   const isDirect = Boolean(incoming.recipient_id)
+  const groupId = isDirect ? null : incoming.group_id ?? null // null: the main group chat
 
   // The conversation this message belongs to, as this bot can see it.
   let query = sb.from('messages').select('*').order('id', { ascending: false }).limit(HISTORY)
@@ -173,7 +174,9 @@ async function respond(bot, incoming, llm) {
     ? query.or(
         `and(user_id.eq.${userId},recipient_id.eq.${incoming.user_id}),and(user_id.eq.${incoming.user_id},recipient_id.eq.${userId})`,
       )
-    : query.is('recipient_id', null)
+    : groupId
+      ? query.eq('group_id', groupId)
+      : query.is('recipient_id', null).is('group_id', null)
   const [{ data: rows, error }, { data: profiles }] = await Promise.all([
     query,
     sb.from('profiles').select('id, username'),
@@ -237,7 +240,7 @@ async function respond(bot, incoming, llm) {
   content.push({
     type: 'text',
     text:
-      `${isDirect ? `Private conversation between you and ${nameOf(incoming.user_id)}.` : 'Group chat.'}\n\n` +
+      `${isDirect ? `Private conversation between you and ${nameOf(incoming.user_id)}.` : groupId ? `Group chat "${incoming.group_name ?? 'group'}".` : 'Group chat.'}\n\n` +
       `${transcript}\n\n` +
       `The newest message is #${incoming.id} from ${nameOf(incoming.user_id)}. Write your next message.`,
   })
@@ -264,7 +267,7 @@ async function respond(bot, incoming, llm) {
   // for every delivery the bot processes, and stopTyping() below hides it
   // again when the bot decides not to reply, just as a human deleting a
   // draft hides their bubble.
-  const typingTo = isDirect ? incoming.user_id : null
+  const typingTo = isDirect ? incoming.user_id : groupId ? `g:${groupId}` : null
   const showTyping = () => broadcastTyping(bot.token, userId, typingTo).catch(() => {})
   showTyping()
   const typingTimer = setInterval(showTyping, 4000)
@@ -300,7 +303,11 @@ async function respond(bot, incoming, llm) {
   // Still the latest? If a person wrote again while Claude was thinking, let
   // that message's own delivery answer instead.
   let check = sb.from('messages').select('id, user_id').gt('id', incoming.id).neq('user_id', userId).limit(20)
-  check = isDirect ? check.eq('user_id', incoming.user_id).eq('recipient_id', userId) : check.is('recipient_id', null)
+  check = isDirect
+    ? check.eq('user_id', incoming.user_id).eq('recipient_id', userId)
+    : groupId
+      ? check.eq('group_id', groupId)
+      : check.is('recipient_id', null).is('group_id', null)
   const { data: newer } = await check
   if (newer?.some((m) => !isBot(m.user_id))) return stopTyping()
 
@@ -325,7 +332,7 @@ async function respond(bot, incoming, llm) {
   }
   const { error: postError } = await sb
     .from('messages')
-    .insert({ ...reply, recipient_id: isDirect ? incoming.user_id : null })
+    .insert({ ...reply, recipient_id: isDirect ? incoming.user_id : null, group_id: groupId })
   if (postError) throw postError
   await sb.rpc('touch_last_seen') // shows the bot online in the app
 }
