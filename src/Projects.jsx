@@ -288,9 +288,20 @@ export function ProjectDashboard({ project, token, onBack }) {
   const [syncBusyId, setSyncBusyId] = useState(null)
   const [syncMessage, setSyncMessage] = useState('')
   const [syncError, setSyncError] = useState('')
-  // Raw message popup: { ref, text } or null. The table cell shows a
-  // View button only, never the full message text, so raw_message
-  // cannot take over the whole screen.
+  // Long-text popup: { ref, column, text } or null. The table cell
+  // shows a View button only, never the full text inline, so a long
+  // note cannot stretch its column and push following columns far
+  // away. raw_message already worked this way; addendum_notes,
+  // Notes, doc_instructions, and required_documents now work the
+  // same way in Database, and in Notes the long Summary, Subject,
+  // and Message ID columns work the same way. Other columns stay
+  // inline, including addresses and shipping marks, which are short
+  // in normal rows, and in Notes Priority, Action required, Linked
+  // trade ID, and Created, which stay inline verbatim even when
+  // Action required is TRUE or an email address, because that is
+  // what the source Shadow Notes Log contained, seeded verbatim.
+  const LONG_TEXT_COLUMNS = ['addendum_notes', 'Notes', 'doc_instructions', 'required_documents', 'raw_message']
+  const NOTE_LONG_TEXT_FIELDS = ['message_id', 'subject', 'summary']
   const [rawMessage, setRawMessage] = useState(null)
 
   useEffect(() => {
@@ -589,7 +600,7 @@ export function ProjectDashboard({ project, token, onBack }) {
                           <tr key={t.id}>
                             <td className="sn-col">{i + 1}</td>
                             {dbColumns.map((col) =>
-                              col === 'raw_message' && firstFull ? (
+                              LONG_TEXT_COLUMNS.includes(col) && firstFull ? (
                                 <td key={col} className="raw-message-cell">
                                   <button
                                     type="button"
@@ -597,10 +608,11 @@ export function ProjectDashboard({ project, token, onBack }) {
                                     onClick={() =>
                                       setRawMessage({
                                         ref: t.full_data?.Mercancia_Contract_ref || t.contract_ref || '',
-                                        text: t.full_data?.raw_message || '',
+                                        column: col,
+                                        text: t.full_data?.[col] || '',
                                       })
                                     }
-                                    aria-label={`View raw message for ${t.full_data?.Mercancia_Contract_ref || t.contract_ref || 'this trade'}`}
+                                    aria-label={`View ${col} for ${t.full_data?.Mercancia_Contract_ref || t.contract_ref || 'this trade'}`}
                                   >
                                     View
                                   </button>
@@ -710,9 +722,28 @@ export function ProjectDashboard({ project, token, onBack }) {
                         (noteRows ?? []).map((n, i) => (
                           <tr key={n.id}>
                             <td className="sn-col">{i + 1}</td>
-                            {NOTE_COLUMNS.map(([h, field]) => (
-                              <td key={h}>{field === 'created_at' ? when(n[field]) : show(n[field])}</td>
-                            ))}
+                            {NOTE_COLUMNS.map(([h, field]) =>
+                              NOTE_LONG_TEXT_FIELDS.includes(field) ? (
+                                <td key={h} className="raw-message-cell">
+                                  <button
+                                    type="button"
+                                    className="raw-message-btn"
+                                    onClick={() =>
+                                      setRawMessage({
+                                        ref: `Note ${n.id}`,
+                                        column: h,
+                                        text: n[field] || '',
+                                      })
+                                    }
+                                    aria-label={`View ${h} for note ${n.id}`}
+                                  >
+                                    View
+                                  </button>
+                                </td>
+                              ) : (
+                                <td key={h}>{field === 'created_at' ? when(n[field]) : show(n[field])}</td>
+                              )
+                            )}
                           </tr>
                         ))
                       )}
@@ -755,16 +786,24 @@ export function ProjectDashboard({ project, token, onBack }) {
             className="raw-message-dialog"
             role="dialog"
             aria-modal="true"
-            aria-label={`Raw message for ${rawMessage.ref}`}
+            aria-label={`${rawMessage.column && rawMessage.column !== 'raw_message' ? rawMessage.column : 'Raw message'} for ${rawMessage.ref}`}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="raw-message-dialog-head">
-              <strong>{rawMessage.ref ? `Raw message: ${rawMessage.ref}` : 'Raw message'}</strong>
-              <button type="button" className="raw-message-close" onClick={() => setRawMessage(null)} aria-label="Close raw message">
+              <strong>
+                {rawMessage.column && rawMessage.column !== 'raw_message'
+                  ? `${rawMessage.column}: ${rawMessage.ref}`
+                  : rawMessage.ref
+                    ? `Raw message: ${rawMessage.ref}`
+                    : 'Raw message'}
+              </strong>
+              <button type="button" className="raw-message-close" onClick={() => setRawMessage(null)} aria-label="Close">
                 Close
               </button>
             </div>
-            <div className="raw-message-dialog-body">{rawMessage.text || 'No raw message stored for this trade.'}</div>
+            <div className="raw-message-dialog-body">
+              {rawMessage.text || `No text stored for ${rawMessage.column || 'raw_message'}.`}
+            </div>
           </div>
         </div>
       )}
