@@ -7,9 +7,27 @@ import { useEffect, useState } from 'react'
 // browser localStorage. Every request runs as the signed-in caller under
 // the normal row-level security rules: a project is visible only to its
 // owner, the group owner (username 'mubarak'), or an AI member ('adam'
-// or 'ali'); other members get no rows. There is still no Sheets sync,
-// no Drive folder, and no Apps Script link here: the Sync log tab is
-// the in-app sync log, not Google Sheets, and it is not the Notes log.
+// or 'ali'); other members get no rows.
+// SYNC ARCHITECTURE (read before changing this file): the app and
+// Vercel have NO Google credentials for the user's account, so this
+// page NEVER writes to Google Sheets, Drive, or Apps Script directly.
+// A Sync tap only records a request in the in-app trade_sync_log
+// (target 'sync_request'); the operator sync script
+// (~/workspace/sync-trades-to-clean-sheet.py, outside this repo,
+// run by Adam, who has the connected Drive/Sheets) is what appends
+// rows to the clean sheet in NEW STEALTH FOLDER and then records
+// the completed attempt (target 'google_sheet', success true/false)
+// in the same log. Ali has NO Drive/Sheets connection and NEVER
+// executes a sync: Ali finishes a trade in-app via the group-chat
+// API and marks it ready by posting the same 'sync_request' row;
+// Adam's script is the sole executor. A trade is synced ONCE ONLY:
+// any successful 'google_sheet' row blocks every later sync of that
+// trade, even after a new request. Auto sync is the same script in
+// auto mode: it picks up trades with stage 'new' created after the
+// clean sheet was cleared that ALSO have a 'sync_request' row and
+// no successful 'google_sheet' row; stage 'new' alone, without a
+// request, is never synced, and it never touches the 206 seeded
+// 'matched' trades. See SYNC_ARCHITECTURE.md in this work copy.
 // Sheet tabs as app pages: Database = TradesDB, References = Shadow
 // Reference Bridge (stored fields only), Notes = Shadow Notes Log
 // (stored fields only). The sheet columns that were never seeded into
@@ -72,6 +90,24 @@ export async function fetchAllCollection(token, projectId, kind) {
 
 export async function fetchAllTrades(token, projectId) {
   return fetchAllCollection(token, projectId, 'trades')
+}
+
+// Manual sync request for ONE trade only. This does NOT write to
+// Google Sheets: it records a request row in the in-app sync log
+// (target 'sync_request', success false, failure_reason explaining
+// it is awaiting the operator script). The operator script's manual
+// mode finds that row and syncs that trade regardless of stage,
+// then posts the completed 'google_sheet' row. No server change
+// was needed: POST /sync-log already accepts trade_id, target,
+// success and failure_reason.
+export async function requestManualSync(token, projectId, tradeId) {
+  const data = await apiFetch(token, `/api/projects/${projectId}/sync-log`, 'POST', {
+    trade_id: tradeId,
+    target: 'sync_request',
+    success: false,
+    failure_reason: 'manual sync requested, awaiting operator sync',
+  })
+  return data.sync_log
 }
 
 // Whole-page projects list. Back goes to chats.
@@ -146,7 +182,7 @@ export function CreateProject({ onDone, onBack, error }) {
         </button>
       </form>
       {error ? <p className="project-empty">{error}</p> : null}
-      <p className="muted">Done opens a new dashboard for this project. Nothing is synced to Google Sheets, Drive, or Apps Script in this build.</p>
+      <p className="muted">Done opens a new dashboard for this project. Sync to Google Sheets is by the operator script only; this app records sync requests and results in the Sync log, and never writes to Sheets, Drive, or Apps Script itself.</p>
     </main>
   )
 }
@@ -247,6 +283,11 @@ export function ProjectDashboard({ project, token, onBack }) {
   const [allQueue, setAllQueue] = useState(null)
   const [queueLoading, setQueueLoading] = useState(false)
   const [queueError, setQueueError] = useState('')
+  // Manual sync: one pending request at a time, by trade id, plus
+  // the last request message shown above the Database table.
+  const [syncBusyId, setSyncBusyId] = useState(null)
+  const [syncMessage, setSyncMessage] = useState('')
+  const [syncError, setSyncError] = useState('')
   // Raw message popup: { ref, text } or null. The table cell shows a
   // View button only, never the full message text, so raw_message
   // cannot take over the whole screen.
@@ -383,8 +424,8 @@ export function ProjectDashboard({ project, token, onBack }) {
   const dbRows = dbTrades ?? trades
   const firstFull = dbRows.find((t) => t.full_data && typeof t.full_data === 'object' && !Array.isArray(t.full_data))
   const dbColumns = firstFull
-    ? [...TRADESDB_SHEET_COLUMNS.filter((c) => Object.prototype.hasOwnProperty.call(firstFull.full_data, c)), ...Object.keys(firstFull.full_data).filter((c) => !TRADESDB_SHEET_COLUMNS.includes(c)), 'Stage']
-    : SIMPLE_COLUMNS.map(([h]) => h)
+    ? [...TRADESDB_SHEET_COLUMNS.filter((c) => Object.prototype.hasOwnProperty.call(firstFull.full_data, c)), ...Object.keys(firstFull.full_data).filter((c) => !TRADESDB_SHEET_COLUMNS.includes(c)), 'Stage', 'Sync']
+    : [...SIMPLE_COLUMNS.map(([h]) => h), 'Sync']
   const dbCell = (t, col) => {
     if (col === 'Stage') return show(t.stage)
     if (firstFull) return t.full_data && typeof t.full_data === 'object' ? show(t.full_data[col]) : '—'
@@ -392,6 +433,40 @@ export function ProjectDashboard({ project, token, onBack }) {
     return show(field ? t[field] : undefined)
   }
   const dbFullCount = dbRows.filter((t) => t.full_data && typeof t.full_data === 'object').length
+  // A trade has a pending manual request when the log has a
+  // 'sync_request' row for it with no completed 'google_sheet' row
+  // after it. The dashboard log is capped at 200, newest first,
+  // so a very old request could fall off this list; the operator
+  // script reads the full paged log and is the authority.
+  const pendingSyncIds = new Set(
+    (syncLog || [])
+      .filter((s) => s.target === 'sync_request')
+      .filter((s) => !(syncLog || []).some((c) => c.target === 'google_sheet' && c.trade_id === s.trade_id && c.created_at >= s.created_at))
+      .map((s) => s.trade_id)
+  )
+  // Once-only dedupe in the UI: a trade with any successful
+  // 'google_sheet' row shows 'Synced' and cannot be requested
+  // again from here, so a second tap cannot duplicate its row
+  // in the clean sheet. The operator script enforces the same
+  // rule even if a request row somehow arrives anyway.
+  const syncedIds = new Set(
+    (syncLog || []).filter((s) => s.target === 'google_sheet' && s.success).map((s) => s.trade_id)
+  )
+  const onRequestSync = async (trade) => {
+    setSyncError('')
+    setSyncMessage('')
+    setSyncBusyId(trade.id)
+    try {
+      await requestManualSync(token, project.id, trade.id)
+      setSyncMessage(`Sync requested for ${trade.contract_ref || `trade ${trade.id}`}. The operator sync will append it to the clean sheet and log the result in the Sync log tab.`)
+      const fresh = await fetchDashboard(token, project.id)
+      setData(fresh)
+    } catch (err) {
+      setSyncError(err.message || 'Could not record the sync request.')
+    } finally {
+      setSyncBusyId(null)
+    }
+  }
 
   // Every dashboard tab uses the wide page variant (no 900px cap),
   // so Queue and Stages match Database, References, Notes, and Sync
@@ -475,6 +550,8 @@ export function ProjectDashboard({ project, token, onBack }) {
           {tab === 'database' && (
             <section aria-label="Database view">
               <h2>Database view</h2>
+              {syncMessage ? <p className="project-empty">{syncMessage}</p> : null}
+              {syncError ? <p className="project-empty">{syncError}</p> : null}
               <p className="muted">
                 Own database view inside the app, full width like the TradesDB sheet. Scroll sideways for more columns.
                 {dbRows.length > 0 && firstFull
@@ -526,6 +603,18 @@ export function ProjectDashboard({ project, token, onBack }) {
                                     aria-label={`View raw message for ${t.full_data?.Mercancia_Contract_ref || t.contract_ref || 'this trade'}`}
                                   >
                                     View
+                                  </button>
+                                </td>
+                              ) : col === 'Sync' ? (
+                                <td key={col}>
+                                  <button
+                                    type="button"
+                                    className="raw-message-btn"
+                                    disabled={syncBusyId === t.id || pendingSyncIds.has(t.id) || syncedIds.has(t.id)}
+                                    onClick={() => onRequestSync(t)}
+                                    aria-label={`Request sync for ${t.contract_ref || `trade ${t.id}`}`}
+                                  >
+                                    {syncedIds.has(t.id) ? 'Synced' : pendingSyncIds.has(t.id) ? 'Sync requested' : syncBusyId === t.id ? 'Requesting…' : 'Sync'}
                                   </button>
                                 </td>
                               ) : (
@@ -637,7 +726,7 @@ export function ProjectDashboard({ project, token, onBack }) {
           {tab === 'log' && (
             <section aria-label="Sync log">
               <h2>Sync log</h2>
-              <p className="muted">In-app Sheets sync attempts, not the Notes log. Sheets sync is not in this build.</p>
+              <p className="muted">In-app sync requests and attempts, not the Notes log. A row with target sync_request is a Sync tap, or Ali marking a finished trade ready, awaiting Adam's operator script; a row with target google_sheet is a completed attempt by that script. A trade with a successful google_sheet row is synced once only and is never re-appended. The app never writes to Sheets itself, and Ali never executes a sync.</p>
               {syncLog.length === 0 ? (
                 <p className="project-empty">No log entries yet.</p>
               ) : (
@@ -646,7 +735,7 @@ export function ProjectDashboard({ project, token, onBack }) {
                     <li key={s.id}>
                       <div className="project-row">
                         <span className="project-row-name">
-                          {show(s.target)} · {s.success ? 'ok' : 'failed'}
+                          {show(s.target)} · {s.target === 'sync_request' ? 'requested' : s.success ? 'ok' : 'failed'} · trade {s.trade_id}
                         </span>
                         <span className="muted">
                           {show(s.failure_reason)} · {when(s.created_at)}
