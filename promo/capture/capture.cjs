@@ -156,7 +156,8 @@ const rt = (state, table, record) => state.ws.send(JSON.stringify([null, null, s
       st.t.poll_votes = [...(st.t.poll_votes ?? []), { poll_id: poll.id, user_id: u, option: o }]
     }
     rt(st, 'poll_votes', { poll_id: poll.id })
-    await settle(page, 1200)
+    await page.waitForSelector('.ipoll-option.voted', { timeout: 20000 })
+    await settle(page, 900)
     await shot(page, 'poll-1')
     layout.poll = { card: await box(page, '.ipoll') }
     await page.click('.topbar-center')
