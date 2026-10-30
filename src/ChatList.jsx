@@ -1,12 +1,15 @@
 import { useState } from 'react'
+import { useMessageSearch, Highlighted } from './Tools.jsx'
 
 // The home screen: every conversation (the group chat, a private chat with
 // each member, and for the owner the read-only view of other members' private
 // chats), newest first, with the last message, its time, unread count, who's
 // online and who's typing. On wide screens it stays beside the open chat.
 
-export default function ChatList({ items, me, myAvatar, activeKey, onOpen, onSettings, onNewGroup, Avatar }) {
+export default function ChatList({ items, me, myAvatar, activeKey, onOpen, onSettings, onNewGroup, Avatar, profiles = {}, avatars = {}, chatNameOf, onOpenMessage }) {
   const [query, setQuery] = useState('')
+  // Typing two or more letters also searches every message you can read.
+  const found = useMessageSearch(onOpenMessage ? query : '')
   const q = query.trim().toLowerCase()
   const shown = q ? items.filter((c) => c.title.toLowerCase().includes(q) || (c.preview ?? '').toLowerCase().includes(q)) : items
   const chats = shown.filter((c) => !c.owner)
@@ -57,7 +60,33 @@ export default function ChatList({ items, me, myAvatar, activeKey, onOpen, onSet
             </ul>
           </>
         )}
-        {!shown.length && <div className="list-empty">No chats match “{query}”.</div>}
+        {query.trim().length >= 2 && onOpenMessage && (
+          <>
+            <div className="list-section">Messages{found.loading ? ' · searching…' : ''}</div>
+            {!found.loading && found.results.length === 0 && <div className="list-empty">No messages match “{query.trim()}”.</div>}
+            <ul className="convo-list">
+              {found.results.map((m) => (
+                <li key={m.id}>
+                  <button className="convo search-result" onClick={() => onOpenMessage(m)}>
+                    <span className="convo-avatar small">
+                      <Avatar name={profiles[m.user_id] ?? '?'} src={avatars[m.user_id]} />
+                    </span>
+                    <span className="convo-body">
+                      <span className="convo-line">
+                        <span className="convo-title">{chatNameOf?.(m) ?? ''}</span>
+                        <span className="convo-time">{listTime(m.created_at)}</span>
+                      </span>
+                      <span className="convo-preview">
+                        <b>{profiles[m.user_id] ?? '…'}:</b> <Highlighted text={m.content} query={found.query} />
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+        {!shown.length && query.trim().length < 2 && <div className="list-empty">No chats match “{query}”.</div>}
       </div>
     </aside>
   )

@@ -186,6 +186,10 @@ export async function present(sb, rows) {
     paths.length ? sb.storage.from(BUCKET).createSignedUrls(paths, URL_TTL_SECONDS).then((r) => r.data ?? []) : [],
     groupIds.length ? sb.from('chat_groups').select('id, name').in('id', groupIds).then((r) => check(r)) : [],
   ])
+  const [polls, pins] = await Promise.all([
+    sb.from('polls').select('id, message_id, question, options, multiple, poll_votes(user_id, option)').in('message_id', ids).then((r) => r.data ?? []),
+    sb.from('message_pins').select('message_id, pinned_by, pinned_at').in('message_id', ids).then((r) => r.data ?? []),
+  ])
   const groupNames = Object.fromEntries(groups.map((g) => [g.id, g.name]))
   const names = Object.fromEntries(profiles.map((p) => [p.id, p.username]))
   const urls = Object.fromEntries(signed.map((s) => [s.path, s.signedUrl]))
@@ -213,6 +217,8 @@ export async function present(sb, rows) {
           url: urls[m.attachment_path] ?? null,
         }
       : null,
+    poll: presentPoll(polls.find((p) => p.message_id === m.id), names),
+    pinned: pins.some((p) => p.message_id === m.id),
     reactions: reactions
       .filter((r) => r.message_id === m.id)
       .map((r) => ({ emoji: r.emoji, user_id: r.user_id, username: names[r.user_id] ?? null })),
@@ -273,4 +279,34 @@ export async function groupIdFor(sb, group) {
   const hit = rows.find((g) => g.id === value) ?? rows.find((g) => g.name.toLowerCase() === value.toLowerCase())
   if (!hit) throw new HttpError(404, `No group "${group}" that you are in`)
   return hit.id
+}
+
+// A poll as agents see it: options with vote counts and who voted.
+export function presentPoll(p, names = {}) {
+  if (!p) return null
+  const votes = p.poll_votes ?? []
+  return {
+    id: p.id,
+    question: p.question,
+    multiple: p.multiple,
+    options: p.options.map((text, i) => {
+      const voters = votes.filter((v) => v.option === i).map((v) => names[v.user_id] ?? v.user_id)
+      return { index: i, text, votes: voters.length, voters }
+    }),
+    total_voters: new Set(votes.map((v) => v.user_id)).size,
+  }
+}
+
+// Which conversation a request means: { group: id|name } for a named group,
+// { to: username } (or { with: username }) for a private chat, nothing for the
+// main group chat. Returns ids plus the sorted pair used by shared notes.
+export async function conversationFor(sb, userId, b = {}) {
+  const peerName = b.to ?? b.with
+  if (b.group) return { group_id: await groupIdFor(sb, b.group), recipient_id: null, pair: [null, null] }
+  if (peerName) {
+    const peer = await userIdFor(sb, peerName)
+    if (peer === userId) throw new HttpError(400, 'That is you')
+    return { group_id: null, recipient_id: peer, pair: [userId, peer].sort() }
+  }
+  return { group_id: null, recipient_id: null, pair: [null, null] }
 }

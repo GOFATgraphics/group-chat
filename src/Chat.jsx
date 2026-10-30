@@ -3,6 +3,7 @@ import { supabase, BUCKET, AVATAR_BUCKET, avatarUrl } from './supabase.js'
 import Splash from './Splash.jsx'
 import ChatList, { listPreview, listTime } from './ChatList.jsx'
 import GroupSheet from './Groups.jsx'
+import { PinStrip, PollCard, PollSheet, NotesSheet, ScheduleSheet, useMessageSearch, Highlighted, itemScope } from './Tools.jsx'
 import ApiKeys from './ApiKeys.jsx'
 import { useTyping } from './typing.js'
 import { VoicePlayer, VoiceRecorder, MicIcon, canRecordVoice, formatDuration } from './Voice.jsx'
@@ -91,6 +92,13 @@ export default function Chat({ session }) {
   groupsRef.current = groups
   const groupsLoadedRef = useRef(false)
   const [groupSheet, setGroupSheet] = useState(null) // 'create' | 'add' | null
+  // Team tools: pinned messages of the open chat, polls by message id, and
+  // which tool sheet is open ('notes' | 'schedule' | 'poll' | 'search').
+  const [pins, setPins] = useState([])
+  const [polls, setPolls] = useState({})
+  const [toolSheet, setToolSheet] = useState(null)
+  const [flashId, setFlashId] = useState(null)
+  const pendingJumpRef = useRef(null)
   const [dmPeers, setDmPeers] = useState([])
   const [ownerPairs, setOwnerPairs] = useState([])
   const [lightbox, setLightbox] = useState(null) // { url, name, type } for the full-screen viewer
@@ -1020,8 +1028,14 @@ export default function Chat({ session }) {
       loadReads(rows.map((m) => m.id))
       markAsRead(rows)
       signUrls(rows.map((m) => m.attachment_path))
+      if (pendingJumpRef.current) {
+        const id = pendingJumpRef.current
+        pendingJumpRef.current = null
+        jumpTo(id, rows)
+      }
     }
     load()
+    loadPins()
     return () => {
       cancelled = true
     }
@@ -1107,6 +1121,7 @@ export default function Chat({ session }) {
       if (++tick % 3 === 0) {
         refreshReactions()
         refreshReads()
+        reloadToolsRef.current()
       }
     }, 4000)
     return () => {
@@ -1203,6 +1218,9 @@ export default function Chat({ session }) {
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'reactions' }, ({ old: r }) =>
         applyReaction(r.message_id, r.user_id, r.emoji, false),
       )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'message_pins' }, () => reloadToolsRef.current())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'polls' }, () => reloadToolsRef.current())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'poll_votes' }, () => reloadToolsRef.current())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_groups' }, () => loadGroups())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_group_members' }, () => {
         loadGroups()
@@ -1256,6 +1274,113 @@ export default function Chat({ session }) {
     loadReads(rows.map((m) => m.id))
     markAsRead(rows)
     signUrls(rows.map((m) => m.attachment_path))
+  }
+
+  // ---- team tools ----------------------------------------------------------
+
+  // Pinned messages of the open chat, newest pin first.
+  async function loadPins() {
+    const { data } = await supabase
+      .from('message_pins')
+      .select('message_id, pinned_at, messages!inner(*)')
+      .order('pinned_at', { ascending: false })
+      .limit(100)
+    const v = viewRef.current
+    setPins((data ?? []).map((p) => p.messages).filter((m) => m && isMessageForView(m, v)))
+  }
+
+  // Polls for the poll messages on screen (their text starts with 📊).
+  const loadPolls = useCallback(async (ids) => {
+    if (!ids.length) return
+    const { data } = await supabase.from('polls').select('id, message_id, question, options, multiple, poll_votes(user_id, option)').in('message_id', ids)
+    setPolls((prev) => {
+      const next = { ...prev }
+      for (const p of data ?? []) next[p.message_id] = p
+      return next
+    })
+  }, [])
+  const pollIds = messages.filter((m) => typeof m.id === 'number' && m.content?.startsWith('📊 ')).map((m) => m.id)
+  const pollKey = pollIds.join(',')
+  useEffect(() => {
+    loadPolls(pollIds)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pollKey, loadPolls])
+  const reloadToolsRef = useRef(() => {})
+  reloadToolsRef.current = () => {
+    loadPins()
+    loadPolls(pollIds)
+  }
+
+  async function togglePin(msg) {
+    const pinned = pins.some((p) => p.id === msg.id)
+    const { error: err } = pinned
+      ? await supabase.from('message_pins').delete().eq('message_id', msg.id)
+      : await supabase.from('message_pins').insert({ message_id: msg.id })
+    if (err) setError(err.message)
+    loadPins()
+  }
+
+  async function createPoll({ question, options, multiple }) {
+    const { data: msg, error: err } = await supabase
+      .from('messages')
+      .insert({ content: `📊 ${question}`, recipient_id: peerId, group_id: groupId })
+      .select()
+      .single()
+    if (err) return setError(err.message)
+    const { error: pErr } = await supabase.from('polls').insert({ message_id: msg.id, question, options, multiple })
+    if (pErr) {
+      await supabase.from('messages').delete().eq('id', msg.id)
+      return setError(pErr.message)
+    }
+    stickToBottom.current = true
+    addMessage(msg)
+    loadPolls([msg.id])
+    setToolSheet(null)
+  }
+
+  // Scroll to a message and flash it. If it's older than what's loaded, load
+  // the history around it first.
+  async function jumpTo(id, rows = messagesRef.current) {
+    const show = () =>
+      requestAnimationFrame(() => {
+        document.getElementById(`msg-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        setFlashId(id)
+        setTimeout(() => setFlashId((f) => (f === id ? null : f)), 1800)
+      })
+    if (rows.some((m) => m.id === id)) return show()
+    const v = viewRef.current
+    const [{ data: older }, { data: newer }] = await Promise.all([
+      filterConversation(supabase.from('messages').select('*').lte('id', id).order('id', { ascending: false }).limit(60), v),
+      filterConversation(supabase.from('messages').select('*').gt('id', id).order('id').limit(300), v),
+    ])
+    const page = [...(older ?? []).reverse(), ...(newer ?? [])]
+    if (!page.some((m) => m.id === id)) return setError('That message is no longer available.')
+    stickToBottom.current = false
+    preserveScroll.current = null
+    setMessages(page)
+    setHasMore((older ?? []).length === 60)
+    loadReactions(page.map((m) => m.id))
+    signUrls(page.map((m) => m.attachment_path))
+    setTimeout(show, 60)
+  }
+
+  // Open the chat a message belongs to (from search) and jump to it.
+  function openMessage(m) {
+    setToolSheet(null)
+    const v = m.group_id
+      ? { type: 'group', groupId: m.group_id }
+      : m.recipient_id == null
+        ? { type: 'group' }
+        : m.user_id === myId || m.recipient_id === myId
+          ? { type: 'dm', peerId: m.user_id === myId ? m.recipient_id : m.user_id }
+          : { type: 'owner', aId: [m.user_id, m.recipient_id].sort()[0], bId: [m.user_id, m.recipient_id].sort()[1] }
+    if (viewKey(v) === viewKey(viewRef.current)) {
+      openConversation(v)
+      jumpTo(m.id)
+    } else {
+      pendingJumpRef.current = m.id
+      openConversation(v)
+    }
   }
 
   // ---- scrolling -----------------------------------------------------------
@@ -1792,6 +1917,18 @@ export default function Chat({ session }) {
           onSettings={() => setShowSettings(true)}
           onNewGroup={isOwner ? () => setGroupSheet('create') : null}
           Avatar={Avatar}
+          profiles={profiles}
+          avatars={avatars}
+          onOpenMessage={openMessage}
+          chatNameOf={(m) =>
+            m.group_id
+              ? groups[m.group_id]?.name ?? 'Group'
+              : m.recipient_id == null
+                ? 'Group Chat'
+                : m.user_id === myId || m.recipient_id === myId
+                  ? profiles[m.user_id === myId ? m.recipient_id : m.user_id] ?? 'Private chat'
+                  : `${profiles[m.user_id]} & ${profiles[m.recipient_id]}`
+          }
         />
       </div>
     <div className="chat pane-chat" ref={paneRef} inert={!chatActive} {...edgeSwipe}>
@@ -1843,7 +1980,9 @@ export default function Chat({ session }) {
         </button>
       </header>
 
-      <main className="messages" ref={listRef} onScroll={onScroll} onClick={() => setPickerFor(null)}>
+      <PinStrip pins={pins} profiles={profiles} onJump={(id) => jumpTo(id)} preview={quotePreviewOf} />
+
+      <main className={`messages ${pins.length ? 'has-pins' : ''}`} ref={listRef} onScroll={onScroll} onClick={() => setPickerFor(null)}>
         {hasMore && (
           <button className="load-older" onClick={loadOlder}>
             Load earlier messages
@@ -1916,6 +2055,11 @@ export default function Chat({ session }) {
               onDelete={() => deleteMessage(item.msg)}
               onOpenImage={setLightbox}
               onMediaLoad={scrollToBottom}
+              poll={polls[item.msg.id]}
+              pinned={pins.some((p) => p.id === item.msg.id)}
+              onPin={() => togglePin(item.msg)}
+              onPollChange={() => loadPolls([item.msg.id])}
+              flash={flashId === item.msg.id}
             />
           ),
         )}
@@ -2010,6 +2154,8 @@ export default function Chat({ session }) {
             onSend={send}
             replying={Boolean(replyTo)}
             focusKey={replyTo?.id}
+            onPoll={() => setToolSheet('poll')}
+            onSchedule={() => setToolSheet('schedule')}
             placeholder={replyTo ? 'Reply' : isGroup ? (currentGroup ? `Message ${currentGroup.name}` : 'Message') : `Message ${peerName}`}
             enableMentions={isGroup}
             members={groupMemberIds
@@ -2067,6 +2213,14 @@ export default function Chat({ session }) {
                     <span>Call</span>
                   </button>
                 </div>
+              )}
+            </div>
+            <div className="group-actions info-tools">
+              <button onClick={() => { setShowMembers(false); setToolSheet('search') }}>🔍  Search this chat</button>
+              <button onClick={() => { setShowMembers(false); setToolSheet('notes') }}>📝  Notes, tasks & decisions</button>
+              {!readOnly && <button onClick={() => { setShowMembers(false); setToolSheet('schedule') }}>🕒  Scheduled messages</button>}
+              {pins.length > 0 && (
+                <button onClick={() => { setShowMembers(false); jumpTo(pins[0].id) }}>📌  Pinned ({pins.length})</button>
               )}
             </div>
             {(isGroup || isOwnerView) && (
@@ -2127,6 +2281,31 @@ export default function Chat({ session }) {
             )}
           </div>
         </div>
+      )}
+
+      {toolSheet === 'poll' && <PollSheet onCreate={createPoll} onCancel={() => setToolSheet(null)} />}
+      {toolSheet === 'notes' && (
+        <NotesSheet
+          scope={itemScope(view, myId)}
+          title={isGroup ? `${groupTitle} · Notes` : isOwnerView ? 'Notes' : `Notes with ${peerName}`}
+          readOnly={readOnly}
+          profiles={profiles}
+          onClose={() => setToolSheet(null)}
+          onError={setError}
+        />
+      )}
+      {toolSheet === 'schedule' && (
+        <ScheduleSheet target={{ recipient_id: peerId, group_id: groupId }} onClose={() => setToolSheet(null)} onError={setError} />
+      )}
+      {toolSheet === 'search' && (
+        <ChatSearchSheet
+          view={view}
+          title={isGroup ? groupTitle : isOwnerView ? ownerPairLabel : peerName}
+          profiles={profiles}
+          isMessageForView={isMessageForView}
+          onOpen={openMessage}
+          onClose={() => setToolSheet(null)}
+        />
       )}
 
       {groupSheet && (
@@ -2264,6 +2443,11 @@ function Message({
   tickState = 'sent',
   onRetry,
   uploadProgress,
+  poll,
+  pinned = false,
+  onPin,
+  onPollChange,
+  flash = false,
 }) {
   const pressTimer = useRef(null)
   const [copied, setCopied] = useState(false)
@@ -2411,7 +2595,7 @@ function Message({
   return (
     <div
       id={`msg-${msg.id}`}
-      className={`row ${mine ? 'mine' : 'theirs'} ${first ? 'first' : ''} ${grouped.length ? 'has-tapback' : ''} ${msg._status ? `is-${msg._status}` : ''}`}
+      className={`row ${flash ? 'flash' : ''} ${mine ? 'mine' : 'theirs'} ${first ? 'first' : ''} ${grouped.length ? 'has-tapback' : ''} ${msg._status ? `is-${msg._status}` : ''}`}
     >
       {!mine && <div className="row-avatar">{last && <Avatar name={username} src={avatar} />}</div>}
       <div className="stack">
@@ -2489,7 +2673,9 @@ function Message({
             </a>
           )}
           {isCall && <CallCard msg={msg} tail={tail(true)} />}
-          {shownText && !isCall && (jumbo ? (
+          {poll ? (
+            <PollCard poll={poll} myId={myId} profiles={profiles} readOnly={readOnly} mine={mine} onChange={onPollChange} />
+          ) : shownText && !isCall && (jumbo ? (
             <div className={`jumbo-emoji n${jumbo}`} title={new Date(msg.created_at).toLocaleString()}>
               {shownText.trim()}
             </div>
@@ -2498,6 +2684,7 @@ function Message({
               {renderMessageContent(shownText, highlightMentions ? profiles : null)}
             </div>
           ))}
+          {pinned && <span className="pin-mark" title="Pinned" aria-label="Pinned">📌</span>}
           {linkedImages.map((src) => (
             <img
               key={src}
@@ -2587,6 +2774,16 @@ function Message({
                 >
                   Reply
                 </button>
+                {onPin && !msg._status && (
+                  <button
+                    onClick={() => {
+                      onClosePicker()
+                      onPin()
+                    }}
+                  >
+                    {pinned ? 'Unpin' : 'Pin'}
+                  </button>
+                )}
                 {mine && (
                   <button
                     className="danger"
@@ -2749,7 +2946,7 @@ function formatReadTime(iso) {
   return `${d.toLocaleDateString(undefined, { weekday: 'short' })} ${time}`
 }
 
-function Composer({ onSend, replying = false, focusKey, placeholder = 'Message', enableMentions = false, members = [], viewKey = '', onTyping, onVoiceError }) {
+function Composer({ onSend, replying = false, focusKey, onPoll, onSchedule, placeholder = 'Message', enableMentions = false, members = [], viewKey = '', onTyping, onVoiceError }) {
   const [text, setText] = useState('')
   const [file, setFile] = useState(null)
   const [preview, setPreview] = useState(null)
@@ -2975,6 +3172,30 @@ function Composer({ onSend, replying = false, focusKey, placeholder = 'Message',
                 >
                   <MicIcon />
                   <span>Record a voice note</span>
+                </button>
+              )}
+              {onPoll && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenu(false)
+                    onPoll()
+                  }}
+                >
+                  <span className="attach-emoji" aria-hidden="true">📊</span>
+                  <span>Poll</span>
+                </button>
+              )}
+              {onSchedule && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMenu(false)
+                    onSchedule()
+                  }}
+                >
+                  <span className="attach-emoji" aria-hidden="true">🕒</span>
+                  <span>Schedule a message or reminder</span>
                 </button>
               )}
             </div>
@@ -3317,3 +3538,47 @@ const ReplyArrow = () => (
     <path d="M4.5 11H13a7 7 0 0 1 7 7v1" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
   </svg>
 )
+
+// Search one chat's whole history; tap a result to jump to it.
+function ChatSearchSheet({ view, title, profiles, isMessageForView, onOpen, onClose }) {
+  const [q, setQ] = useState('')
+  const filters =
+    view.type === 'group'
+      ? view.groupId
+        ? { p_group: view.groupId }
+        : { p_main: true }
+      : view.type === 'dm'
+        ? { p_with: view.peerId }
+        : {}
+  const { results, loading, query } = useMessageSearch(q, filters)
+  const shown = results.filter((m) => isMessageForView(m, view))
+  return (
+    <div className="sheet-backdrop" onClick={onClose}>
+      <div className="sheet tool-sheet search-sheet" role="dialog" aria-label="Search this chat" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-grabber" aria-hidden="true" />
+        <div className="sheet-head">
+          <span>Search {title}</span>
+          <button className="sheet-done" onClick={onClose}>Done</button>
+        </div>
+        <label className="list-search">
+          <input type="search" placeholder="Words, names, anything said…" value={q} onChange={(e) => setQ(e.target.value)} autoFocus enterKeyHint="search" />
+        </label>
+        {q.trim().length >= 2 && !loading && !shown.length && <p className="setting-note muted">Nothing found for “{q.trim()}”.</p>}
+        {shown.length > 0 && (
+          <ul className="member-list item-list">
+            {shown.map((m) => (
+              <li key={m.id}>
+                <button className="search-hit" onClick={() => onOpen(m)}>
+                  <span className="item-meta">
+                    <b>{profiles[m.user_id] ?? '…'}</b> · {new Date(m.created_at).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                  </span>
+                  <span className="item-text"><Highlighted text={m.content} query={query} /></span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  )
+}

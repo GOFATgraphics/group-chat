@@ -360,6 +360,88 @@ GET /api/file?path=<attachment_path>          302 redirect to a download link
 GET /api/file?path=<attachment_path>&json=1   { "url": "..." }
 ```
 
+## 7. Team tools
+
+Use these to keep the team organised. Where a chat is needed, add
+`"to": "<username>"` for a private chat, `"group": "<group id or name>"` for a
+named group, or nothing for the main group chat (query strings use `with=` /
+`group=` / `conversation=group`).
+
+### Search all past messages
+
+```http
+GET /api/search?q=launch date
+GET /api/search?q=budget&group=Launch Team        (one named group)
+GET /api/search?q=invoice&with=mubarak            (one private chat)
+GET /api/search?q=friday&conversation=group       (main group chat only)
+```
+
+Every word must appear (any order; part of a word matches; any language).
+Returns `{ "messages": [...] }` newest first, the same shape as GET /api/messages,
+across the whole history you can read — not just the latest page. To answer
+"what did we agree on Tuesday?", search, then **quote the message** in your
+reply with `reply_to_id` (or cite its text and date).
+
+### Pin a message
+
+```http
+POST   /api/pins   { "message_id": 412 }
+DELETE /api/pins   { "message_id": 412 }
+GET    /api/pins?group=Launch Team                (pinned messages, newest first)
+```
+
+Pinned messages show in a strip at the top of the chat. Messages also carry
+`"pinned": true|false`.
+
+### Polls
+
+```http
+POST /api/polls       { "question": "Launch time?", "options": ["5 PM", "6 PM"], "multiple": false, "group": "Launch Team" }
+POST /api/polls/vote  { "message_id": 512, "option": 0 }        (or "options": [0, 2] when multiple)
+```
+
+A poll is a message (text `📊 question`) with `"poll": { id, question,
+multiple, options: [{ index, text, votes, voters }], total_voters }`.
+Voting again replaces your vote.
+
+### Shared notes, tasks and decisions (per chat)
+
+```http
+GET    /api/notes?group=Launch Team               (optional &kind=task)
+POST   /api/notes  { "kind": "decision", "text": "We launch Friday 5 PM", "group": "Launch Team" }
+POST   /api/notes  { "kind": "task", "text": "Send the press kit", "to": "mubarak" }
+PATCH  /api/notes  { "id": "...", "done": true }   (or "text": "...")
+DELETE /api/notes  { "id": "..." }
+```
+
+`kind` is `note`, `task` or `decision`. Everyone in that chat sees the same
+list in the app (chat info → Notes, tasks & decisions). **When the team agrees
+something, log it as a decision** so it never gets lost in the scroll, and say
+so briefly in the chat.
+
+### Schedule messages, reminders and your own tasks
+
+```http
+POST   /api/schedule { "text": "Standup in 10 minutes", "at": "2026-11-02T08:50:00Z", "kind": "reminder", "repeat": "daily", "group": "Launch Team" }
+GET    /api/schedule                              (your upcoming ones)
+DELETE /api/schedule { "id": "..." }
+```
+
+- `kind: "message"` posts your text as you at that time.
+- `kind: "reminder"` posts "⏰ Reminder: <text>".
+- `kind: "task"` posts nothing: it reminds **you** (the AI). At that time you
+  get a webhook `{ "type": "task.due", "task": { id, text, group_id, recipient_id, ... } }`,
+  and the next `GET /api/messages` response includes `"due_tasks": [...]`
+  (also `GET /api/tasks`). Each due task is delivered once.
+- `repeat`: `daily` or `weekly` (omit for once). Times are ISO 8601; use UTC
+  or include the offset.
+
+**Daily summary of a group:** schedule yourself a repeating task, e.g.
+`{ "kind": "task", "text": "Post the daily summary of Launch Team", "at": "2026-11-01T17:00:00Z", "repeat": "daily", "group": "Launch Team" }`.
+When it is due, read the day's messages (`GET /api/messages?group=Launch Team&limit=200`),
+write a short summary (decisions, open tasks, who is waiting on what) and post
+it to that group.
+
 ## Errors
 
 Errors are JSON, for example `{ "error": "Access token expired. Call POST /api/refresh." }`.
