@@ -511,6 +511,8 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
 
   const counts = data?.counts ?? {}
   const stageCounts = data?.stageCounts ?? {}
+  const stageTotal = STAGES.reduce((n, st) => n + (Number(stageCounts[st.key]) || 0), 0)
+  const stageShare = (key) => (stageTotal > 0 ? `${((Number(stageCounts[key]) || 0) / stageTotal * 100).toFixed(1)}%` : '0%')
   const pendingSyncIds = new Set(data?.pendingSyncIds ?? [])
   const syncedIds = new Set(data?.syncedIds ?? [])
   const databaseColumns = Array.isArray(data?.databaseColumns) ? data.databaseColumns : []
@@ -605,16 +607,8 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   const detailOtherVisible = detailOtherFields.filter((f) => showEmptyColumns || !isEmptyCellValue(f.value))
 
   const wide = true
-  const panelTabs = [
-    ['dashboard', 'Dashboard'],
-    ['queue', 'Queue'],
-    ['stages', 'Stages'],
-    ['latest', 'Latest'],
-    ['database', 'Database view'],
-    ['references', 'References'],
-    ['notes', 'Notes'],
-    ['log', 'Sync log'],
-  ]
+  // Premium redesign: SIDEBAR_TABS is shared at module level (no local
+  // panelTabs copy), so the sidebar, phone panel and pill bar cannot drift.
   // Tab count badges, from the live dashboard API only, matching the
   // Desktop/Phone mock (Queue, Database, References, Notes, Sync log
   // carry a count; Stages and Latest do not). Never the mock's old
@@ -678,7 +672,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
               &lsaquo; Back to projects
             </button>
             <div className="project-panel-divider" role="presentation" />
-            {panelTabs.map(([key, label]) => (
+            {SIDEBAR_TABS.map(([key, label]) => (
               <button key={key} type="button" className={`project-panel-item project-panel-tab ${tab === key ? 'active' : ''}`} onClick={() => goToTab(key)} aria-selected={tab === key}>
                 {label}{tabBadge(key) != null ? <span className="project-tab-badge">{tabBadge(key)}</span> : null}
               </button>
@@ -692,10 +686,15 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           navigation, so a second pair here was a duplicate. onBack /
           onBackToChats are still used by the side panel below. */}
       {tab === 'dashboard' && (
-      <header className="admin-hero">
-        <div>
+      <header className="admin-hero premium-hero">
+        <div className="premium-hero-main">
           <h1>{project.name}</h1>
           <p className="muted">Scan trades, open details, sync the ones that are ready.</p>
+        </div>
+        <div className="premium-hero-toolbar" aria-label="Quick navigation">
+          <span className="premium-live"><span className="premium-live-dot" aria-hidden="true" />Live counts</span>
+          <button type="button" className="premium-toolbar-btn" onClick={() => goToTab('database')}>Database view</button>
+          <button type="button" className="premium-toolbar-btn" onClick={() => goToTab('log')}>Sync log</button>
         </div>
         {loading ? (
           <p className="muted">Loading counts…</p>
@@ -713,16 +712,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
       </header>
       )}
       <nav className="project-tabs" aria-label="Dashboard sections">
-        {[
-          ['dashboard', 'Dashboard'],
-          ['queue', 'Queue'],
-          ['stages', 'Stages'],
-          ['latest', 'Latest'],
-          ['database', 'Database view'],
-          ['references', 'References'],
-          ['notes', 'Notes'],
-          ['log', 'Sync log'],
-        ].map(([key, label]) => (
+        {SIDEBAR_TABS.map(([key, label]) => (
           <button key={key} className={`project-tab ${tab === key ? 'active' : ''}`} onClick={() => setTab(key)} aria-selected={tab === key}>
             {label}{tabBadge(key) != null ? <span className="project-tab-badge">{tabBadge(key)}</span> : null}
           </button>
@@ -750,6 +740,21 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       </article>
                     ))}
                   </div>
+                  {stageTotal > 0 ? (
+                    <div className="premium-stage-mix" aria-label="Stage distribution">
+                      <div className="premium-stage-mix-meta"><span>Stage mix</span><span>{stageTotal.toLocaleString('en-US')} trades</span></div>
+                      <div className="premium-stage-mix-bar" role="img" aria-label={`Stage mix: ${STAGES.map((st) => `${stageCounts[st.key] ?? 0} ${st.label}`).join(', ')}`}>
+                        {STAGES.map((st) => (
+                          <span key={st.key} className={`premium-stage-seg premium-stage-seg--${st.key}`} style={{ width: stageShare(st.key) }} />
+                        ))}
+                      </div>
+                      <div className="premium-stage-mix-labels">
+                        {STAGES.map((st) => (
+                          <span key={st.key}>{st.label} {stageCounts[st.key] ?? 0}</span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </>
               )}
             </section>
@@ -780,7 +785,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                           <tr key={t.id}>
                             <td className="sn-col">{i + 1}</td>
                             {SLIM_DB_COLUMNS.map(([h, field]) => (
-                              <td key={h}>{field === 'stage' ? show(t.stage) : show(t[field])}</td>
+                              <td key={h}>{field === 'stage' ? <StagePill stage={t.stage} /> : field === 'buyer' || field === 'seller' ? <PartyCell name={t[field]} /> : show(t[field])}</td>
                             ))}
                             <td>
                               <button type="button" className="raw-message-btn" onClick={() => onOpenDetail(t)} aria-label={`View full details for ${t.contract_ref || `trade ${t.id}`}`}>
@@ -809,12 +814,12 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                         <div className="project-card-head">
                           <span className="project-card-sn">{i + 1}</span>
                           <strong className="project-card-title">{show(t.contract_ref)}</strong>
-                          <span className="project-card-stage">{show(t.stage)}</span>
+                          <span className="project-card-stage"><StagePill stage={t.stage} /></span>
                         </div>
                         <p className="project-card-sub">{show(t.commodity)}{t.quantity != null ? ` · ${show(t.quantity)}` : ''}{t.disport ? ` · ${show(t.disport)}` : ''}</p>
                         <dl className="project-card-fields">
-                          <div><dt>Buyer</dt><dd>{show(t.buyer)}</dd></div>
-                          <div><dt>Seller</dt><dd>{show(t.seller)}</dd></div>
+                          <div><dt>Buyer</dt><dd><PartyCell name={t.buyer} /></dd></div>
+                          <div><dt>Seller</dt><dd><PartyCell name={t.seller} /></dd></div>
                           <div><dt>Disport</dt><dd>{show(t.disport)}</dd></div>
                         </dl>
                         <div className="project-card-actions">
@@ -841,7 +846,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                 <p className="project-empty">No trades queued yet. The one-trader test will land here.</p>
               ) : (
                 <>
-                  <ul className="project-list">
+                  <ul className="project-list premium-list">
                     {pageRows.map((q, i) => (
                       <li key={q.id}>
                         <div className="project-row">
@@ -877,6 +882,21 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       </article>
                     ))}
                   </div>
+                  {stageTotal > 0 ? (
+                    <div className="premium-stage-mix" aria-label="Stage distribution">
+                      <div className="premium-stage-mix-meta"><span>Stage mix</span><span>{stageTotal.toLocaleString('en-US')} trades</span></div>
+                      <div className="premium-stage-mix-bar" role="img" aria-label={`Stage mix: ${STAGES.map((st) => `${stageCounts[st.key] ?? 0} ${st.label}`).join(', ')}`}>
+                        {STAGES.map((st) => (
+                          <span key={st.key} className={`premium-stage-seg premium-stage-seg--${st.key}`} style={{ width: stageShare(st.key) }} />
+                        ))}
+                      </div>
+                      <div className="premium-stage-mix-labels">
+                        {STAGES.map((st) => (
+                          <span key={st.key}>{st.label} {stageCounts[st.key] ?? 0}</span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </>
               )}
             </section>
@@ -910,7 +930,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                           <tr key={t.id}>
                             <td className="sn-col">{i + 1}</td>
                             {SLIM_DB_COLUMNS.map(([h, field]) => (
-                              <td key={h}>{field === 'stage' ? show(t.stage) : show(t[field])}</td>
+                              <td key={h}>{field === 'stage' ? <StagePill stage={t.stage} /> : field === 'buyer' || field === 'seller' ? <PartyCell name={t[field]} /> : show(t[field])}</td>
                             ))}
                             <td>
                               <button type="button" className="raw-message-btn" onClick={() => onOpenDetail(t)} aria-label={`View full details for ${t.contract_ref || `trade ${t.id}`}`}>
@@ -939,12 +959,12 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                         <div className="project-card-head">
                           <span className="project-card-sn">{i + 1}</span>
                           <strong className="project-card-title">{show(t.contract_ref)}</strong>
-                          <span className="project-card-stage">{show(t.stage)}</span>
+                          <span className="project-card-stage"><StagePill stage={t.stage} /></span>
                         </div>
                         <p className="project-card-sub">{show(t.commodity)}{t.quantity != null ? ` · ${show(t.quantity)}` : ''}{t.disport ? ` · ${show(t.disport)}` : ''}</p>
                         <dl className="project-card-fields">
-                          <div><dt>Buyer</dt><dd>{show(t.buyer)}</dd></div>
-                          <div><dt>Seller</dt><dd>{show(t.seller)}</dd></div>
+                          <div><dt>Buyer</dt><dd><PartyCell name={t.buyer} /></dd></div>
+                          <div><dt>Seller</dt><dd><PartyCell name={t.seller} /></dd></div>
                           <div><dt>Disport</dt><dd>{show(t.disport)}</dd></div>
                         </dl>
                         <div className="project-card-actions">
@@ -1252,7 +1272,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                 <p className="project-empty">No log entries yet.</p>
               ) : (
                 <>
-                  <ul className="project-list">
+                  <ul className="project-list premium-list">
                     {pageRows.map((s, i) => (
                       <li key={s.id}>
                         <div className="project-row">

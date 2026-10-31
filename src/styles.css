@@ -3073,3 +3073,184 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
     overflow-y: auto !important; overflow-x: hidden !important;
   }
 }
+
+/* ── Premium redesign 2026-10-31, local only ─────────────────────
+   iOS-style premium layer on top of the Admin2 layout. This block
+   changes look and motion only: it does NOT touch the flex-row /
+   scrolling-column layout fix above (no display, overflow, width or
+   height on main, sidebar or content), does NOT add a hero card, a
+   pager, a long-text table column, or any data change, and does NOT
+   change phone side-panel behaviour. One token set only. */
+.project-page-wide {
+  --prem-sp-8: 8px; --prem-sp-12: 12px; --prem-sp-16: 16px; --prem-sp-24: 24px; --prem-sp-32: 32px;
+  --prem-fs-12: 12px; --prem-fs-13: 13px; --prem-fs-15: 15px; --prem-fs-17: 17px; --prem-fs-20: 20px; --prem-fs-28: 28px;
+  --prem-radius-card: 20px; --prem-radius-btn: 10px; --prem-radius-pill: 26px;
+  --prem-shadow-sm: 0 1px 3px rgba(0,0,0,.06);
+  --prem-shadow-md: 0 8px 24px rgba(0,0,0,.10);
+  --prem-shadow-lg: 0 16px 40px rgba(0,0,0,.14);
+  --prem-page: #f0f2f5; --prem-card: #ffffff; --prem-line: #e4e6eb; --prem-line-soft: #eef0f3;
+  --prem-text: #050505; --prem-muted: #65676b; --prem-active: #f0f2f5;
+  --prem-blue: #0866ff; --prem-blue-dark: #0653d6; --prem-teal: #0f766e; --prem-deepblue: #1e40af;
+  --prem-purple: #6d28d9; --prem-brown: #92400e; --prem-green: #12702b; --prem-green-bg: #e3f6e8;
+  --prem-new: #0750c7; --prem-new-bg: #e7f3ff; --prem-grey-bg: #e4e6eb; --prem-grey-text: #3a3b3c;
+  background: var(--prem-page);
+}
+.project-page-wide .admin-content { background: var(--prem-page); }
+/* Frosted glass: translucent sidebar, phone panel and dialogs, with a
+   solid fallback underneath for browsers without backdrop-filter. */
+.project-page-wide .admin-sidebar {
+  background: rgba(255,255,255,.82);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+}
+.project-page-wide .admin-sidebar-search input {
+  background: var(--prem-active); border: 1px solid var(--prem-line);
+  border-radius: var(--prem-radius-btn); color: var(--prem-text);
+}
+.project-page-wide .admin-nav-item {
+  min-height: 44px; border-radius: var(--prem-radius-btn);
+  transition: background-color .2s ease, transform .15s ease;
+}
+.project-page-wide .admin-nav-item:active { transform: scale(.97); }
+.project-page-wide .admin-nav-badge { border-radius: var(--prem-radius-pill); }
+/* Header: large bold title left, quiet toolbar right. No blue card. */
+.project-page-wide .premium-hero {
+  display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between;
+  gap: var(--prem-sp-16) var(--prem-sp-24); margin-bottom: var(--prem-sp-24);
+}
+.project-page-wide .premium-hero-main { min-width: 0; flex: 1 1 320px; }
+.project-page-wide .premium-hero-main h1 { font-size: var(--prem-fs-28); letter-spacing: -.02em; }
+.project-page-wide .premium-hero-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--prem-sp-8); }
+.project-page-wide .premium-live {
+  display: inline-flex; align-items: center; gap: var(--prem-sp-8);
+  min-height: 36px; padding: 0 var(--prem-sp-12); border-radius: var(--prem-radius-pill);
+  background: var(--prem-green-bg); color: var(--prem-green); font-size: var(--prem-fs-13); font-weight: 700; white-space: nowrap;
+}
+.project-page-wide .premium-live-dot { width: 8px; height: 8px; border-radius: 50%; background: #22a840; }
+.project-page-wide .premium-toolbar-btn {
+  min-height: 36px; padding: 10px 16px; border: 1px solid var(--prem-line); border-radius: var(--prem-radius-btn);
+  background: var(--prem-card); color: var(--prem-text); font-size: var(--prem-fs-15); font-weight: 600; white-space: nowrap;
+  transition: background-color .2s ease, transform .15s ease;
+}
+.project-page-wide .premium-toolbar-btn:hover { background: var(--prem-active); }
+.project-page-wide .premium-toolbar-btn:active { transform: scale(.97); }
+/* Spring pop-rise on load for KPI and stage cards, staggered, no invented trends. */
+@keyframes premium-rise {
+  from { opacity: 0; transform: translateY(12px) scale(.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.project-page-wide .admin-kpi, .project-page-wide .project-stage-card {
+  animation: premium-rise .55s cubic-bezier(.34,1.56,.64,1) both;
+  transition: transform .25s cubic-bezier(.34,1.56,.64,1), box-shadow .25s ease;
+}
+.project-page-wide .admin-kpi:nth-child(2), .project-page-wide .project-stage-card:nth-child(2) { animation-delay: .05s; }
+.project-page-wide .admin-kpi:nth-child(3), .project-page-wide .project-stage-card:nth-child(3) { animation-delay: .10s; }
+.project-page-wide .admin-kpi:nth-child(4), .project-page-wide .project-stage-card:nth-child(4) { animation-delay: .15s; }
+.project-page-wide .admin-kpi:nth-child(5) { animation-delay: .20s; }
+.project-page-wide .admin-kpi:hover, .project-page-wide .project-stage-card:hover { transform: translateY(-2px); box-shadow: var(--prem-shadow-md); }
+/* One card system, one button system, one pill radius. */
+.project-page-wide .admin-card, .project-page-wide .db-panel, .project-page-wide .project-stage-card,
+.project-page-wide .admin-kpi, .project-page-wide .project-card {
+  background: var(--prem-card); border: 1px solid var(--prem-line);
+  border-radius: var(--prem-radius-card); box-shadow: var(--prem-shadow-sm);
+}
+.project-page-wide .admin-card > h2, .project-page-wide .admin-card h2 { font-size: var(--prem-fs-28); }
+.project-page-wide .raw-message-btn, .project-page-wide .project-pager-btn, .project-page-wide .db-toggle,
+.project-page-wide .db-chip, .project-page-wide .project-loadmore .project-pager-btn,
+.project-page-wide .premium-toolbar-btn {
+  border-radius: var(--prem-radius-btn); transition: background-color .2s ease, transform .15s ease;
+}
+.project-page-wide .raw-message-btn:active:not(:disabled), .project-page-wide .project-pager-btn:active:not(:disabled),
+.project-page-wide .db-toggle:active, .project-page-wide .db-chip:active { transform: scale(.97); }
+.project-page-wide .db-pill, .project-page-wide .admin-nav-badge, .project-page-wide .project-tab-badge,
+.project-page-wide .db-chip { border-radius: var(--prem-radius-pill); }
+.project-page-wide .db-pill--matched { background: var(--prem-green-bg); color: var(--prem-green); }
+.project-page-wide .db-pill--new { background: var(--prem-new-bg); color: var(--prem-new); }
+.project-page-wide .db-pill--other { background: var(--prem-grey-bg); color: var(--prem-grey-text); }
+/* Table inside a white card: hairline rows, comfortable padding, hover row, no mid-word wrap in headers. */
+.project-page-wide .project-table th { color: var(--prem-muted); font-size: var(--prem-fs-13); }
+.project-page-wide .project-table td { border-bottom: 1px solid var(--prem-line-soft); }
+.project-page-wide .project-table tbody tr:hover { background: rgba(8,102,255,.04); }
+.project-page-wide .db-avatar--empty { border-color: #b0b3b8; }
+/* Stage distribution bar: width transition, current palette only. */
+.project-page-wide .premium-stage-mix { margin-top: var(--prem-sp-16); }
+.project-page-wide .premium-stage-mix-meta {
+  display: flex; justify-content: space-between; gap: var(--prem-sp-8); margin-bottom: var(--prem-sp-8);
+  font-size: var(--prem-fs-13); color: var(--prem-muted); font-variant-numeric: tabular-nums;
+}
+.project-page-wide .premium-stage-mix-bar {
+  display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: var(--prem-grey-bg);
+}
+.project-page-wide .premium-stage-seg { height: 100%; flex: none; transition: width .6s cubic-bezier(.34,1.3,.64,1); }
+.project-page-wide .premium-stage-seg--extracted { background: #a1a1aa; }
+.project-page-wide .premium-stage-seg--finished { background: var(--prem-blue); }
+.project-page-wide .premium-stage-seg--matched { background: #22a840; }
+.project-page-wide .premium-stage-seg--new { background: var(--prem-deepblue); }
+.project-page-wide .premium-stage-mix-labels {
+  display: flex; flex-wrap: wrap; gap: var(--prem-sp-8) var(--prem-sp-16); margin-top: var(--prem-sp-8);
+  font-size: var(--prem-fs-13); color: var(--prem-muted); text-transform: capitalize;
+}
+/* Queue and Sync log lists as finished cards, not bare rows. */
+.project-page-wide .premium-list { display: flex; flex-direction: column; gap: var(--prem-sp-12); }
+.project-page-wide .premium-list li {
+  background: var(--prem-card); border: 1px solid var(--prem-line); border-radius: var(--prem-radius-card);
+  box-shadow: var(--prem-shadow-sm); padding: 4px 16px;
+}
+.project-page-wide .premium-list .project-row { border-bottom: 0; }
+/* Frosted dialogs and phone panel. */
+.project-page-wide .raw-message-dialog, .project-panel {
+  background: rgba(255,255,255,.88);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: var(--prem-shadow-lg);
+}
+.project-page-wide .db-search input {
+  background: var(--prem-active); border: 1px solid var(--prem-line); border-radius: var(--prem-radius-btn);
+}
+.project-page-wide .db-mix-bar { background: var(--prem-grey-bg); }
+/* Dark mode: every new dashboard component, not light only. Surfaces
+   are dark grey, never a black rebrand; text stays near-white. */
+@media (prefers-color-scheme: dark) {
+  .project-page-wide {
+    --prem-page: #121214; --prem-card: #1c1c1e; --prem-line: #38383a; --prem-line-soft: #2c2c2e;
+    --prem-text: #f5f5f7; --prem-muted: #aeaeb2; --prem-active: #2c2c2e;
+    --prem-green-bg: #1e3a26; --prem-green: #7ee2a0; --prem-new-bg: #16294d; --prem-new: #8ec2ff;
+    --prem-grey-bg: #38383a; --prem-grey-text: #e5e5ea;
+    --prem-shadow-sm: 0 1px 3px rgba(0,0,0,.5);
+    --prem-shadow-md: 0 8px 24px rgba(0,0,0,.55);
+    --prem-shadow-lg: 0 16px 40px rgba(0,0,0,.6);
+  }
+  .project-page-wide .admin-sidebar { background: rgba(28,28,30,.82); }
+  .project-page-wide .admin-sidebar-search input { background: var(--prem-active); color: var(--prem-text); }
+  .project-page-wide .admin-sidebar-search input::placeholder { color: var(--prem-muted); }
+  .project-page-wide .admin-nav-item.active { background: var(--prem-active); }
+  .project-page-wide .admin-nav-item.active .admin-nav-badge { background: #38383a; color: #f5f5f7; }
+  .project-page-wide .project-table tbody tr:hover { background: rgba(255,255,255,.04); }
+  .project-page-wide .raw-message-dialog, .project-panel { background: rgba(44,44,46,.88); }
+  .project-page-wide .db-search input { background: var(--prem-active); color: var(--prem-text); }
+  .project-page-wide .db-search input::placeholder { color: var(--prem-muted); }
+  .project-page-wide .db-toggle { background: var(--prem-new-bg); color: var(--prem-new); }
+  .project-page-wide .db-chip[aria-pressed="true"] { background: var(--prem-blue); color: #fff; }
+  .project-page-wide .premium-stage-seg--extracted { background: #636366; }
+  .project-page-wide .project-tab-badge { background: #38383a; color: #e5e5ea; }
+  .project-page-wide .project-panel-tab.active .project-tab-badge { background: rgba(255,255,255,.26); color: #fff; }
+}
+/* Phone: hero stacks, toolbar buttons reach 44px, cards stay 20px radius,
+   KPI grid stays 2 columns, Database still shows cards, side panel
+   behaviour unchanged. Inputs stay at least 16px on mobile. */
+@media (max-width: 640px) {
+  .project-page-wide .premium-hero { flex-direction: column; }
+  .project-page-wide .premium-toolbar-btn, .project-page-wide .premium-live { min-height: 44px; font-size: 16px; }
+  .project-page-wide .premium-toolbar-btn { flex: 1 1 40%; text-align: center; }
+  .project-page-wide .project-card { border-radius: var(--prem-radius-card); }
+  .project-page-wide .admin-kpis { grid-template-columns: repeat(2, 1fr); }
+  .project-page-wide .admin-kpi:last-child { grid-column: 1 / -1; }
+  .project-page-wide .admin-sidebar-search input { font-size: 16px; }
+}
+/* Reduced motion: no spring, no bar sweep, no press scale. */
+@media (prefers-reduced-motion: reduce) {
+  .project-page-wide .admin-kpi, .project-page-wide .project-stage-card { animation: none; transition: none; }
+  .project-page-wide .premium-stage-seg { transition: none; }
+  .project-page-wide .raw-message-btn:active:not(:disabled), .project-page-wide .admin-nav-item:active,
+  .project-page-wide .premium-toolbar-btn:active { transform: none; }
+}
