@@ -2168,8 +2168,9 @@ export default function Chat({ session }) {
   // bar and side panel take over). The Projects list and Create pages
   // have no switch: they already have Back to chats, and the switch
   // was redundant clutter there. Chats goes straight back to the chat
-  // shell, Projects goes to the project list, and the dashboard also
-  // has its own Back to projects and Back to chats buttons below. Chat state
+  // shell, Projects goes to the project list, and the dashboard hero
+  // has no second Back pair (removed as a duplicate of this switch).
+  // Chat state
   // (view, messages, presence) is kept in this component and is not
   // reset by switching, because projectScreen is only a render switch.
   if (projectScreen) {

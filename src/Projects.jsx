@@ -570,6 +570,16 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
     ['notes', 'Notes'],
     ['log', 'Sync log'],
   ]
+  // Tab count badges, from the live dashboard API only, matching the
+  // Desktop/Phone mock (Queue, Database, References, Notes, Sync log
+  // carry a count; Stages and Latest do not). Never the mock's old
+  // counts: 210 trades, 5 queued, 13 sync are NOT used, the live
+  // counts above are. Hidden while the dashboard is still loading.
+  const tabBadge = (key) => {
+    if (!data) return null
+    const v = { queue: counts.queue, database: counts.trades, references: counts.references, notes: counts.notes, log: counts.sync_log }[key]
+    return v == null ? null : Number(v).toLocaleString('en-US')
+  }
   return (
     <main className={`project-page${wide ? ' project-page-wide' : ''} project-page-${tab}${panelOpen ? ' project-panel-open' : ''}`} aria-label={`Dashboard for ${project.name}`}>
       <div className="project-topbar" aria-label="Dashboard top bar">
@@ -599,24 +609,33 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
             <div className="project-panel-divider" role="presentation" />
             {panelTabs.map(([key, label]) => (
               <button key={key} type="button" className={`project-panel-item project-panel-tab ${tab === key ? 'active' : ''}`} onClick={() => goToTab(key)} aria-selected={tab === key}>
-                {label}
+                {label}{tabBadge(key) != null ? <span className="project-tab-badge">{tabBadge(key)}</span> : null}
               </button>
             ))}
           </div>
         </>
       ) : null}
+      {/* No Back buttons in the hero: the persistent Chats / Projects
+          switch above the dashboard (desktop) and the Menu / Chats
+          top bar plus side panel (iPhone) already do exactly the same
+          navigation, so a second pair here was a duplicate. onBack /
+          onBackToChats are still used by the side panel below. */}
       <header className="project-header db-hero">
-        <div className="project-header-actions db-hero-actions">
-          <button className="project-back" onClick={onBack} aria-label="Back to projects">
-            &lsaquo; Back to projects
-          </button>
-          {onBackToChats ? (
-            <button className="project-back" onClick={onBackToChats} aria-label="Back to chats">
-              &lsaquo; Back to chats
-            </button>
-          ) : null}
+        <svg className="db-hero-rings" aria-hidden="true" width="420" height="420" viewBox="0 0 420 420" fill="none">
+          <circle cx="210" cy="210" r="190" stroke="#fff" stroke-width="28" />
+          <circle cx="210" cy="210" r="115" stroke="#fff" stroke-width="28" />
+          <circle cx="210" cy="210" r="42" fill="#fff" />
+        </svg>
+        <div className="db-hero-title">
+          <div className="db-hero-icon" aria-hidden="true">
+            <svg width="36" height="36" viewBox="0 0 46 46" fill="none">
+              <circle cx="23" cy="23" r="20" stroke="#0866FF" stroke-width="5" />
+              <circle cx="23" cy="23" r="11" stroke="#4DA3FF" stroke-width="5" />
+              <circle cx="23" cy="23" r="3.5" fill="#0866FF" />
+            </svg>
+          </div>
+          <h1>{project.name}</h1>
         </div>
-        <h1>{project.name}</h1>
         {loading ? (
           <p className="db-hero-muted">Loading counts…</p>
         ) : error ? (
@@ -642,7 +661,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           ['log', 'Sync log'],
         ].map(([key, label]) => (
           <button key={key} className={`project-tab ${tab === key ? 'active' : ''}`} onClick={() => setTab(key)} aria-selected={tab === key}>
-            {label}
+            {label}{tabBadge(key) != null ? <span className="project-tab-badge">{tabBadge(key)}</span> : null}
           </button>
         ))}
       </nav>

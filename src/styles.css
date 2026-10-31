@@ -2710,18 +2710,31 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
    in the Details popup, exactly as before. Search and stage filter
    are page-local (the paged API has no search endpoint). */
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-.db-hero { position: relative; overflow: hidden; gap: 28px; padding: 32px; border-radius: 28px; color: #fff; background: linear-gradient(135deg, #0866FF 0%, #0653D6 100%); box-shadow: 0 10px 30px rgba(8,102,255,.25); }
-.db-hero h1 { color: #fff; }
+/* Compact hero (proportion fix, 2026-10-31): was padding 32px, gap
+   28px, stat value 38px, stat padding 16/20/18, hero about 219px tall
+   on desktop. Now padding 18/20, gap 12, value 26px, stat padding
+   10/14/12, hero about 145px tall, one tight row of 5 stats on
+   desktop. Stats stay live from the dashboard API, not hardcoded.
+   No Back buttons live in the hero any more: see Projects.jsx. */
+.db-hero { position: relative; overflow: hidden; gap: 12px; padding: 18px 20px; margin-bottom: 12px; border-radius: 20px; color: #fff; background: linear-gradient(135deg, #0866FF 0%, #0653D6 100%); box-shadow: 0 6px 20px rgba(8,102,255,.25); }
+.db-hero h1 { color: #fff; font-size: 24px; line-height: 1.2; }
+.db-hero-rings { position: absolute; right: -90px; top: -110px; opacity: .14; pointer-events: none; }
+.db-hero-title { position: relative; display: flex; align-items: center; gap: 14px; min-width: 0; }
+.db-hero-icon { flex: none; width: 56px; height: 56px; border-radius: 50%; background: #fff; display: grid; place-items: center; box-shadow: 0 4px 14px rgba(0,0,0,.18); }
+.project-tab-badge { min-width: 24px; padding: 2px 8px; border-radius: 999px; text-align: center; font-size: 12px; font-weight: 700; background: #E4E6EB; color: #3A3B3C; }
+.project-tab.active .project-tab-badge { background: rgba(255,255,255,.26); color: #fff; }
+.project-panel-tab .project-tab-badge { margin-left: 8px; vertical-align: middle; }
+.project-panel-tab.active .project-tab-badge { background: rgba(255,255,255,.26); color: #fff; }
 .db-hero .project-back { color: #fff; }
 .db-hero-muted { color: #D6E6FF; }
-.db-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
-.db-stat { display: flex; flex-direction: column; gap: 8px; padding: 16px 20px 18px; border-radius: 20px; background: rgba(0,0,0,.16); }
-.db-stat-label { font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #D6E6FF; }
-.db-stat-value { font-size: 38px; font-weight: 800; line-height: 1; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+.db-stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+.db-stat { display: flex; flex-direction: column; gap: 4px; padding: 10px 14px 12px; border-radius: 14px; background: rgba(0,0,0,.16); min-width: 0; }
+.db-stat-label { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #D6E6FF; overflow-wrap: anywhere; }
+.db-stat-value { font-size: 26px; font-weight: 800; line-height: 1; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
 .db-stat--accent { background: #fff; color: #0866FF; }
 .db-stat--accent .db-stat-label { color: #65676B; }
 .project-page-wide .project-tabs { gap: 8px; }
-.project-page-wide .project-tab { min-height: 46px; padding: 0 20px; border: 0; border-radius: 999px; background: var(--raised); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(16,24,40,.08); }
+.project-page-wide .project-tab { min-height: 46px; padding: 0 20px; border: 0; border-radius: 999px; background: var(--raised); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(16,24,40,.08); display: inline-flex; align-items: center; gap: 8px; }
 .project-page-wide .project-tab.active { box-shadow: 0 4px 12px rgba(8,102,255,.3); }
 .db-panel { background: var(--raised); border-radius: 28px; overflow: hidden; box-shadow: 0 1px 2px rgba(16,24,40,.06), 0 12px 32px rgba(16,24,40,.06); }
 .db-panel-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 28px 28px 14px; }
@@ -2755,8 +2768,57 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
 .db-pill--other { background: #E4E6EB; color: #3A3B3C; }
 .db-num { text-align: right; font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .db-panel .project-pager { padding: 16px 28px; border-top: 1px solid var(--separator); }
+/* Database table proportions (proportion fix, updated to the
+   Desktop.png mock, 2026-10-31): the wide table rules set width
+   max-content and white-space nowrap, so Buyer, Seller and Commodity
+   each took their full unbroken width and pushed Quantity, Disport,
+   Stage, Details and Sync off-screen. This scoped Database-only
+   override uses fixed layout at 100% width, wraps party and commodity
+   names, and balances the columns like the mock (where Buyer and
+   Seller are the widest, Disport is a full word on one line, and the
+   single Addendum View is a small pill): S/N 3.5, ref 9.5, buyer 11.5,
+   seller 11.5, commodity 10, quantity 6.5, disport 8, stage 7, View 4
+   each, Details 6, Sync 6, summing to 99.5% for the default 5
+   long-text View columns. With all 6 View columns shown the shares
+   sum to 103.5%, so about 3.5% horizontal scroll remains in that one
+   case; with the default 5 there is none on a normal desktop width.
+   Details, Sync, View buttons, search, filters, mix bar and 50-row
+   paging are all kept. Other tabs are untouched and keep the wide
+   nowrap sheet layout. The mock's single Addendum column is NOT
+   copied: the real app keeps all 5 long-text View buttons plus
+   Details and Sync, so its action buttons stay compact, unlike the
+   mock's one large View pill. */
+.db-panel .project-table { width: 100%; min-width: 0; table-layout: fixed; }
+.db-panel .project-table th, .db-panel .project-table td { white-space: normal; overflow-wrap: anywhere; padding: 12px 8px; }
+.db-panel .project-table th.sn-col, .db-panel .project-table td.sn-col { width: 3.5%; min-width: 40px; }
+.db-panel .project-table th:nth-child(2), .db-panel .project-table td:nth-child(2) { width: 9.5%; }
+.db-panel .project-table th:nth-child(3), .db-panel .project-table td:nth-child(3) { width: 11.5%; }
+.db-panel .project-table th:nth-child(4), .db-panel .project-table td:nth-child(4) { width: 11.5%; }
+.db-panel .project-table th:nth-child(5), .db-panel .project-table td:nth-child(5) { width: 10%; }
+.db-panel .project-table th:nth-child(6), .db-panel .project-table td:nth-child(6) { width: 6.5%; white-space: nowrap; }
+.db-panel .project-table th:nth-child(7), .db-panel .project-table td:nth-child(7) { width: 8%; }
+.db-panel .project-table th:nth-child(8), .db-panel .project-table td:nth-child(8) { width: 7%; }
+.db-panel .raw-message-cell { width: 4%; }
+.db-panel .project-table th:nth-last-child(2), .db-panel .project-table td:nth-last-child(2) { width: 6%; }
+.db-panel .project-table th:last-child, .db-panel .project-table td:last-child { width: 6%; }
+.db-panel .db-ref { font-size: 12px; padding: 3px 8px; white-space: normal; overflow-wrap: anywhere; }
+.db-panel .db-party { align-items: flex-start; gap: 10px; min-width: 0; }
+.db-panel .db-party-name { min-width: 0; line-height: 1.3; }
+.db-panel .db-avatar { width: 34px; height: 34px; font-size: 12px; }
+.db-panel .db-pill { font-size: 12px; padding: 4px 8px 4px 7px; gap: 5px; }
+.db-panel .raw-message-btn { font-size: 12px; padding: 4px 6px; white-space: normal; overflow-wrap: anywhere; line-height: 1.3; }
+.db-panel .db-num { font-size: 15px; }
 @media (max-width: 640px) {
-  .db-hero { padding: 24px 20px; }
+  .db-hero { padding: 16px; gap: 10px; }
+  .db-hero h1 { font-size: 20px; }
+  .db-hero-icon { width: 44px; height: 44px; }
+  .db-hero-title { gap: 10px; }
+  .db-stats { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .db-stat { padding: 8px 10px 10px; }
+  .db-stat-value { font-size: 22px; }
+  /* Phone mock: the 5th stat (Sync log) spans the full width below
+     the 2-column grid, instead of sitting in a half-width cell. */
+  .db-stat:last-child { grid-column: 1 / -1; }
   .db-panel-head, .db-filters, .db-mix, .db-empty-note, .db-filter-note { padding-left: 20px; padding-right: 20px; }
   .db-search input { width: 100%; }
   .db-tools { width: 100%; }
