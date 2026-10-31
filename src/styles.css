@@ -2699,3 +2699,65 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
   .project-page-log .project-panel-tab.active { background: #92400e; border-color: #92400e; }
   .project-panel-open .project-card-list, .project-panel-open .project-table-wrap, .project-panel-open .project-stage-grid, .project-panel-open .project-page-wide > section > ul.project-list { overflow: hidden; }
 }
+
+/* ---- Mercancia Database design (user mock, local build only) ----
+   Hero, pill tabs, Database panel, party cells, stage pills,
+   search, stage filters, stage mix bar. Per-page table header
+   colours are preserved (Database teal, etc.), so this section
+   does NOT override thead colours. The empty-columns toggle does
+   NOT add the 21 hidden sheet columns to the slim list: it shows /
+   hides the long-text View buttons in the list and the empty fields
+   in the Details popup, exactly as before. Search and stage filter
+   are page-local (the paged API has no search endpoint). */
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.db-hero { position: relative; overflow: hidden; gap: 28px; padding: 32px; border-radius: 28px; color: #fff; background: linear-gradient(135deg, #0866FF 0%, #0653D6 100%); box-shadow: 0 10px 30px rgba(8,102,255,.25); }
+.db-hero h1 { color: #fff; }
+.db-hero .project-back { color: #fff; }
+.db-hero-muted { color: #D6E6FF; }
+.db-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.db-stat { display: flex; flex-direction: column; gap: 8px; padding: 16px 20px 18px; border-radius: 20px; background: rgba(0,0,0,.16); }
+.db-stat-label { font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #D6E6FF; }
+.db-stat-value { font-size: 38px; font-weight: 800; line-height: 1; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+.db-stat--accent { background: #fff; color: #0866FF; }
+.db-stat--accent .db-stat-label { color: #65676B; }
+.project-page-wide .project-tabs { gap: 8px; }
+.project-page-wide .project-tab { min-height: 46px; padding: 0 20px; border: 0; border-radius: 999px; background: var(--raised); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(16,24,40,.08); }
+.project-page-wide .project-tab.active { box-shadow: 0 4px 12px rgba(8,102,255,.3); }
+.db-panel { background: var(--raised); border-radius: 28px; overflow: hidden; box-shadow: 0 1px 2px rgba(16,24,40,.06), 0 12px 32px rgba(16,24,40,.06); }
+.db-panel-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 28px 28px 14px; }
+.db-panel-head h2 { margin: 0; font-size: 28px; font-weight: 800; letter-spacing: -.02em; }
+.db-panel-head p { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
+.db-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.db-search input { width: 320px; max-width: 100%; min-height: 46px; padding: 0 16px; border: 0; border-radius: 999px; background: var(--fill); color: var(--text); }
+.db-search input::placeholder { color: var(--muted); opacity: 1; }
+.db-toggle { display: inline-flex; align-items: center; min-height: 44px; padding: 0 18px; border: 0; border-radius: 999px; font-size: 14px; font-weight: 700; background: #E7F3FF; color: #0750C7; }
+.db-empty-note, .db-filter-note { padding: 0 28px; }
+.db-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 28px 20px; }
+.db-filters-label { margin-right: 6px; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.db-chip { min-height: 40px; padding: 0 18px; border: 0; border-radius: 999px; background: var(--fill); color: var(--text); font-size: 14px; font-weight: 600; }
+.db-chip[aria-pressed="true"] { background: #0866FF; color: #fff; font-weight: 700; }
+.db-mix { padding: 0 28px 22px; }
+.db-mix-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; margin-bottom: 8px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.db-mix-bar { display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: #E4E6EB; }
+.db-mix-matched { background: #22A840; }
+.db-mix-new { background: #0866FF; }
+.db-panel .project-table-wrap { border-top: 1px solid var(--separator); }
+.db-ref { display: inline-block; padding: 4px 10px; border-radius: 8px; background: var(--fill); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; font-weight: 500; }
+.db-party { display: inline-flex; align-items: center; gap: 10px; }
+.db-party-name { font-weight: 600; overflow-wrap: anywhere; }
+.db-party--empty .db-party-name { font-weight: 400; font-style: italic; color: var(--muted); }
+.db-avatar { flex: none; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 800; }
+.db-avatar--empty { border: 1.5px dashed #B0B3B8; color: var(--muted); font-size: 14px; font-weight: 700; background: transparent; }
+.db-pill { display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px 5px 10px; border-radius: 999px; font-size: 13px; font-weight: 700; white-space: nowrap; }
+.db-pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.db-pill--matched { background: #E3F6E8; color: #12702B; }
+.db-pill--new { background: #E7F3FF; color: #0750C7; }
+.db-pill--other { background: #E4E6EB; color: #3A3B3C; }
+.db-num { text-align: right; font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.db-panel .project-pager { padding: 16px 28px; border-top: 1px solid var(--separator); }
+@media (max-width: 640px) {
+  .db-hero { padding: 24px 20px; }
+  .db-panel-head, .db-filters, .db-mix, .db-empty-note, .db-filter-note { padding-left: 20px; padding-right: 20px; }
+  .db-search input { width: 100%; }
+  .db-tools { width: 100%; }
+}

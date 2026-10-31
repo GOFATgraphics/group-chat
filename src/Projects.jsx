@@ -229,6 +229,47 @@ const STAGES = [
 ]
 
 const show = (v) => (v === null || v === undefined || v === '' ? '—' : String(v))
+
+// Database design (user mock, 2026-10-31): party cells with avatar
+// initials and a tint, stage pills, and a visible "Not set" for a
+// blank buyer or seller. Display only: this never invents a party,
+// never patches a trade or a note, and never changes stored data.
+const AVATAR_PALETTE = [
+  ['#E7F3FF', '#0750C7'],
+  ['#E3F6E8', '#12702B'],
+  ['#EDE7FF', '#4B2BB8'],
+  ['#FDE8EF', '#A31650'],
+]
+function partyTheme(name) {
+  const words = String(name).replace(/[^A-Za-z ]/g, ' ').split(/\s+/).filter(Boolean)
+  const initials = ((words[0] || '?')[0] + (words[1] ? words[1][0] : '')).toUpperCase()
+  let sum = 0
+  for (const ch of String(name)) sum += ch.charCodeAt(0)
+  const [bg, fg] = AVATAR_PALETTE[sum % AVATAR_PALETTE.length]
+  return { initials, bg, fg }
+}
+function PartyCell({ name }) {
+  if (name === null || name === undefined || String(name).trim() === '') {
+    return (
+      <span className="db-party db-party--empty">
+        <span className="db-avatar db-avatar--empty" aria-hidden="true">?</span>
+        <span className="db-party-name">Not set</span>
+      </span>
+    )
+  }
+  const t = partyTheme(name)
+  return (
+    <span className="db-party">
+      <span className="db-avatar" aria-hidden="true" style={{ background: t.bg, color: t.fg }}>{t.initials}</span>
+      <span className="db-party-name">{String(name)}</span>
+    </span>
+  )
+}
+function StagePill({ stage }) {
+  if (stage === 'matched') return <span className="db-pill db-pill--matched">Matched</span>
+  if (stage === 'new') return <span className="db-pill db-pill--new">New</span>
+  return <span className="db-pill db-pill--other">{show(stage)}</span>
+}
 const when = (v) => {
   try {
     return v ? new Date(v).toLocaleString() : '—'
@@ -362,6 +403,11 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   // Database Details popup: one trade, full_data loaded on tap only.
   const [detail, setDetail] = useState(null)
   const [showEmptyColumns, setShowEmptyColumns] = useState(false)
+  // Database design: search and stage filter. Page-local only: the
+  // paged API has no search endpoint, so these filter the 50 rows
+  // already loaded for the current page, never the whole collection.
+  const [dbQuery, setDbQuery] = useState('')
+  const [dbStage, setDbStage] = useState('all')
 
   useEffect(() => {
     if (!rawMessage && !detail && !panelOpen) return undefined
@@ -450,6 +496,18 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   const pageTotal = pageData?.total ?? counts[tabKind === 'sync-log' ? 'sync_log' : tabKind] ?? 0
   const pageIsLoading = tabKind ? !!pageLoading[`${tabKind}:${tabPage}`] : false
   const pageErr = tabKind ? pageError[`${tabKind}:${tabPage}`] : ''
+  // Database design, page-local counts and filters (see state note).
+  const dbPageMatched = pageRows.filter((t) => t.stage === 'matched').length
+  const dbPageNew = pageRows.filter((t) => t.stage === 'new').length
+  const dbFilterActive = dbStage !== 'all' || dbQuery.trim() !== ''
+  const dbFilteredRows = pageRows
+    .map((t, idx) => ({ t, idx }))
+    .filter(({ t }) => {
+      if (dbStage !== 'all' && t.stage !== dbStage) return false
+      const q = dbQuery.trim().toLowerCase()
+      if (!q) return true
+      return [t.contract_ref, t.buyer, t.seller, t.commodity, t.disport].join(' ').toLowerCase().includes(q)
+    })
 
   const onRequestSync = async (trade) => {
     setSyncError('')
@@ -547,8 +605,8 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           </div>
         </>
       ) : null}
-      <header className="project-header">
-        <div className="project-header-actions">
+      <header className="project-header db-hero">
+        <div className="project-header-actions db-hero-actions">
           <button className="project-back" onClick={onBack} aria-label="Back to projects">
             &lsaquo; Back to projects
           </button>
@@ -560,13 +618,17 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
         </div>
         <h1>{project.name}</h1>
         {loading ? (
-          <p className="muted">Loading counts…</p>
+          <p className="db-hero-muted">Loading counts…</p>
         ) : error ? (
           <p className="project-empty">{error}</p>
         ) : (
-          <p className="muted">
-            {counts.trades ?? 0} trades · {counts.references ?? 0} references · {counts.notes ?? 0} notes · {counts.queue ?? 0} queued · {counts.sync_log ?? 0} sync log entries
-          </p>
+          <div className="db-stats" aria-label="Project counts">
+            <div className="db-stat"><span className="db-stat-label">Trades</span><span className="db-stat-value">{counts.trades ?? 0}</span></div>
+            <div className="db-stat"><span className="db-stat-label">References</span><span className="db-stat-value">{counts.references ?? 0}</span></div>
+            <div className="db-stat"><span className="db-stat-label">Notes</span><span className="db-stat-value">{counts.notes ?? 0}</span></div>
+            <div className="db-stat db-stat--accent"><span className="db-stat-label">Queued</span><span className="db-stat-value">{counts.queue ?? 0}</span></div>
+            <div className="db-stat"><span className="db-stat-label">Sync log entries</span><span className="db-stat-value">{counts.sync_log ?? 0}</span></div>
+          </div>
         )}
       </header>
       <nav className="project-tabs" aria-label="Dashboard sections">
@@ -719,18 +781,51 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           )}
 
           {tab === 'database' && (
-            <section aria-label="Database view">
-              <h2>Database view</h2>
+            <section aria-label="Database view" className="db-panel">
+              <div className="db-panel-head">
+                <div>
+                  <h2>Database view</h2>
+                  <p className="muted">All trades, newest at the bottom</p>
+                </div>
+                <div className="db-tools">
+                  <label className="db-search">
+                    <span className="sr-only">Search trades on this page</span>
+                    <input type="search" value={dbQuery} onChange={(e) => setDbQuery(e.target.value)} placeholder="Search ref, party, commodity" autoComplete="off" aria-label="Search trades on this page" />
+                  </label>
+                  <button type="button" className="db-toggle" onClick={() => setShowEmptyColumns((v) => !v)} aria-label={showEmptyColumns ? 'Hide empty columns' : 'Show empty columns'}>
+                    {showEmptyColumns ? 'Hide empty columns' : `Show ${serverEmptyColumns.length} empty columns`}
+                  </button>
+                </div>
+              </div>
               {syncMessage ? <p className="project-empty">{syncMessage}</p> : null}
               {syncError ? <p className="project-empty">{syncError}</p> : null}
               {data?.hasFullData && serverEmptyColumns.length > 0 ? (
-                <p className="muted">
-                  {showEmptyColumns ? `${serverEmptyColumns.length} empty columns shown` : `${serverEmptyColumns.length} empty columns hidden`}{' '}
-                  <button type="button" className="raw-message-btn" onClick={() => setShowEmptyColumns((v) => !v)} aria-label={showEmptyColumns ? 'Hide empty columns' : 'Show empty columns'}>
-                    {showEmptyColumns ? 'Hide empty columns' : 'Show empty columns'}
-                  </button>
+                <p className="muted db-empty-note">
+                  {showEmptyColumns ? `${serverEmptyColumns.length} empty columns shown` : `${serverEmptyColumns.length} empty columns hidden`}
                 </p>
               ) : null}
+              <div className="db-filters" role="group" aria-label="Filter by stage">
+                <span className="db-filters-label">Stage</span>
+                {[
+                  ['all', 'All', pageRows.length],
+                  ['matched', 'Matched', dbPageMatched],
+                  ['new', 'New', dbPageNew],
+                ].map(([key, label, count]) => (
+                  <button key={key} type="button" className="db-chip" aria-pressed={dbStage === key} onClick={() => setDbStage(key)}>
+                    {label} · {count}
+                  </button>
+                ))}
+              </div>
+              {pageRows.length > 0 ? (
+                <div className="db-mix">
+                  <div className="db-mix-meta"><span>Stage mix on this page</span><span>{dbPageMatched} matched · {dbPageNew} new</span></div>
+                  <div className="db-mix-bar" role="img" aria-label={`${dbPageMatched} matched, ${dbPageNew} new on this page`}>
+                    <div className="db-mix-matched" style={{ width: `${(dbPageMatched / pageRows.length) * 100}%` }} />
+                    <div className="db-mix-new" style={{ width: `${(dbPageNew / pageRows.length) * 100}%` }} />
+                  </div>
+                </div>
+              ) : null}
+              {dbFilterActive ? <p className="muted db-filter-note">{dbFilteredRows.length} of {pageRows.length} on this page match this filter. Search and stage filter apply to this page only, not the whole collection.</p> : null}
               {pageIsLoading ? (
                 <p className="project-empty">Loading trades…</p>
               ) : pageErr ? (
@@ -753,19 +848,23 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                         </tr>
                       </thead>
                       <tbody>
-                        {pageRows.length === 0 ? (
+                        {dbFilteredRows.length === 0 ? (
                           <tr>
                             <td colSpan={SLIM_DB_COLUMNS.length + LONG_TEXT_COLUMNS.filter((col) => showEmptyColumns || !serverEmptyColumns.includes(col)).length + 3} className="project-empty">
-                              No trades saved yet.
+                              {pageRows.length === 0 ? 'No trades saved yet.' : 'No trades on this page match these filters.'}
                             </td>
                           </tr>
                         ) : (
-                          pageRows.map((t, i) => (
+                          dbFilteredRows.map(({ t, idx: i }) => (
                             <tr key={t.id}>
                               <td className="sn-col">{tabPage * PAGE_SIZE + i + 1}</td>
-                              {SLIM_DB_COLUMNS.map(([h, field]) => (
-                                <td key={h}>{field === 'stage' ? show(t.stage) : show(t[field])}</td>
-                              ))}
+                              <td><span className="db-ref">{show(t.contract_ref)}</span></td>
+                              <td><PartyCell name={t.buyer} /></td>
+                              <td><PartyCell name={t.seller} /></td>
+                              <td>{show(t.commodity)}</td>
+                              <td className="db-num">{show(t.quantity)}</td>
+                              <td>{show(t.disport)}</td>
+                              <td><StagePill stage={t.stage} /></td>
                               {LONG_TEXT_COLUMNS.filter((col) => showEmptyColumns || !serverEmptyColumns.includes(col)).map((col) => (
                                 <td key={col} className="raw-message-cell">
                                   <button
@@ -801,17 +900,17 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                     </table>
                   </div>
                   <div className="project-card-list" aria-label="Database cards">
-                    {pageRows.map((t, i) => (
+                    {dbFilteredRows.map(({ t, idx: i }) => (
                       <article key={t.id} className="project-card">
                         <div className="project-card-head">
                           <span className="project-card-sn">{tabPage * PAGE_SIZE + i + 1}</span>
                           <strong className="project-card-title">{show(t.contract_ref)}</strong>
-                          <span className="project-card-stage">{show(t.stage)}</span>
+                          <span className="project-card-stage"><StagePill stage={t.stage} /></span>
                         </div>
                         <p className="project-card-sub">{show(t.commodity)}{t.quantity != null ? ` · ${show(t.quantity)}` : ''}{t.disport ? ` · ${show(t.disport)}` : ''}</p>
                         <dl className="project-card-fields">
-                          <div><dt>Buyer</dt><dd>{show(t.buyer)}</dd></div>
-                          <div><dt>Seller</dt><dd>{show(t.seller)}</dd></div>
+                          <div><dt>Buyer</dt><dd><PartyCell name={t.buyer} /></dd></div>
+                          <div><dt>Seller</dt><dd><PartyCell name={t.seller} /></dd></div>
                           <div><dt>Disport</dt><dd>{show(t.disport)}</dd></div>
                         </dl>
                         <div className="project-card-actions">
