@@ -276,6 +276,11 @@ const STAGES = [
 
 const show = (v) => (v === null || v === undefined || v === '' ? '—' : String(v))
 
+// S/N 1 = newest, visual index + 1, matching Latest. Module-level so it is
+// in scope for every use in ProjectDashboard (Latest, Queue, Database,
+// References, Notes). Fixes the live "visualSerial is not defined" crash.
+const visualSerial = (i) => i + 1
+
 // Database design (user mock, 2026-10-31): party cells with avatar
 // initials and a tint, stage pills, and a visible "Not set" for a
 // blank buyer or seller. Display only: this never invents a party,
