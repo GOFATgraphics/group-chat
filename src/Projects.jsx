@@ -494,6 +494,12 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   // Retry counter per page key: bumping it re-runs the page effect
   // for the SAME page after a failure (see retryCurrentPage).
   const [pageAttempts, setPageAttempts] = useState({})
+  // In-flight page keys: prevents a second fetch for the same chunk
+  // while one is already running (tabPage bumps and dep changes
+  // re-run the page effect; without this, two fetches for one chunk
+  // could race and the older result could be discarded as cancelled
+  // while the newer one is also discarded, losing the chunk).
+  const inFlightPages = useRef(new Set())
   // Sync log combined view: queue rows loaded through the existing
   // queue endpoint only, in 50-row chunks, never created here.
   const [logQueue, setLogQueue] = useState([])
@@ -584,32 +590,89 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   const tabKind = { queue: 'queue', database: 'trades', references: 'references', notes: 'notes', log: 'sync-log' }[tab]
   const tabPage = pageNums[tab] ?? 0
   const isThreadTab = tab === 'database' || tab === 'references' || tab === 'notes'
+  // Contiguous-prefix invariant (fix for the 50-row shift seen live):
+  // pageRows below is built ONLY from chunks 0, 1, 2, ... with no gap.
+  // The old code built pageRows as pages[0] ?? [], pages[1] ?? [], ...
+  // so a missing chunk 0 silently made chunk 1 the visible first
+  // chunk, labelled S/N 1, with New/Extracted/Finished at 0, and a
+  // final count of 162 of 212 (50 + 50 + 50 + 12) instead of 212.
+  // Any transiently lost chunk 0 (fetch cancelled by a tab switch or
+  // token refresh, or a chunk that resolved empty) plus a later
+  // Load More / sentinel advance produced exactly that state, and
+  // nothing in the old code ever repaired it: the page effect only
+  // ever fetched tabPage, never the missing chunk below it.
+  // Now the effect always fetches the LOWEST missing chunk at or
+  // below tabPage, so a gap is repaired in order before later chunks
+  // are shown, and a chunk that resolves short is an error with
+  // Retry, never a silent success.
+  const chunkKey = (pg) => `${tabKind}:${pg}`
+  const chunkExpected = (chunk, pg) =>
+    chunk && typeof chunk.total === 'number' && chunk.total > 0
+      ? Math.max(0, Math.min(50, chunk.total - pg * 50))
+      : 0
+  const chunkIsShort = (chunk, pg) =>
+    !!chunk && chunk.total > 0 && chunk.rows.length < chunkExpected(chunk, pg)
+  const contiguousCount = tabKind
+    ? (() => {
+        let n = 0
+        while (pages[chunkKey(n)] && !chunkIsShort(pages[chunkKey(n)], n)) n++
+        return n
+      })()
+    : 0
+  const lowestMissingPage = tabKind
+    ? (() => {
+        for (let pg = 0; pg <= tabPage; pg++) {
+          const c = pages[chunkKey(pg)]
+          if (!c || chunkIsShort(c, pg)) return pg
+        }
+        return null
+      })()
+    : null
   // One page-loading effect for every tab. Database, References and
   // Notes use ?order=desc (fetchPageDesc), Queue and Sync log use the
-  // ascending fetchPage; both write into the same pages cache, so
-  // load-more just appends the next chunk and S/N never renumbers.
-  // Two rules that the old probe code broke, fixed here:
+  // ascending fetchPage; both write into the same pages cache.
+  // The effect fetches the LOWEST missing chunk at or below tabPage,
+  // never just tabPage: if chunk 0 is missing while tabPage is 4,
+  // it fetches chunk 0 first, then 1, 2, 3, 4 in order as each lands.
+  // A chunk already failed (pageError set) is not auto-refetched;
+  // Retry clears its error and bumps pageAttempts, which re-runs
+  // this effect for that same chunk. A chunk that resolves short
+  // (fewer rows than its own total says it should hold, while rows
+  // remain) is an error, never stored as a success: storing it is
+  // what let Load More advance past it forever with the count stuck
+  // (162 of 212) and no error shown.
+  // Two rules from the old probe fix are kept:
   //  (1) finally ALWAYS clears the loading flag, even when the fetch
-  //      was cancelled by a tab switch. The old code skipped the
-  //      clear when cancelled, leaving pageLoading[key] true forever.
+  //      was cancelled by a tab switch.
   //  (2) there is NO "if already loading, return" guard keyed on that
-  //      flag. The old probe guard did exactly that, so a stuck flag
-  //      blocked every later attempt, including Retry, with no error
-  //      shown because the loading text outranked the error in render.
-  //      Here, a page already in the cache is the only skip condition.
+  //      flag; the only skips are: no tabKind, no missing chunk, a
+  //      failed chunk awaiting Retry, or a fetch already in flight
+  //      for that exact chunk (inFlightPages).
   useEffect(() => {
     if (!tabKind) return undefined
-    const key = `${tabKind}:${tabPage}`
-    if (pages[key]) return undefined
+    if (lowestMissingPage == null) return undefined
+    const key = chunkKey(lowestMissingPage)
+    if (pageError[key]) return undefined
+    if (inFlightPages.current.has(key)) return undefined
     let cancelled = false
+    inFlightPages.current.add(key)
     setPageLoading((prev) => ({ ...prev, [key]: true }))
     setPageError((prev) => ({ ...prev, [key]: '' }))
     const fetchFn = isThreadTab
-      ? fetchPageDesc(token, project.id, tabKind, tabPage)
-      : fetchPage(token, project.id, tabKind, tabPage)
+      ? fetchPageDesc(token, project.id, tabKind, lowestMissingPage)
+      : fetchPage(token, project.id, tabKind, lowestMissingPage)
     fetchFn
       .then((res) => {
-        if (!cancelled) setPages((prev) => ({ ...prev, [key]: res }))
+        if (cancelled) return
+        const expected = res.total > 0 ? Math.max(0, Math.min(50, res.total - lowestMissingPage * 50)) : 0
+        if (res.total > 0 && res.rows.length < expected) {
+          setPageError((prev) => ({
+            ...prev,
+            [key]: `Chunk ${lowestMissingPage + 1} came back short (${res.rows.length} of ${expected} rows). Tap Retry to load it again; later chunks are held until this one loads.`,
+          }))
+          return
+        }
+        setPages((prev) => ({ ...prev, [key]: res }))
       })
       .catch((err) => {
         if (!cancelled) setPageError((prev) => ({ ...prev, [key]: err.message || 'Could not load this page.' }))
@@ -617,12 +680,18 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
       .finally(() => {
         // Always clear, cancelled or not: a cancelled fetch must never
         // leave this tab stuck on "Loading..." with no Retry.
+        inFlightPages.current.delete(key)
         setPageLoading((prev) => ({ ...prev, [key]: false }))
       })
     return () => {
       cancelled = true
+      // Let a fresh effect start a new fetch for this chunk: the old
+      // one's result is discarded via `cancelled` above, so holding
+      // it in the in-flight set would strand the chunk with no fetch
+      // running and no error shown.
+      inFlightPages.current.delete(key)
     }
-  }, [tab, tabKind, tabPage, token, project.id, pages, isThreadTab, pageAttempts])
+  }, [tab, tabKind, tabPage, token, project.id, pages, isThreadTab, pageAttempts, lowestMissingPage])
 
   // Sync log tab: queue rows for the combined view, through the
   // existing queue endpoint only, one 50-row chunk at a time, until
@@ -665,65 +734,61 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   const serverEmptyColumns = Array.isArray(data?.emptyColumns) ? data.emptyColumns : []
   const isEmptyCellValue = (v) =>
     v === null || v === undefined || (typeof v === 'string' && (v.trim() === '' || v.trim() === '—' || v.trim() === '-')) || (Array.isArray(v) && v.length === 0)
-  const pageData = tabKind ? pages[`${tabKind}:${tabPage}`] : null
-  // Infinite scroll (no pager at all, user direction 2026-10-31): all
-  // pages loaded so far for this tab are concatenated, in order, so
-  // rows beyond the first chunk are reached by scrolling / Load more,
-  // not by a Previous/Next pager. pageRows is therefore the loaded
-  // rows, not just the current chunk.
-  // S/N definition, FINAL (user correction 2026-10-31, superseding
-  // both the total-minus-visual-index rule and the id-based rule):
-  // S/N is the POSITION in the newest-first list, visual index + 1,
-  // not the row's database id and not total minus index. Display
-  // order is newest first, latest at the top, oldest at the bottom,
-  // continuous thread, no pages. The top row, newest, is always
-  // S/N 1, the second row S/N 2, the third S/N 3, and so on down,
-  // regardless of the row's id, regardless of the total, regardless
-  // of which chunk it loaded in, and regardless of whether an
-  // earlier chunk was missing. So if Ali just added a new trade and
-  // the total is now 212, that newest trade is S/N 1 at the top of
-  // Database, and the oldest trade is S/N 212 at the bottom after
-  // full load, not S/N 212 at the top. Latest is the newest 20 in
-  // the same order (server: id desc, limit 20), so its top row is
-  // also S/N 1, second S/N 2, etc., matching Database's top 20
-  // exactly. Filtered rows use their position in the filtered
-  // newest-first list, not their database id: the user explicitly
-  // said S/N 1 for the latest is correct. Queue uses the same
-  // visual-position rule for the rows as displayed. Sync log keeps
-  // its previous combined chronological order, which is not a serial.
-  // NOTE on the two superseded rules, kept here so they are not
-  // reintroduced: total-minus-visual-index broke when the newest
-  // chunk was missing (first loaded row got labelled with the
-  // total); id-as-S/N broke because the user saw Database S/N 212
-  // for a new trade while Latest showed the same trade as S/N 1,
-  // and S/N 1 is the correct label for the latest.
+  // pageRows is the CONTIGUOUS prefix only: chunks 0..contiguousCount-1.
+  // A later chunk already in the cache is NOT shown until every chunk
+  // below it has loaded, so chunk 1 can never masquerade as S/N 1.
   const pageRows = tabKind
-    ? Array.from({ length: tabPage + 1 }, (_, p) => pages[`${tabKind}:${p}`]?.rows ?? []).flat()
+    ? Array.from({ length: contiguousCount }, (_, pg) => pages[chunkKey(pg)]?.rows ?? []).flat()
     : []
-  const pageTotal = pageData?.total ?? (tabKind ? pages[`${tabKind}:0`]?.total : null) ?? counts[tabKind === 'sync-log' ? 'sync_log' : tabKind] ?? 0
-  const visualSerial = (visualIndex) => visualIndex + 1
-  const threadPageKey = `${tabKind}:${tabPage}`
-  const rawPageIsLoading = tabKind ? !!pageLoading[threadPageKey] : false
-  const pageIsLoading = rawPageIsLoading && pageRows.length === 0
-  const pageLoadingMore = rawPageIsLoading && pageRows.length > 0
-  const pageErr = pageRows.length === 0 && tabKind
-    ? pageError[threadPageKey] || ''
+  // Total from the highest-index chunk present, else the dashboard
+  // counts, else 0. A missing chunk 0 with chunk 1 present still
+  // reports the dashboard total (212), not a shrunk total.
+  const pageTotal = tabKind
+    ? (() => {
+        let t = null
+        for (let pg = 0; pages[chunkKey(pg)]; pg++) t = pages[chunkKey(pg)].total
+        return t ?? counts[tabKind === 'sync-log' ? 'sync_log' : tabKind] ?? 0
+      })()
+    : 0
+  // The chunk the user is waiting on: the lowest missing one, or the
+  // current tabPage chunk when nothing is missing.
+  const activeErrorKey = tabKind
+    ? lowestMissingPage != null
+      ? chunkKey(lowestMissingPage)
+      : `${tabKind}:${tabPage}`
     : ''
-  // Error on the current load-more page only, shown by the footer
+  // Loading is true while ANY chunk for this tab is in flight, not
+  // just the tabPage chunk: that is what keeps the sentinel and the
+  // Load More button from advancing while a repair fetch runs.
+  const anyChunkLoading = tabKind
+    ? Object.entries(pageLoading).some(([k, v]) => v && k.startsWith(`${tabKind}:`))
+    : false
+  const pageIsLoading = anyChunkLoading && pageRows.length === 0
+  const pageLoadingMore = anyChunkLoading && pageRows.length > 0
+  const pageErr = pageRows.length === 0 && tabKind ? pageError[activeErrorKey] || '' : ''
+  // Error on the chunk being waited on only, shown by the footer
   // while the rows already loaded stay visible.
-  const pageLoadMoreError = pageRows.length > 0 && tabKind ? pageError[threadPageKey] || '' : ''
-  // Retry re-requests the SAME page (or the thread probe, when the
-  // total is not known yet); it never advances to the next page, so
-  // a failed page cannot be silently skipped.
+  const pageLoadMoreError = pageRows.length > 0 && tabKind ? pageError[activeErrorKey] || '' : ''
+  // Retry re-requests the LOWEST missing chunk, never the next one,
+  // so a failed chunk cannot be silently skipped.
   const retryCurrentPage = () => {
-    const key = threadPageKey
+    const key = activeErrorKey
     setPageError((prev) => ({ ...prev, [key]: '' }))
     setPageLoading((prev) => ({ ...prev, [key]: false }))
+    inFlightPages.current.delete(key)
     setPageAttempts((prev) => ({ ...prev, [key]: (prev[key] || 0) + 1 }))
   }
-  const retryLogQueue = () => {
-    setLogQueueError('')
-    setLogQueueLoading(false)
+  // Load More / sentinel advance: never widen a gap. If a lower chunk
+  // is missing, repair it (Retry path) instead of incrementing
+  // tabPage past it; if the current chunk failed, retry it; if it is
+  // in flight, do nothing (the button is disabled via loading).
+  // Only when every chunk up to tabPage is loaded does this advance.
+  const advancePage = () => {
+    if (lowestMissingPage != null) {
+      if (pageError[chunkKey(lowestMissingPage)]) retryCurrentPage()
+      return
+    }
+    setPageNums((prev) => ({ ...prev, [tab]: prev[tab] + 1 }))
   }
   // Combined Sync log entries: queue items and sync-log rows in one
   // chronological list, oldest first, ties keep queue-before-sync
@@ -1086,7 +1151,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       </li>
                     ))}
                   </ul>
-                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} error={pageLoadMoreError} onRetry={retryCurrentPage} onLoadMore={() => setPageNums((prev) => ({ ...prev, queue: prev.queue + 1 }))} />
+                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} error={pageLoadMoreError} onRetry={retryCurrentPage} onLoadMore={advancePage} />
                 </>
               )}
             </section>
@@ -1282,9 +1347,9 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                             </td>
                           </tr>
                         ) : (
-                          dbFilteredRows.map(({ t }, i) => (
+                          dbFilteredRows.map(({ t, idx }, i) => (
                             <tr key={t.id}>
-                              <td className="sn-col">{visualSerial(i)}</td>
+                              <td className="sn-col">{visualSerial(idx)}</td>
                               <td><span className="db-ref">{show(t.contract_ref)}</span></td>
                               <td><PartyCell name={t.buyer} /></td>
                               <td><PartyCell name={t.seller} /></td>
@@ -1315,10 +1380,10 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                     </table>
                   </div>
                   <div className="project-card-list" aria-label="Database cards">
-                    {dbFilteredRows.map(({ t }, i) => (
+                    {dbFilteredRows.map(({ t, idx }, i) => (
                       <article key={t.id} className="project-card">
                         <div className="project-card-head">
-                          <span className="project-card-sn">{visualSerial(i)}</span>
+                          <span className="project-card-sn">{visualSerial(idx)}</span>
                           <strong className="project-card-title">{show(t.contract_ref)}</strong>
                           <span className="project-card-stage"><StagePill stage={t.stage} /></span>
                         </div>
@@ -1335,7 +1400,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       </article>
                     ))}
                   </div>
-                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} error={pageLoadMoreError} onRetry={retryCurrentPage} onLoadMore={() => setPageNums((prev) => ({ ...prev, database: prev.database + 1 }))} />
+                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} error={pageLoadMoreError} onRetry={retryCurrentPage} onLoadMore={advancePage} />
                 </>
               )}
             </section>
@@ -1397,7 +1462,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       </article>
                     ))}
                   </div>
-                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} error={pageLoadMoreError} onRetry={retryCurrentPage} onLoadMore={() => setPageNums((prev) => ({ ...prev, references: prev.references + 1 }))} />
+                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} error={pageLoadMoreError} onRetry={retryCurrentPage} onLoadMore={advancePage} />
                 </>
               )}
             </section>
@@ -1488,7 +1553,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       </article>
                     ))}
                   </div>
-                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} error={pageLoadMoreError} onRetry={retryCurrentPage} onLoadMore={() => setPageNums((prev) => ({ ...prev, notes: prev.notes + 1 }))} />
+                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} error={pageLoadMoreError} onRetry={retryCurrentPage} onLoadMore={advancePage} />
                 </>
               )}
             </section>
@@ -1553,7 +1618,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                     })}
                   </ul>
                   <p className="muted">Showing {combinedLog.length} combined entries: {pageRows.length} of {pageTotal} sync entries loaded{logQueueError ? `, queue items failed to load (tap Retry queue above)` : logQueueTotal != null ? `, ${logQueue.length} of ${logQueueTotal} queue items loaded` : logQueueLoading ? `, queue items still loading` : ''}. Older sync entries load below as you scroll.</p>
-                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} error={pageLoadMoreError} onRetry={retryCurrentPage} onLoadMore={() => setPageNums((prev) => ({ ...prev, log: prev.log + 1 }))} />
+                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} error={pageLoadMoreError} onRetry={retryCurrentPage} onLoadMore={advancePage} />
                 </>
               )}
             </section>
