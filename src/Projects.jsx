@@ -671,20 +671,28 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   // rows beyond the first chunk are reached by scrolling / Load more,
   // not by a Previous/Next pager. pageRows is therefore the loaded
   // rows, not just the current chunk.
-  // S/N definition, thread tabs (Database, References, Notes): S/N is
-  // the position in the newest-first list, so S/N 1 is the newest row
-  // overall (for trades, trade 211 when the total is 211, then 210,
-  // 209, and so on). Load-more appends older rows below without
-  // renumbering rows already shown. Queue and Sync log keep their
-  // previous ascending order; only the three thread tabs are reversed.
-  // All tabs, thread and ascending alike, read from the same pages
-  // cache. Thread tabs arrive newest-first because their pages were
-  // fetched with ?order=desc, so S/N 1 is still the newest row and
-  // load-more appends older rows below without renumbering.
+  // S/N definition, thread tabs (Database, References, Notes):
+  // visual order is newest-first, but S/N is the ORIGINAL ascending
+  // serial, not the visual position. The oldest row is S/N 1, at the
+  // bottom, and numbers go up as you go up the list, so the newest
+  // row at the top has S/N = total (for trades, trade 211 shows
+  // S/N 211 when the total is 211, then 210, 209, 208, and so on
+  // down to S/N 1 at the bottom). Load-more appends older rows below
+  // with decreasing S/N, without renumbering rows already shown.
+  // Queue and Sync log keep their previous ascending order; only
+  // the three thread tabs are displayed newest-first. Thread tabs
+  // arrive newest-first because their pages were fetched with
+  // ?order=desc; S/N is then total minus the visual index.
   const pageRows = tabKind
     ? Array.from({ length: tabPage + 1 }, (_, p) => pages[`${tabKind}:${p}`]?.rows ?? []).flat()
     : []
   const pageTotal = pageData?.total ?? (tabKind ? pages[`${tabKind}:0`]?.total : null) ?? counts[tabKind === 'sync-log' ? 'sync_log' : tabKind] ?? 0
+  // Original ascending serial for thread tabs: visual index 0 is the
+  // newest row, so its S/N is the total, and S/N decreases downwards.
+  // pageTotal is set by the first loaded page (fetchPageDesc returns
+  // total in the same response), so rows are never rendered before
+  // their total is known; the fallback only guards a missing total.
+  const threadSerial = (visualIndex) => (pageTotal > 0 ? pageTotal - visualIndex : pageRows.length - visualIndex)
   const threadPageKey = `${tabKind}:${tabPage}`
   const rawPageIsLoading = tabKind ? !!pageLoading[threadPageKey] : false
   const pageIsLoading = rawPageIsLoading && pageRows.length === 0
@@ -1193,7 +1201,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
               <div className="db-panel-head">
                 <div>
                   <h2>Database view</h2>
-                  <p className="muted">All trades, newest at the top (S/N 1 is the newest trade). Older trades load below as you scroll, one continuous list, not pages.</p>
+                  <p className="muted">All trades, newest at the top, oldest at the bottom. {pageTotal > 0 ? `S/N ${pageTotal} is the newest trade, S/N 1 is the oldest.` : 'S/N 1 is the oldest trade, the highest S/N is the newest.'} Older trades load below as you scroll, one continuous list, not pages.</p>
                 </div>
                 <div className="db-tools">
                   <label className="db-search">
@@ -1266,7 +1274,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                         ) : (
                           dbFilteredRows.map(({ t, idx: i }) => (
                             <tr key={t.id}>
-                              <td className="sn-col">{i + 1}</td>
+                              <td className="sn-col">{threadSerial(i)}</td>
                               <td><span className="db-ref">{show(t.contract_ref)}</span></td>
                               <td><PartyCell name={t.buyer} /></td>
                               <td><PartyCell name={t.seller} /></td>
@@ -1300,7 +1308,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                     {dbFilteredRows.map(({ t, idx: i }) => (
                       <article key={t.id} className="project-card">
                         <div className="project-card-head">
-                          <span className="project-card-sn">{i + 1}</span>
+                          <span className="project-card-sn">{threadSerial(i)}</span>
                           <strong className="project-card-title">{show(t.contract_ref)}</strong>
                           <span className="project-card-stage"><StagePill stage={t.stage} /></span>
                         </div>
@@ -1326,7 +1334,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           {tab === 'references' && (
             <section className="admin-card" aria-label="References">
               <h2>References</h2>
-              <p className="muted">Newest first, latest at the top (S/N 1 is the newest reference). Older references load below as you scroll, one continuous list, not pages.</p>
+              <p className="muted">Newest first, latest at the top, oldest at the bottom. {pageTotal > 0 ? `S/N ${pageTotal} is the newest reference, S/N 1 is the oldest.` : 'S/N 1 is the oldest reference, the highest S/N is the newest.'} Older references load below as you scroll, one continuous list, not pages.</p>
               {pageIsLoading ? (
                 <p className="project-empty">Loading references…</p>
               ) : pageErr ? (
@@ -1353,7 +1361,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                         ) : (
                           pageRows.map((r, i) => (
                             <tr key={r.id}>
-                              <td className="sn-col">{i + 1}</td>
+                              <td className="sn-col">{threadSerial(i)}</td>
                               {REFERENCE_COLUMNS.map(([h, field]) => (
                                 <td key={h}>{field === 'updated_at' ? when(r[field]) : show(r[field])}</td>
                               ))}
@@ -1367,7 +1375,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                     {pageRows.map((r, i) => (
                       <article key={r.id} className="project-card">
                         <div className="project-card-head">
-                          <span className="project-card-sn">{i + 1}</span>
+                          <span className="project-card-sn">{threadSerial(i)}</span>
                           <strong className="project-card-title">{show(r.shadow_ref)}</strong>
                         </div>
                         <dl className="project-card-fields">
@@ -1388,7 +1396,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           {tab === 'notes' && (
             <section className="admin-card" aria-label="Notes">
               <h2>Notes</h2>
-              <p className="muted">Newest first, latest at the top (S/N 1 is the newest note). Older notes load below as you scroll, one continuous list, not pages. Rows load in 50-row chunks behind the scenes; there is no page navigation.</p>
+              <p className="muted">Newest first, latest at the top, oldest at the bottom. {pageTotal > 0 ? `S/N ${pageTotal} is the newest note, S/N 1 is the oldest.` : 'S/N 1 is the oldest note, the highest S/N is the newest.'} Older notes load below as you scroll, one continuous list, not pages. Rows load in 50-row chunks behind the scenes; there is no page navigation.</p>
               {pageIsLoading ? (
                 <p className="project-empty">Loading notes…</p>
               ) : pageErr ? (
@@ -1415,7 +1423,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                         ) : (
                           pageRows.map((n, i) => (
                             <tr key={n.id}>
-                              <td className="sn-col">{i + 1}</td>
+                              <td className="sn-col">{threadSerial(i)}</td>
                               {NOTE_COLUMNS.map(([h, field]) =>
                                 NOTE_LONG_TEXT_FIELDS.includes(field) ? (
                                   <td key={h} className="raw-message-cell">
@@ -1448,7 +1456,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                     {pageRows.map((n, i) => (
                       <article key={n.id} className="project-card">
                         <div className="project-card-head">
-                          <span className="project-card-sn">{i + 1}</span>
+                          <span className="project-card-sn">{threadSerial(i)}</span>
                           <strong className="project-card-title">Note {n.id}</strong>
                           <span className="project-card-stage">{show(n.priority)}</span>
                         </div>
