@@ -3023,3 +3023,53 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
   .admin-card { padding: 16px; }
   .admin-card > h2, .admin-card h2 { font-size: 20px; }
 }
+
+/* ── Blank main content fix 2026-10-31, local only ───────────────
+   Root cause: the old wide-page rule (.project-page-wide, line ~2538)
+   made the dashboard <main> a flex COLUMN, exactly one viewport tall,
+   with overflow:hidden. The desktop sidebar block then set
+   display:flex without a flex-direction, so column won. The sidebar
+   itself is 100vh tall, so it filled the whole viewport, and the
+   admin-content div stacked BELOW it was clipped by overflow:hidden
+   on <main>. The content was in the DOM, but pushed off-screen and
+   clipped, so scrolling could not reveal it. That is why the sidebar
+   (with live counts) looked fine while Dashboard and Queue looked blank.
+   Fix, desktop only in the first block: <main> becomes a flex ROW,
+   sidebar is a fixed 240px column, admin-content is the only scrolling
+   column. Nothing here hides the top pill bar differently: the pill
+   bar / topbar stay hidden on desktop as before, admin-content does not. */
+@media (min-width: 1024px) {
+  .project-page.project-page-wide {
+    display: flex !important; flex-direction: row !important; align-items: stretch !important;
+    height: 100dvh !important; max-width: none !important; margin: 0 !important;
+    padding: 0 !important; overflow: hidden !important;
+  }
+  .project-page.project-page-wide .admin-sidebar {
+    flex: none !important; width: 240px !important; height: 100vh !important;
+    position: static !important; overflow-y: auto !important; overflow-x: hidden !important;
+  }
+  .project-page.project-page-wide .admin-content {
+    flex: 1 1 auto !important; min-width: 0 !important; min-height: 0 !important;
+    height: auto !important; overflow-y: auto !important; overflow-x: hidden !important;
+    padding: 32px !important; visibility: visible !important; opacity: 1 !important;
+    display: block !important;
+  }
+  .project-page.project-page-wide .admin-content > *,
+  .project-page.project-page-wide .admin-content section {
+    visibility: visible !important; opacity: 1 !important;
+  }
+}
+/* Phone safeguard, same root cause: with the sidebar hidden, the
+   admin-content wrapper is the only child of the overflow:hidden
+   wide page, so it must be the scrolling column on phone too. The
+   phone side panel itself is unchanged. */
+@media (max-width: 1023px) {
+  .project-page.project-page-wide {
+    display: flex !important; flex-direction: column !important;
+    height: 100dvh !important; overflow: hidden !important;
+  }
+  .project-page.project-page-wide .admin-content {
+    flex: 1 1 auto !important; min-width: 0 !important; min-height: 0 !important;
+    overflow-y: auto !important; overflow-x: hidden !important;
+  }
+}
