@@ -671,36 +671,37 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   // rows beyond the first chunk are reached by scrolling / Load more,
   // not by a Previous/Next pager. pageRows is therefore the loaded
   // rows, not just the current chunk.
-  // S/N definition, thread tabs (Database, References, Notes) and
-  // Latest: S/N is the ROW'S OWN id, which is its ORIGINAL ascending
-  // serial, not its visual position in whatever list happened to
-  // load. The oldest row is S/N 1, at the bottom, and numbers go up
-  // as you go up the list, so the newest row at the top has S/N =
-  // total (for trades, trade 211 shows S/N 211 when the total is
-  // 211, then 210, 209, 208, and so on down to S/N 1 at the bottom).
-  // This replaces the old total-minus-visual-index formula, which
-  // broke on 2026-10-31: when the newest chunk was missing from the
-  // loaded list, the first loaded row (trade 161, MCF/CP/9533-S26)
-  // was labelled S/N 211, and every row below it was shifted by 50.
-  // A row's id never changes with loading, filtering, or scrolling,
-  // so the same trade now shows the same S/N in Latest, Database,
-  // References, and Notes. Verified 2026-10-31: trades, references,
-  // and notes ids are sequential 1..total in this project, so id
-  // equals the original serial; if a future row ever lacks an id,
-  // the fallback below still uses total minus visual index.
-  // Queue uses the same rule (queue ids 1..19 in this project),
-  // so a queue item keeps its number even if an earlier chunk is
-  // missing. Sync log keeps its previous combined chronological
-  // order, which is not a serial.
+  // S/N definition, FINAL (user correction 2026-10-31, superseding
+  // both the total-minus-visual-index rule and the id-based rule):
+  // S/N is the POSITION in the newest-first list, visual index + 1,
+  // not the row's database id and not total minus index. Display
+  // order is newest first, latest at the top, oldest at the bottom,
+  // continuous thread, no pages. The top row, newest, is always
+  // S/N 1, the second row S/N 2, the third S/N 3, and so on down,
+  // regardless of the row's id, regardless of the total, regardless
+  // of which chunk it loaded in, and regardless of whether an
+  // earlier chunk was missing. So if Ali just added a new trade and
+  // the total is now 212, that newest trade is S/N 1 at the top of
+  // Database, and the oldest trade is S/N 212 at the bottom after
+  // full load, not S/N 212 at the top. Latest is the newest 20 in
+  // the same order (server: id desc, limit 20), so its top row is
+  // also S/N 1, second S/N 2, etc., matching Database's top 20
+  // exactly. Filtered rows use their position in the filtered
+  // newest-first list, not their database id: the user explicitly
+  // said S/N 1 for the latest is correct. Queue uses the same
+  // visual-position rule for the rows as displayed. Sync log keeps
+  // its previous combined chronological order, which is not a serial.
+  // NOTE on the two superseded rules, kept here so they are not
+  // reintroduced: total-minus-visual-index broke when the newest
+  // chunk was missing (first loaded row got labelled with the
+  // total); id-as-S/N broke because the user saw Database S/N 212
+  // for a new trade while Latest showed the same trade as S/N 1,
+  // and S/N 1 is the correct label for the latest.
   const pageRows = tabKind
     ? Array.from({ length: tabPage + 1 }, (_, p) => pages[`${tabKind}:${p}`]?.rows ?? []).flat()
     : []
   const pageTotal = pageData?.total ?? (tabKind ? pages[`${tabKind}:0`]?.total : null) ?? counts[tabKind === 'sync-log' ? 'sync_log' : tabKind] ?? 0
-  // Stable serial: the row's own id first, never its position in
-  // the loaded list. The old total-minus-visual-index formula is
-  // kept only as a fallback for a row with no id.
-  const threadSerial = (visualIndex) => (pageTotal > 0 ? pageTotal - visualIndex : pageRows.length - visualIndex)
-  const rowSerial = (row, visualIndex) => (row?.id != null ? row.id : threadSerial(visualIndex))
+  const visualSerial = (visualIndex) => visualIndex + 1
   const threadPageKey = `${tabKind}:${tabPage}`
   const rawPageIsLoading = tabKind ? !!pageLoading[threadPageKey] : false
   const pageIsLoading = rawPageIsLoading && pageRows.length === 0
@@ -1008,7 +1009,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       <tbody>
                         {data.latestTrades.map((t, i) => (
                           <tr key={t.id}>
-                            <td className="sn-col">{rowSerial(t, i)}</td>
+                            <td className="sn-col">{visualSerial(i)}</td>
                             {SLIM_DB_COLUMNS.map(([h, field]) => (
                               <td key={h}>{field === 'stage' ? <StagePill stage={t.stage} /> : field === 'buyer' || field === 'seller' ? <PartyCell name={t[field]} /> : show(t[field])}</td>
                             ))}
@@ -1037,7 +1038,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                     {data.latestTrades.map((t, i) => (
                       <article key={t.id} className="project-card">
                         <div className="project-card-head">
-                          <span className="project-card-sn">{rowSerial(t, i)}</span>
+                          <span className="project-card-sn">{visualSerial(i)}</span>
                           <strong className="project-card-title">{show(t.contract_ref)}</strong>
                           <span className="project-card-stage"><StagePill stage={t.stage} /></span>
                         </div>
@@ -1076,7 +1077,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       <li key={q.id}>
                         <div className="project-row">
                           <span className="project-row-name">
-                            {rowSerial(q, i)}. {show(q.subject || q.message_id)}
+                            {visualSerial(i)}. {show(q.subject || q.message_id)}
                           </span>
                           <span className="muted">
                             {show(q.sender)} · {q.status} · {when(q.created_at)}
@@ -1130,6 +1131,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           {tab === 'latest' && (
             <section className="admin-card" aria-label="Latest trades">
               <h2>Latest</h2>
+              <p className="muted">Newest first, latest at the top. S/N 1 is the newest trade, matching Database's top 20 exactly.</p>
               {syncMessage ? <p className="project-empty">{syncMessage}</p> : null}
               {syncError ? <p className="project-empty">{syncError}</p> : null}
               {loading ? (
@@ -1153,7 +1155,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       <tbody>
                         {data.latestTrades.map((t, i) => (
                           <tr key={t.id}>
-                            <td className="sn-col">{rowSerial(t, i)}</td>
+                            <td className="sn-col">{visualSerial(i)}</td>
                             {SLIM_DB_COLUMNS.map(([h, field]) => (
                               <td key={h}>{field === 'stage' ? <StagePill stage={t.stage} /> : field === 'buyer' || field === 'seller' ? <PartyCell name={t[field]} /> : show(t[field])}</td>
                             ))}
@@ -1182,7 +1184,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                     {data.latestTrades.map((t, i) => (
                       <article key={t.id} className="project-card">
                         <div className="project-card-head">
-                          <span className="project-card-sn">{rowSerial(t, i)}</span>
+                          <span className="project-card-sn">{visualSerial(i)}</span>
                           <strong className="project-card-title">{show(t.contract_ref)}</strong>
                           <span className="project-card-stage"><StagePill stage={t.stage} /></span>
                         </div>
@@ -1209,7 +1211,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
               <div className="db-panel-head">
                 <div>
                   <h2>Database view</h2>
-                  <p className="muted">All trades, newest at the top, oldest at the bottom. {pageTotal > 0 ? `S/N ${pageTotal} is the newest trade, S/N 1 is the oldest.` : 'S/N 1 is the oldest trade, the highest S/N is the newest.'} Older trades load below as you scroll, one continuous list, not pages.</p>
+                  <p className="muted">All trades, newest at the top, oldest at the bottom. S/N 1 is the newest trade{pageTotal > 0 ? `, S/N ${pageTotal} is the oldest` : ''}. Older trades load below as you scroll, one continuous list, not pages.</p>
                 </div>
                 <div className="db-tools">
                   <label className="db-search">
@@ -1280,9 +1282,9 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                             </td>
                           </tr>
                         ) : (
-                          dbFilteredRows.map(({ t, idx: i }) => (
+                          dbFilteredRows.map(({ t }, i) => (
                             <tr key={t.id}>
-                              <td className="sn-col">{rowSerial(t, i)}</td>
+                              <td className="sn-col">{visualSerial(i)}</td>
                               <td><span className="db-ref">{show(t.contract_ref)}</span></td>
                               <td><PartyCell name={t.buyer} /></td>
                               <td><PartyCell name={t.seller} /></td>
@@ -1313,10 +1315,10 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                     </table>
                   </div>
                   <div className="project-card-list" aria-label="Database cards">
-                    {dbFilteredRows.map(({ t, idx: i }) => (
+                    {dbFilteredRows.map(({ t }, i) => (
                       <article key={t.id} className="project-card">
                         <div className="project-card-head">
-                          <span className="project-card-sn">{rowSerial(t, i)}</span>
+                          <span className="project-card-sn">{visualSerial(i)}</span>
                           <strong className="project-card-title">{show(t.contract_ref)}</strong>
                           <span className="project-card-stage"><StagePill stage={t.stage} /></span>
                         </div>
@@ -1342,7 +1344,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           {tab === 'references' && (
             <section className="admin-card" aria-label="References">
               <h2>References</h2>
-              <p className="muted">Newest first, latest at the top, oldest at the bottom. {pageTotal > 0 ? `S/N ${pageTotal} is the newest reference, S/N 1 is the oldest.` : 'S/N 1 is the oldest reference, the highest S/N is the newest.'} Older references load below as you scroll, one continuous list, not pages.</p>
+              <p className="muted">Newest first, latest at the top, oldest at the bottom. S/N 1 is the newest reference{pageTotal > 0 ? `, S/N ${pageTotal} is the oldest` : ''}. Older references load below as you scroll, one continuous list, not pages.</p>
               {pageIsLoading ? (
                 <p className="project-empty">Loading references…</p>
               ) : pageErr ? (
@@ -1369,7 +1371,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                         ) : (
                           pageRows.map((r, i) => (
                             <tr key={r.id}>
-                              <td className="sn-col">{rowSerial(r, i)}</td>
+                              <td className="sn-col">{visualSerial(i)}</td>
                               {REFERENCE_COLUMNS.map(([h, field]) => (
                                 <td key={h}>{field === 'updated_at' ? when(r[field]) : show(r[field])}</td>
                               ))}
@@ -1383,7 +1385,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                     {pageRows.map((r, i) => (
                       <article key={r.id} className="project-card">
                         <div className="project-card-head">
-                          <span className="project-card-sn">{rowSerial(r, i)}</span>
+                          <span className="project-card-sn">{visualSerial(i)}</span>
                           <strong className="project-card-title">{show(r.shadow_ref)}</strong>
                         </div>
                         <dl className="project-card-fields">
@@ -1404,7 +1406,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           {tab === 'notes' && (
             <section className="admin-card" aria-label="Notes">
               <h2>Notes</h2>
-              <p className="muted">Newest first, latest at the top, oldest at the bottom. {pageTotal > 0 ? `S/N ${pageTotal} is the newest note, S/N 1 is the oldest.` : 'S/N 1 is the oldest note, the highest S/N is the newest.'} Older notes load below as you scroll, one continuous list, not pages. Rows load in 50-row chunks behind the scenes; there is no page navigation.</p>
+              <p className="muted">Newest first, latest at the top, oldest at the bottom. S/N 1 is the newest note{pageTotal > 0 ? `, S/N ${pageTotal} is the oldest` : ''}. Older notes load below as you scroll, one continuous list, not pages. Rows load in 50-row chunks behind the scenes; there is no page navigation.</p>
               {pageIsLoading ? (
                 <p className="project-empty">Loading notes…</p>
               ) : pageErr ? (
@@ -1431,7 +1433,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                         ) : (
                           pageRows.map((n, i) => (
                             <tr key={n.id}>
-                              <td className="sn-col">{rowSerial(n, i)}</td>
+                              <td className="sn-col">{visualSerial(i)}</td>
                               {NOTE_COLUMNS.map(([h, field]) =>
                                 NOTE_LONG_TEXT_FIELDS.includes(field) ? (
                                   <td key={h} className="raw-message-cell">
@@ -1464,7 +1466,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                     {pageRows.map((n, i) => (
                       <article key={n.id} className="project-card">
                         <div className="project-card-head">
-                          <span className="project-card-sn">{rowSerial(n, i)}</span>
+                          <span className="project-card-sn">{visualSerial(i)}</span>
                           <strong className="project-card-title">Note {n.id}</strong>
                           <span className="project-card-stage">{show(n.priority)}</span>
                         </div>
