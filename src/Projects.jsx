@@ -35,13 +35,28 @@ import { useEffect, useRef, useState } from 'react'
 // participant-domains column stored, and Notes has no execution stage,
 // action owner, deadline, or counterparty column stored.
 
-async function apiFetch(token, path, method = 'GET', bodyJson) {
+async function apiFetch(token, path, method = 'GET', bodyJson, timeoutMs) {
   if (!token) throw new Error('You are not signed in. Sign in again to open projects.')
-  const res = await fetch(path, {
-    method,
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: bodyJson ? JSON.stringify(bodyJson) : undefined,
-  })
+  let controller = null
+  let timer = null
+  if (timeoutMs && typeof AbortController !== 'undefined') {
+    controller = new AbortController()
+    timer = setTimeout(() => controller.abort(), timeoutMs)
+  }
+  let res
+  try {
+    res = await fetch(path, {
+      method,
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: bodyJson ? JSON.stringify(bodyJson) : undefined,
+      signal: controller ? controller.signal : undefined,
+    })
+  } catch (err) {
+    if (controller && controller.signal.aborted) throw new Error('Project request timed out. Check your connection and retry.')
+    throw err
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
   let data = null
   try {
     data = await res.json()
@@ -73,11 +88,29 @@ export async function fetchDashboard(token, projectId) {
 
 // One page of one collection, 50 rows, server limit/offset, with a
 // total count. Trades use ?slim=1: slim fields only, no full_data.
-// Returns { rows, total }.
+// Returns { rows, total }. Page fetches carry a 30-second timeout so
+// a hung page load always resolves to loaded or error, never to a
+// permanently disabled "Loading more…" footer (see LoadMoreFooter).
 export async function fetchPage(token, projectId, kind, page) {
   const offset = page * 50
   const slim = kind === 'trades' ? '&slim=1' : ''
-  const data = await apiFetch(token, `/api/projects/${projectId}/${kind}?limit=50&offset=${offset}${slim}`)
+  const data = await apiFetch(token, `/api/projects/${projectId}/${kind}?limit=50&offset=${offset}${slim}`, 'GET', undefined, 30000)
+  const key = kind === 'sync-log' ? 'sync_log' : kind
+  return { rows: Array.isArray(data[key]) ? data[key] : [], total: typeof data.total === 'number' ? data.total : 0 }
+}
+
+// Same endpoint, explicit offset/limit: the only way to serve a
+// newest-first thread list without a server change, because the
+// subcollection GET orders by id ascending and has no descending
+// option. Thread tabs (Database, References, Notes) load chunk 0 from
+// the END of the collection (offset total - 50) and reverse it, then
+// chunk 1, and so on, so the list reads newest first and load-more
+// appends older rows below. No new endpoint, no data change. Notes
+// load chunks stay 50 rows: the 100-per-page change was corrected
+// away, and 50 is the loading chunk, not a page the user navigates.
+export async function fetchPageAt(token, projectId, kind, offset, limit = 50) {
+  const slim = kind === 'trades' ? '&slim=1' : ''
+  const data = await apiFetch(token, `/api/projects/${projectId}/${kind}?limit=${limit}&offset=${offset}${slim}`, 'GET', undefined, 30000)
   const key = kind === 'sync-log' ? 'sync_log' : kind
   return { rows: Array.isArray(data[key]) ? data[key] : [], total: typeof data.total === 'number' ? data.total : 0 }
 }
@@ -354,28 +387,54 @@ const SLIM_DB_COLUMNS = [
   ['Stage', 'stage'],
 ]
 
-function LoadMoreFooter({ loaded, total, loading, onLoadMore }) {
+// Load-more footer, no pager. Two stuck-state fixes: (1) the sentinel
+// cannot fire twice for the same loaded count while a load is in
+// flight (firedRef + loadingRef), so a page is never skipped by a
+// double increment; (2) a failed page load shows its error with an
+// enabled Retry button that re-requests the SAME page, instead of a
+// disabled "Loading more…" forever or a Load more tap that silently
+// skips the failed page. Page fetches also time out after 30 seconds
+// (see fetchPage), so loading always resolves to loaded or error.
+function LoadMoreFooter({ loaded, total, loading, error, onLoadMore, onRetry }) {
   const sentinelRef = useRef(null)
+  const firedRef = useRef(false)
+  const loadingRef = useRef(loading)
+  loadingRef.current = loading
   const hasMore = loaded < total
   useEffect(() => {
-    if (!hasMore || loading) return undefined
+    firedRef.current = false
+  }, [loaded])
+  useEffect(() => {
+    if (!hasMore || loading || error) return undefined
     const el = sentinelRef.current
     if (!el || typeof IntersectionObserver === 'undefined') return undefined
     const obs = new IntersectionObserver(
       (entries) => {
-        if (entries.some((e) => e.isIntersecting)) onLoadMore()
+        if (entries.some((e) => e.isIntersecting) && !loadingRef.current && !firedRef.current) {
+          firedRef.current = true
+          onLoadMore()
+        }
       },
       { root: null, rootMargin: '200px', threshold: 0 }
     )
     obs.observe(el)
     return () => obs.disconnect()
-  }, [hasMore, loading, onLoadMore, loaded])
+  }, [hasMore, loading, error, onLoadMore, loaded])
   return (
     <div className="project-loadmore" role="navigation" aria-label="More rows">
       <span className="muted">
         Showing {loaded} of {total}
       </span>
-      {hasMore ? (
+      {error ? (
+        <>
+          <p className="project-loadmore-error" role="alert">
+            Could not load more rows: {error}
+          </p>
+          <button type="button" className="project-pager-btn" onClick={onRetry}>
+            Retry
+          </button>
+        </>
+      ) : hasMore ? (
         <>
           <div ref={sentinelRef} aria-hidden="true" />
           <button type="button" className="project-pager-btn" disabled={loading} onClick={onLoadMore}>
@@ -387,8 +446,23 @@ function LoadMoreFooter({ loaded, total, loading, onLoadMore }) {
   )
 }
 
+// Small error note with a retry for a first-page load failure, used
+// by the paged tabs. The retry re-requests the same page, never the
+// next one, so no rows are skipped.
+function PageErrorNote({ error, onRetry }) {
+  return (
+    <div className="project-loadmore-error-wrap" role="alert">
+      <p className="project-empty">{error}</p>
+      <button type="button" className="project-pager-btn" onClick={onRetry}>
+        Retry
+      </button>
+    </div>
+  )
+}
+
 export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   const [tab, setTab] = useState('dashboard')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [panelOpen, setPanelOpen] = useState(false)
   const panelCloseRef = useRef(null)
   const closePanel = () => setPanelOpen(false)
@@ -415,6 +489,22 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   const [pageNums, setPageNums] = useState({ dashboard: 0, queue: 0, stages: 0, latest: 0, database: 0, references: 0, notes: 0, log: 0 })
   const [pageLoading, setPageLoading] = useState({})
   const [pageError, setPageError] = useState({})
+  // Retry counter per page key: bumping it re-runs the page effect
+  // for the SAME page after a failure (see retryCurrentPage).
+  const [pageAttempts, setPageAttempts] = useState({})
+  // Newest-first thread state (Database, References, Notes only):
+  // totals learned from a 1-row probe, chunks keyed rev, each chunk
+  // stored already reversed (newest first within the chunk).
+  const [threadTotals, setThreadTotals] = useState({})
+  const [threadChunks, setThreadChunks] = useState({})
+  // Sync log combined view: queue rows loaded through the existing
+  // queue endpoint only, in 50-row chunks, never created here.
+  const [logQueue, setLogQueue] = useState([])
+  const [logQueueTotal, setLogQueueTotal] = useState(null)
+  const [logQueueLoading, setLogQueueLoading] = useState(false)
+  const [logQueueError, setLogQueueError] = useState('')
+  const [logQueuePage, setLogQueuePage] = useState(0)
+  const [syncDetail, setSyncDetail] = useState(null)
   const [syncBusyId, setSyncBusyId] = useState(null)
   const [syncMessage, setSyncMessage] = useState('')
   const [syncError, setSyncError] = useState('')
@@ -436,17 +526,18 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   const [dbStage, setDbStage] = useState('all')
 
   useEffect(() => {
-    if (!rawMessage && !detail && !panelOpen) return undefined
+    if (!rawMessage && !detail && !panelOpen && !syncDetail) return undefined
     const onKey = (e) => {
       if (e.key === 'Escape') {
         setRawMessage(null)
         setDetail(null)
         setPanelOpen(false)
+        setSyncDetail(null)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [rawMessage, detail, panelOpen])
+  }, [rawMessage, detail, panelOpen, syncDetail])
 
   // Side panel: focus the close button first when it opens, and stop
   // the page behind it from scrolling while it is open.
@@ -470,6 +561,16 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
     setData(null)
     setPages({})
     setPageNums({ dashboard: 0, queue: 0, stages: 0, latest: 0, database: 0, references: 0, notes: 0, log: 0 })
+    setPageError({})
+    setPageAttempts({})
+    setThreadTotals({})
+    setThreadChunks({})
+    setLogQueue([])
+    setLogQueueTotal(null)
+    setLogQueueLoading(false)
+    setLogQueueError('')
+    setLogQueuePage(0)
+    setSyncDetail(null)
     fetchDashboard(token, project.id)
       .then((d) => {
         if (!cancelled) setData(d)
@@ -487,8 +588,10 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
 
   const tabKind = { queue: 'queue', database: 'trades', references: 'references', notes: 'notes', log: 'sync-log' }[tab]
   const tabPage = pageNums[tab] ?? 0
+  const isThreadTab = tab === 'database' || tab === 'references' || tab === 'notes'
+  // Ascending tabs only (Queue, Sync log). Thread tabs use the effect below.
   useEffect(() => {
-    if (!tabKind) return undefined
+    if (!tabKind || isThreadTab) return undefined
     const key = `${tabKind}:${tabPage}`
     if (pages[key]) return undefined
     let cancelled = false
@@ -507,7 +610,84 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
     return () => {
       cancelled = true
     }
-  }, [tab, tabKind, tabPage, token, project.id, pages])
+  }, [tab, tabKind, tabPage, token, project.id, pages, isThreadTab, pageAttempts])
+  // Newest-first thread loading (Database, References, Notes). The
+  // probe learns the total, then chunk c loads from the end:
+  // offset total - (c + 1) * 50, reversed, so chunk 0 is the newest
+  // 50 rows. Appending a chunk never renumbers rows already shown.
+  useEffect(() => {
+    if (!tabKind || !isThreadTab) return undefined
+    const kind = tabKind
+    const total = threadTotals[kind]
+    if (total == null) {
+      const key = `${kind}:rev:probe`
+      if (pageLoading[key]) return undefined
+      let cancelled = false
+      setPageLoading((prev) => ({ ...prev, [key]: true }))
+      setPageError((prev) => ({ ...prev, [key]: '' }))
+      fetchPageAt(token, project.id, kind, 0, 1)
+        .then((res) => {
+          if (!cancelled) setThreadTotals((prev) => ({ ...prev, [kind]: res.total }))
+        })
+        .catch((err) => {
+          if (!cancelled) setPageError((prev) => ({ ...prev, [key]: err.message || 'Could not load this list.' }))
+        })
+        .finally(() => {
+          if (!cancelled) setPageLoading((prev) => ({ ...prev, [key]: false }))
+        })
+      return () => {
+        cancelled = true
+      }
+    }
+    const key = `${kind}:rev:${tabPage}`
+    if (threadChunks[key]) return undefined
+    const limit = Math.min(50, total - tabPage * 50)
+    if (limit <= 0) return undefined
+    const offset = Math.max(0, total - (tabPage + 1) * 50)
+    let cancelled = false
+    setPageLoading((prev) => ({ ...prev, [key]: true }))
+    setPageError((prev) => ({ ...prev, [key]: '' }))
+    fetchPageAt(token, project.id, kind, offset, limit)
+      .then((res) => {
+        if (!cancelled) setThreadChunks((prev) => ({ ...prev, [key]: { rows: [...res.rows].reverse(), total: res.total } }))
+      })
+      .catch((err) => {
+        if (!cancelled) setPageError((prev) => ({ ...prev, [key]: err.message || 'Could not load this page.' }))
+      })
+      .finally(() => {
+        if (!cancelled) setPageLoading((prev) => ({ ...prev, [key]: false }))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [tab, tabKind, tabPage, token, project.id, isThreadTab, threadTotals, threadChunks, pageAttempts])
+  // Sync log tab: queue rows for the combined view, through the
+  // existing queue endpoint only, one 50-row chunk at a time, until
+  // the queue total is reached. A queue failure never blocks the
+  // sync-log rows; it shows its own error with its own retry.
+  useEffect(() => {
+    if (tab !== 'log') return undefined
+    if (logQueueTotal != null && logQueue.length >= logQueueTotal) return undefined
+    if (logQueueLoading || logQueueError) return undefined
+    let cancelled = false
+    setLogQueueLoading(true)
+    fetchPage(token, project.id, 'queue', logQueuePage)
+      .then((res) => {
+        if (cancelled) return
+        setLogQueue((prev) => [...prev, ...res.rows])
+        setLogQueueTotal(res.total)
+        if (logQueue.length + res.rows.length < res.total) setLogQueuePage((p) => p + 1)
+      })
+      .catch((err) => {
+        if (!cancelled) setLogQueueError(err.message || 'Could not load queue items.')
+      })
+      .finally(() => {
+        if (!cancelled) setLogQueueLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [tab, token, project.id, logQueuePage, logQueueTotal, logQueueLoading, logQueueError, logQueue])
 
   const counts = data?.counts ?? {}
   const stageCounts = data?.stageCounts ?? {}
@@ -522,21 +702,84 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   const pageData = tabKind ? pages[`${tabKind}:${tabPage}`] : null
   // Infinite scroll (no pager at all, user direction 2026-10-31): all
   // pages loaded so far for this tab are concatenated, in order, so
-  // rows beyond the first 50 are reached by scrolling / Load more,
+  // rows beyond the first chunk are reached by scrolling / Load more,
   // not by a Previous/Next pager. pageRows is therefore the loaded
-  // rows, not just the current page. S/N below is i + 1, the global
-  // position in that concatenated list.
-  const pageRows = tabKind
-    ? Array.from({ length: tabPage + 1 }, (_, p) => pages[`${tabKind}:${p}`]?.rows ?? []).flat()
+  // rows, not just the current chunk.
+  // S/N definition, thread tabs (Database, References, Notes): S/N is
+  // the position in the newest-first list, so S/N 1 is the newest row
+  // overall (for trades, trade 211 when the total is 211, then 210,
+  // 209, and so on). Load-more appends older rows below without
+  // renumbering rows already shown. Queue and Sync log keep their
+  // previous ascending order; only the three thread tabs are reversed.
+  const threadRows = isThreadTab && tabKind
+    ? Array.from({ length: tabPage + 1 }, (_, c) => threadChunks[`${tabKind}:rev:${c}`]?.rows ?? []).flat()
     : []
-  const pageTotal = pageData?.total ?? (tabKind ? pages[`${tabKind}:0`]?.total : null) ?? counts[tabKind === 'sync-log' ? 'sync_log' : tabKind] ?? 0
-  const rawPageIsLoading = tabKind ? !!pageLoading[`${tabKind}:${tabPage}`] : false
+  const pageRows = isThreadTab
+    ? threadRows
+    : tabKind
+      ? Array.from({ length: tabPage + 1 }, (_, p) => pages[`${tabKind}:${p}`]?.rows ?? []).flat()
+      : []
+  const threadTotal = isThreadTab && tabKind ? threadTotals[tabKind] : null
+  const pageTotal = isThreadTab
+    ? threadTotal ?? counts[tabKind] ?? 0
+    : pageData?.total ?? (tabKind ? pages[`${tabKind}:0`]?.total : null) ?? counts[tabKind === 'sync-log' ? 'sync_log' : tabKind] ?? 0
+  const threadPageKey = isThreadTab && tabKind ? `${tabKind}:rev:${tabPage}` : `${tabKind}:${tabPage}`
+  const threadProbeKey = isThreadTab && tabKind ? `${tabKind}:rev:probe` : null
+  const rawPageIsLoading = tabKind
+    ? !!(pageLoading[threadPageKey] || (isThreadTab && threadTotal == null && threadProbeKey && pageLoading[threadProbeKey]))
+    : false
   const pageIsLoading = rawPageIsLoading && pageRows.length === 0
   const pageLoadingMore = rawPageIsLoading && pageRows.length > 0
-  const pageErr = pageRows.length === 0 && tabKind ? pageError[`${tabKind}:${tabPage}`] : ''
+  const pageErr = pageRows.length === 0 && tabKind
+    ? pageError[threadPageKey] || (threadProbeKey ? pageError[threadProbeKey] : '') || ''
+    : ''
+  // Error on the current load-more page only, shown by the footer
+  // while the rows already loaded stay visible.
+  const pageLoadMoreError = pageRows.length > 0 && tabKind ? pageError[threadPageKey] || '' : ''
+  // Retry re-requests the SAME page (or the thread probe, when the
+  // total is not known yet); it never advances to the next page, so
+  // a failed page cannot be silently skipped.
+  const retryCurrentPage = () => {
+    const key = isThreadTab && threadTotal == null && threadProbeKey ? threadProbeKey : threadPageKey
+    setPageError((prev) => ({ ...prev, [key]: '' }))
+    setPageAttempts((prev) => ({ ...prev, [key]: (prev[key] || 0) + 1 }))
+  }
+  const retryLogQueue = () => setLogQueueError('')
+  // Combined Sync log entries: queue items and sync-log rows in one
+  // chronological list, oldest first, ties keep queue-before-sync
+  // order (stable sort). Built only from rows already fetched; no
+  // row is created, and no sync request is made from this tab.
+  const combinedLog = tab === 'log'
+    ? [
+        ...logQueue.map((q) => ({ kind: 'queue', row: q, time: q.created_at })),
+        ...pageRows.map((s) => ({ kind: 'sync', row: s, time: s.created_at })),
+      ].sort((a, b) => {
+        const ta = a.time ? new Date(a.time).getTime() : 0
+        const tb = b.time ? new Date(b.time).getTime() : 0
+        return ta - tb
+      })
+    : []
+  const syncDetailFields = (entry) => {
+    const row = entry.row
+    if (entry.kind === 'sync') {
+      const first = [
+        ['trade_id', row.trade_id],
+        ['target', row.target],
+        ['success', row.success ? 'Yes' : 'No'],
+        ['failure_reason', row.failure_reason],
+        ['created_at', row.created_at],
+      ]
+      const seen = new Set(first.map(([k]) => k))
+      return [...first, ...Object.entries(row).filter(([k]) => !seen.has(k)).map(([k, v]) => [k, v])]
+    }
+    return Object.entries(row)
+  }
   // Database design, page-local counts and filters (see state note).
   const dbPageMatched = pageRows.filter((t) => t.stage === 'matched').length
   const dbPageNew = pageRows.filter((t) => t.stage === 'new').length
+  const dbPageExtracted = pageRows.filter((t) => t.stage === 'extracted').length
+  const dbPageFinished = pageRows.filter((t) => t.stage === 'finished').length
+  const dbPageOther = pageRows.length - dbPageExtracted - dbPageFinished - dbPageMatched - dbPageNew
   const dbFilterActive = dbStage !== 'all' || dbQuery.trim() !== ''
   const dbFilteredRows = pageRows
     .map((t, idx) => ({ t, idx }))
@@ -620,7 +863,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
     return v == null ? null : Number(v).toLocaleString('en-US')
   }
   return (
-    <main className={`project-page${wide ? ' project-page-wide' : ''} project-page-${tab}${panelOpen ? ' project-panel-open' : ''}`} aria-label={`Dashboard for ${project.name}`}>
+    <main className={`project-page${wide ? ' project-page-wide' : ''} project-page-${tab}${panelOpen ? ' project-panel-open' : ''}${sidebarCollapsed ? ' project-sidebar-collapsed' : ''}`} aria-label={`Dashboard for ${project.name}`}>
       <aside className="admin-sidebar" aria-label="Project navigation">
         <div className="admin-sidebar-brand">
           <span className="admin-sidebar-mark" aria-hidden="true">M</span>
@@ -644,15 +887,18 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
         <div className="admin-sidebar-foot">
           <button type="button" className="admin-nav-item" onClick={goToChats}><span className="admin-nav-icon" aria-hidden="true">≡</span><span className="admin-nav-label">Chats</span></button>
           <button type="button" className="admin-nav-item" onClick={goToProjects}><span className="admin-nav-icon" aria-hidden="true">‹</span><span className="admin-nav-label">Back to projects</span></button>
+          <button type="button" className="admin-nav-item admin-sidebar-collapse" onClick={() => setSidebarCollapsed(true)} aria-label="Collapse sidebar"><span className="admin-nav-icon" aria-hidden="true">«</span><span className="admin-nav-label">Collapse sidebar</span></button>
         </div>
       </aside>
       <div className="admin-content">
+      {sidebarCollapsed ? (
+        <button type="button" className="project-sidebar-restore" onClick={() => setSidebarCollapsed(false)} aria-label="Show sidebar">
+          ☰ Menu
+        </button>
+      ) : null}
       <div className="project-topbar" aria-label="Dashboard top bar">
         <button type="button" className="project-menu-btn" onClick={() => setPanelOpen((v) => !v)} aria-expanded={panelOpen} aria-label={panelOpen ? 'Close dashboard menu' : 'Open dashboard menu'}>
           ☰ Menu
-        </button>
-        <button type="button" className="project-topbar-chats" onClick={goToChats} aria-label="Back to chats">
-          Chats
         </button>
       </div>
       {panelOpen ? (
@@ -680,11 +926,11 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           </div>
         </>
       ) : null}
-      {/* No Back buttons in the hero: the persistent Chats / Projects
-          switch above the dashboard (desktop) and the Menu / Chats
-          top bar plus side panel (iPhone) already do exactly the same
-          navigation, so a second pair here was a duplicate. onBack /
-          onBackToChats are still used by the side panel below. */}
+      {/* No Back buttons in the hero: the top Chats / Projects buttons
+          were removed as duplicates. Chats and Back to projects live
+          in the sidebar foot (desktop) and in the side panel (phone),
+          reached from the Menu button. onBack / onBackToChats are
+          still used by the sidebar foot and the side panel. */}
       {tab === 'dashboard' && (
       <header className="admin-hero premium-hero">
         <div className="premium-hero-main">
@@ -841,7 +1087,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
               {pageIsLoading ? (
                 <p className="project-empty">Loading queue…</p>
               ) : pageErr ? (
-                <p className="project-empty">{pageErr}</p>
+                <PageErrorNote error={pageErr} onRetry={retryCurrentPage} />
               ) : pageRows.length === 0 ? (
                 <p className="project-empty">No trades queued yet. The one-trader test will land here.</p>
               ) : (
@@ -860,7 +1106,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       </li>
                     ))}
                   </ul>
-                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} onLoadMore={() => setPageNums((prev) => ({ ...prev, queue: prev.queue + 1 }))} />
+                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} error={pageLoadMoreError} onRetry={retryCurrentPage} onLoadMore={() => setPageNums((prev) => ({ ...prev, queue: prev.queue + 1 }))} />
                 </>
               )}
             </section>
@@ -984,7 +1230,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
               <div className="db-panel-head">
                 <div>
                   <h2>Database view</h2>
-                  <p className="muted">All trades, newest at the bottom</p>
+                  <p className="muted">All trades, newest at the top (S/N 1 is the newest trade). Older trades load below as you scroll, one continuous list, not pages.</p>
                 </div>
                 <div className="db-tools">
                   <label className="db-search">
@@ -1007,6 +1253,8 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                 <span className="db-filters-label">Stage</span>
                 {[
                   ['all', 'All', pageRows.length],
+                  ['extracted', 'Extracted', dbPageExtracted],
+                  ['finished', 'Finished', dbPageFinished],
                   ['matched', 'Matched', dbPageMatched],
                   ['new', 'New', dbPageNew],
                 ].map(([key, label, count]) => (
@@ -1017,18 +1265,20 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
               </div>
               {pageRows.length > 0 ? (
                 <div className="db-mix">
-                  <div className="db-mix-meta"><span>Stage mix on this page</span><span>{dbPageMatched} matched · {dbPageNew} new</span></div>
-                  <div className="db-mix-bar" role="img" aria-label={`${dbPageMatched} matched, ${dbPageNew} new on this page`}>
+                  <div className="db-mix-meta"><span>Stage mix on loaded rows</span><span>{dbPageExtracted} extracted · {dbPageFinished} finished · {dbPageMatched} matched · {dbPageNew} new{dbPageOther > 0 ? ` · ${dbPageOther} other` : ''}</span></div>
+                  <div className="db-mix-bar" role="img" aria-label={`${dbPageExtracted} extracted, ${dbPageFinished} finished, ${dbPageMatched} matched, ${dbPageNew} new on loaded rows`}>
+                    <div className="db-mix-other" style={{ width: `${(dbPageExtracted / pageRows.length) * 100}%` }} />
+                    <div className="db-mix-other" style={{ width: `${(dbPageFinished / pageRows.length) * 100}%` }} />
                     <div className="db-mix-matched" style={{ width: `${(dbPageMatched / pageRows.length) * 100}%` }} />
                     <div className="db-mix-new" style={{ width: `${(dbPageNew / pageRows.length) * 100}%` }} />
                   </div>
                 </div>
               ) : null}
-              {dbFilterActive ? <p className="muted db-filter-note">{dbFilteredRows.length} of {pageRows.length} on this page match this filter. Search and stage filter apply to this page only, not the whole collection.</p> : null}
+              {dbFilterActive ? <p className="muted db-filter-note">{dbFilteredRows.length} of {pageRows.length} loaded rows match this filter. Search and stage filter apply to the rows loaded so far only, not the whole collection.</p> : null}
               {pageIsLoading ? (
                 <p className="project-empty">Loading trades…</p>
               ) : pageErr ? (
-                <p className="project-empty">{pageErr}</p>
+                <PageErrorNote error={pageErr} onRetry={retryCurrentPage} />
               ) : (
                 <>
                   <div className="project-table-wrap">
@@ -1104,7 +1354,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       </article>
                     ))}
                   </div>
-                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} onLoadMore={() => setPageNums((prev) => ({ ...prev, database: prev.database + 1 }))} />
+                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} error={pageLoadMoreError} onRetry={retryCurrentPage} onLoadMore={() => setPageNums((prev) => ({ ...prev, database: prev.database + 1 }))} />
                 </>
               )}
             </section>
@@ -1113,10 +1363,11 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           {tab === 'references' && (
             <section className="admin-card" aria-label="References">
               <h2>References</h2>
+              <p className="muted">Newest first, latest at the top (S/N 1 is the newest reference). Older references load below as you scroll, one continuous list, not pages.</p>
               {pageIsLoading ? (
                 <p className="project-empty">Loading references…</p>
               ) : pageErr ? (
-                <p className="project-empty">{pageErr}</p>
+                <PageErrorNote error={pageErr} onRetry={retryCurrentPage} />
               ) : (
                 <>
                   <div className="project-table-wrap">
@@ -1165,7 +1416,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       </article>
                     ))}
                   </div>
-                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} onLoadMore={() => setPageNums((prev) => ({ ...prev, references: prev.references + 1 }))} />
+                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} error={pageLoadMoreError} onRetry={retryCurrentPage} onLoadMore={() => setPageNums((prev) => ({ ...prev, references: prev.references + 1 }))} />
                 </>
               )}
             </section>
@@ -1174,10 +1425,11 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           {tab === 'notes' && (
             <section className="admin-card" aria-label="Notes">
               <h2>Notes</h2>
+              <p className="muted">Newest first, latest at the top (S/N 1 is the newest note). Older notes load below as you scroll, one continuous list, not pages. Rows load in 50-row chunks behind the scenes; there is no page navigation.</p>
               {pageIsLoading ? (
                 <p className="project-empty">Loading notes…</p>
               ) : pageErr ? (
-                <p className="project-empty">{pageErr}</p>
+                <PageErrorNote error={pageErr} onRetry={retryCurrentPage} />
               ) : (
                 <>
                   <div className="project-table-wrap">
@@ -1255,7 +1507,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       </article>
                     ))}
                   </div>
-                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} onLoadMore={() => setPageNums((prev) => ({ ...prev, notes: prev.notes + 1 }))} />
+                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} error={pageLoadMoreError} onRetry={retryCurrentPage} onLoadMore={() => setPageNums((prev) => ({ ...prev, notes: prev.notes + 1 }))} />
                 </>
               )}
             </section>
@@ -1264,29 +1516,63 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           {tab === 'log' && (
             <section className="admin-card" aria-label="Sync log">
               <h2>Sync log</h2>
-              {pageIsLoading ? (
+              <p className="muted">Queue items and their sync requests and results together, in order, in one list. Tap Details on any entry for its full fields. Nothing here creates a sync request and no sync data is changed; sync requests are made from Database and Latest.</p>
+              {pageIsLoading && combinedLog.length === 0 ? (
                 <p className="project-empty">Loading sync log…</p>
-              ) : pageErr ? (
-                <p className="project-empty">{pageErr}</p>
-              ) : pageRows.length === 0 ? (
-                <p className="project-empty">No log entries yet.</p>
+              ) : pageErr && combinedLog.length === 0 ? (
+                <PageErrorNote error={pageErr} onRetry={retryCurrentPage} />
+              ) : combinedLog.length === 0 ? (
+                <p className="project-empty">No queue items or log entries yet.</p>
               ) : (
                 <>
-                  <ul className="project-list premium-list">
-                    {pageRows.map((s, i) => (
-                      <li key={s.id}>
-                        <div className="project-row">
-                          <span className="project-row-name">
-                            {i + 1}. {show(s.target)} · {s.target === 'sync_request' ? 'requested' : s.success ? 'ok' : 'failed'} · trade {s.trade_id}
-                          </span>
-                          <span className="muted">
-                            {show(s.failure_reason)} · {when(s.created_at)}
-                          </span>
-                        </div>
-                      </li>
-                    ))}
+                  {pageErr ? (
+                    <div className="project-loadmore-error-wrap" role="alert">
+                      <p className="project-empty">Sync entries could not be loaded: {pageErr}. Queue items below are still shown.</p>
+                      <button type="button" className="project-pager-btn" onClick={retryCurrentPage}>
+                        Retry sync entries
+                      </button>
+                    </div>
+                  ) : null}
+                  {logQueueError ? (
+                    <div className="project-loadmore-error-wrap" role="alert">
+                      <p className="project-empty">Queue items could not be loaded: {logQueueError}. Sync entries below are still shown.</p>
+                      <button type="button" className="project-pager-btn" onClick={retryLogQueue}>
+                        Retry queue
+                      </button>
+                    </div>
+                  ) : null}
+                  {logQueueLoading ? <p className="muted">Loading queue items…</p> : null}
+                  <ul className="project-list premium-list sync-log-list">
+                    {combinedLog.map((entry, i) => {
+                      const row = entry.row
+                      const isSync = entry.kind === 'sync'
+                      const pill = isSync
+                        ? row.target === 'sync_request'
+                          ? <span className="sync-pill sync-pill--request">Request</span>
+                          : row.success
+                            ? <span className="sync-pill sync-pill--success">Success</span>
+                            : <span className="sync-pill sync-pill--failure">Failed</span>
+                        : <span className="sync-pill sync-pill--queue">Queue</span>
+                      return (
+                        <li key={`${entry.kind}-${row.id}`}>
+                          <div className="project-row sync-log-row">
+                            <span className="project-row-name">
+                              {i + 1}. {isSync ? `${show(row.target)} · trade ${show(row.trade_id)}` : `${show(row.subject || row.message_id)} · ${show(row.sender)}`}
+                            </span>
+                            <span className="sync-log-meta">
+                              {pill}
+                              <span className="muted">{isSync ? show(row.target) : show(row.status)} · {when(row.created_at)}</span>
+                              <button type="button" className="raw-message-btn" onClick={() => setSyncDetail(entry)} aria-label={`View full details for ${isSync ? `sync entry ${row.id}` : `queue item ${row.id}`}`}>
+                                Details
+                              </button>
+                            </span>
+                          </div>
+                        </li>
+                      )
+                    })}
                   </ul>
-                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} onLoadMore={() => setPageNums((prev) => ({ ...prev, log: prev.log + 1 }))} />
+                  <p className="muted">Showing {combinedLog.length} combined entries: {pageRows.length} of {pageTotal} sync entries loaded{logQueueTotal != null ? `, ${logQueue.length} of ${logQueueTotal} queue items loaded` : ''}. Older sync entries load below as you scroll.</p>
+                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} error={pageLoadMoreError} onRetry={retryCurrentPage} onLoadMore={() => setPageNums((prev) => ({ ...prev, log: prev.log + 1 }))} />
                 </>
               )}
             </section>
@@ -1317,6 +1603,30 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
             </div>
             <div className="raw-message-dialog-body">
               {rawMessage.text || `No text stored for ${rawMessage.column || 'raw_message'}.`}
+            </div>
+          </div>
+        </div>
+      )}
+      {syncDetail && (
+        <div className="raw-message-backdrop" onClick={() => setSyncDetail(null)} role="presentation">
+          <div className="raw-message-dialog" role="dialog" aria-modal="true" aria-label={`Full details for ${syncDetail.kind === 'sync' ? `sync entry ${syncDetail.row.id}` : `queue item ${syncDetail.row.id}`}`} onClick={(e) => e.stopPropagation()}>
+            <div className="raw-message-dialog-head">
+              <strong>
+                {syncDetail.kind === 'sync' ? `Sync entry ${syncDetail.row.id} · ${show(syncDetail.row.target)} · trade ${show(syncDetail.row.trade_id)}` : `Queue item ${syncDetail.row.id} · ${show(syncDetail.row.subject || syncDetail.row.message_id)}`}
+              </strong>
+              <button type="button" className="raw-message-close" onClick={() => setSyncDetail(null)} aria-label="Close">
+                Close
+              </button>
+            </div>
+            <div className="raw-message-dialog-body">
+              <dl className="project-detail-list">
+                {syncDetailFields(syncDetail).map(([k, v]) => (
+                  <div key={k} className="project-detail-row">
+                    <dt>{k}</dt>
+                    <dd>{k.endsWith('_at') ? when(v) : show(v)}</dd>
+                  </div>
+                ))}
+              </dl>
             </div>
           </div>
         </div>
