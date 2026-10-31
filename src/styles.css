@@ -2659,3 +2659,33 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
   .project-card-fields > div { grid-template-columns: 96px 1fr; }
   .project-tab { padding: 12px 14px; }
 }
+
+/* ---- Side panel dashboard navigation (this build, local only) ----
+   Desktop and tablet: the top bar and panel are never shown, the
+   tab pill bar and the Chats / Projects switch stay exactly as before.
+   iPhone (600px and below): the pill bar is hidden, the dashboard
+   top bar shows Menu at the upper left and Chats at the upper right,
+   and the 6 tabs live in a left drawer that closes on tab tap, on
+   the X, on the backdrop, on Menu again, or on Escape. */
+.project-topbar { display: none; }
+.project-switch-dashboard { display: contents; }
+@media (max-width: 600px) {
+  .project-switch-dashboard { display: none; }
+  .project-topbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; flex-shrink: 0; }
+  .project-menu-btn, .project-topbar-chats { min-height: 44px; padding: 12px 16px; font-size: 16px; border: 0.5px solid var(--separator); border-radius: 999px; background: var(--fill); color: var(--text); }
+  .project-page-wide .project-header-actions { display: none; }
+  .project-page-wide .project-tabs { display: none; }
+  .project-panel-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); z-index: 100; }
+  .project-panel { position: fixed; left: 0; top: 0; bottom: 0; width: min(280px, 80vw); background: var(--raised); color: var(--text); z-index: 101; display: flex; flex-direction: column; gap: 4px; padding: calc(16px + env(safe-area-inset-top)) 16px calc(16px + env(safe-area-inset-bottom)); overflow-y: auto; -webkit-overflow-scrolling: touch; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25); }
+  .project-panel-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .project-panel-head strong { font-size: 18px; }
+  .project-panel-close { min-width: 44px; min-height: 44px; padding: 10px 12px; font-size: 18px; border: 0.5px solid var(--separator); border-radius: 999px; background: var(--fill); color: var(--text); }
+  .project-panel-item { width: 100%; min-height: 44px; padding: 12px 16px; font-size: 16px; text-align: left; border: 0.5px solid var(--separator); border-radius: 12px; background: var(--fill); color: var(--text); }
+  .project-panel-divider { height: 0.5px; background: var(--separator); margin: 12px 0; }
+  .project-panel-tab.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+  .project-page-database .project-panel-tab.active { background: #0f766e; border-color: #0f766e; }
+  .project-page-references .project-panel-tab.active { background: #1e40af; border-color: #1e40af; }
+  .project-page-notes .project-panel-tab.active { background: #6d28d9; border-color: #6d28d9; }
+  .project-page-log .project-panel-tab.active { background: #92400e; border-color: #92400e; }
+  .project-panel-open .project-card-list, .project-panel-open .project-table-wrap, .project-panel-open .project-stage-grid, .project-panel-open .project-page-wide > section > ul.project-list { overflow: hidden; }
+}

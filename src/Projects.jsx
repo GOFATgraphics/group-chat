@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 // Server-backed Project pages for the Mercancia trade upgrade.
 // Projects now live in the server tables from migration 0019
@@ -323,6 +323,22 @@ function Pager({ page, total, onPage }) {
 
 export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   const [tab, setTab] = useState('queue')
+  const [panelOpen, setPanelOpen] = useState(false)
+  const panelCloseRef = useRef(null)
+  const closePanel = () => setPanelOpen(false)
+  const goToTab = (key) => {
+    setTab(key)
+    setPanelOpen(false)
+  }
+  const goToChats = () => {
+    setPanelOpen(false)
+    if (onBackToChats) onBackToChats()
+    else onBack()
+  }
+  const goToProjects = () => {
+    setPanelOpen(false)
+    onBack()
+  }
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -348,16 +364,32 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   const [showEmptyColumns, setShowEmptyColumns] = useState(false)
 
   useEffect(() => {
-    if (!rawMessage && !detail) return undefined
+    if (!rawMessage && !detail && !panelOpen) return undefined
     const onKey = (e) => {
       if (e.key === 'Escape') {
         setRawMessage(null)
         setDetail(null)
+        setPanelOpen(false)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [rawMessage, detail])
+  }, [rawMessage, detail, panelOpen])
+
+  // Side panel: focus the close button first when it opens, and stop
+  // the page behind it from scrolling while it is open.
+  useEffect(() => {
+    if (!panelOpen) return undefined
+    if (panelCloseRef.current) panelCloseRef.current.focus()
+    const prevBody = document.body.style.overflow
+    const prevHtml = document.documentElement.style.overflow
+    document.body.style.overflow = 'hidden'
+    document.documentElement.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = prevBody
+      document.documentElement.style.overflow = prevHtml
+    }
+  }, [panelOpen])
 
   useEffect(() => {
     let cancelled = false
@@ -471,8 +503,49 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   const detailEmptyCount = detailFields().length - detailFields().filter((f) => !isEmptyCellValue(f.value)).length
 
   const wide = true
+  const panelTabs = [
+    ['queue', 'Queue'],
+    ['stages', 'Stages'],
+    ['database', 'Database view'],
+    ['references', 'References'],
+    ['notes', 'Notes'],
+    ['log', 'Sync log'],
+  ]
   return (
-    <main className={`project-page${wide ? ' project-page-wide' : ''} project-page-${tab}`} aria-label={`Dashboard for ${project.name}`}>
+    <main className={`project-page${wide ? ' project-page-wide' : ''} project-page-${tab}${panelOpen ? ' project-panel-open' : ''}`} aria-label={`Dashboard for ${project.name}`}>
+      <div className="project-topbar" aria-label="Dashboard top bar">
+        <button type="button" className="project-menu-btn" onClick={() => setPanelOpen((v) => !v)} aria-expanded={panelOpen} aria-label={panelOpen ? 'Close dashboard menu' : 'Open dashboard menu'}>
+          ☰ Menu
+        </button>
+        <button type="button" className="project-topbar-chats" onClick={goToChats} aria-label="Back to chats">
+          Chats
+        </button>
+      </div>
+      {panelOpen ? (
+        <>
+          <div className="project-panel-backdrop" onClick={closePanel} role="presentation" aria-hidden="true" />
+          <div className="project-panel" role="dialog" aria-modal="true" aria-label="Dashboard menu">
+            <div className="project-panel-head">
+              <strong>Menu</strong>
+              <button ref={panelCloseRef} type="button" className="project-panel-close" onClick={closePanel} aria-label="Close dashboard menu">
+                ✕
+              </button>
+            </div>
+            <button type="button" className="project-panel-item" onClick={goToChats}>
+              Chats
+            </button>
+            <button type="button" className="project-panel-item" onClick={goToProjects}>
+              &lsaquo; Back to projects
+            </button>
+            <div className="project-panel-divider" role="presentation" />
+            {panelTabs.map(([key, label]) => (
+              <button key={key} type="button" className={`project-panel-item project-panel-tab ${tab === key ? 'active' : ''}`} onClick={() => goToTab(key)} aria-selected={tab === key}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </>
+      ) : null}
       <header className="project-header">
         <div className="project-header-actions">
           <button className="project-back" onClick={onBack} aria-label="Back to projects">
@@ -588,10 +661,6 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
               <h2>Database view</h2>
               {syncMessage ? <p className="project-empty">{syncMessage}</p> : null}
               {syncError ? <p className="project-empty">{syncError}</p> : null}
-              <p className="muted">
-                Own database view inside the app, full width like the TradesDB sheet. This list is paged, 50 trades at a time, and shows the slim trade fields only, so it opens fast. Long-text columns are View buttons only: tapping one loads that one trade&apos;s text. Tap Details on a row to see that one trade&apos;s full sheet row, in sheet order, with empty fields hidden by default.
-                {data ? (data.hasFullData ? ` ${serverEmptyColumns.length} empty columns in the full sheet data.` : ' Full trade data has not been backfilled yet, so Details shows the slim fields.') : ''}
-              </p>
               {data?.hasFullData && serverEmptyColumns.length > 0 ? (
                 <p className="muted">
                   {showEmptyColumns ? `${serverEmptyColumns.length} empty columns shown` : `${serverEmptyColumns.length} empty columns hidden`}{' '}
@@ -702,7 +771,6 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           {tab === 'references' && (
             <section aria-label="References">
               <h2>References</h2>
-              <p className="muted">Shadow Reference Bridge inside the app, full width like the sheet. Scroll sideways for more columns.</p>
               {pageIsLoading ? (
                 <p className="project-empty">Loading references…</p>
               ) : pageErr ? (
@@ -764,7 +832,6 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           {tab === 'notes' && (
             <section aria-label="Notes">
               <h2>Notes</h2>
-              <p className="muted">Shadow Notes Log inside the app, full width like the sheet. Scroll sideways for more columns. A blank linked trade ID means the note had no matching trade.</p>
               {pageIsLoading ? (
                 <p className="project-empty">Loading notes…</p>
               ) : pageErr ? (
@@ -855,7 +922,6 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           {tab === 'log' && (
             <section aria-label="Sync log">
               <h2>Sync log</h2>
-              <p className="muted">In-app sync requests and attempts, not the Notes log. A row with target sync_request is a Sync tap, or Ali marking a finished trade ready, awaiting Adam&apos;s operator script; a row with target google_sheet is a completed attempt by that script. A trade with a successful google_sheet row is synced once only and is never re-appended. The app never writes to Sheets itself, and Ali never executes a sync.</p>
               {pageIsLoading ? (
                 <p className="project-empty">Loading sync log…</p>
               ) : pageErr ? (

@@ -2214,7 +2214,7 @@ export default function Chat({ session }) {
     if (projectScreen.page === 'dashboard') {
       return (
         <>
-          {switchBar}
+          <div className="project-switch-dashboard">{switchBar}</div>
           <ProjectDashboard project={projectScreen.project} token={session?.access_token} onBack={() => setProjectScreen({ page: 'list' })} onBackToChats={() => setProjectScreen(null)} />
         </>
       )
