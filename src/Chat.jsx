@@ -2785,28 +2785,25 @@ function Message({
 }) {
   const pressTimer = useRef(null)
   const [copied, setCopied] = useState(false)
+  const [copyFailed, setCopyFailed] = useState(false)
+  const [selecting, setSelecting] = useState(false)
+  const piecesRef = useRef(null)
+  const copiedTimer = useRef(null)
   // Time and ticks show under the last message of each run; tapping any
   // other message reveals its own.
   const [revealed, setRevealed] = useState(false)
 
-  // Copy from the long-press menu (on phones the bubble text itself can't be
-  // selected, because a long press opens the menu).
-  async function copy() {
-    const text = msg.content?.trim() ? msg.content : url ?? ''
-    if (!text) return
-    try {
-      await navigator.clipboard.writeText(text)
-    } catch {
-      const area = document.createElement('textarea')
-      area.value = text
-      document.body.appendChild(area)
-      area.select()
-      document.execCommand('copy')
-      area.remove()
+  // Selection mode ends when the user taps Done, or taps outside this
+  // bubble. Taps inside the bubble must keep working, so the user can drag
+  // to select part of the text with the native handles.
+  useEffect(() => {
+    if (!selecting) return undefined
+    const onDown = (e) => {
+      if (piecesRef.current && !piecesRef.current.contains(e.target)) setSelecting(false)
     }
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1200)
-  }
+    document.addEventListener('pointerdown', onDown, true)
+    return () => document.removeEventListener('pointerdown', onDown, true)
+  }, [selecting])
   // Swipe-to-reply, like iMessage: drag a bubble to the right and it follows
   // the finger (with resistance), a curved reply arrow grows in on the left,
   // and letting go past the threshold starts a reply. A mostly vertical drag
@@ -2823,7 +2820,7 @@ function Message({
     if (fire && was?.dragging && swipeArmed.current) onReply?.()
     swipeArmed.current = false
   }
-  const swipeHandlers = readOnly
+  const swipeHandlers = readOnly || selecting
     ? {}
     : {
         onPointerDown: (e) => {
@@ -2877,6 +2874,67 @@ function Message({
   // Just one to three emoji, nothing else: shown big without a bubble.
   const jumbo = useMemo(() => (hasMulti || msg.attachment_path || msg.call_duration != null ? 0 : emojiOnlyCount(shownText)), [shownText, msg.attachment_path, msg.call_duration, hasMulti])
 
+  // Plain text for the copy button and the Copy menu item. A reminder or a
+  // poll copies its special text (without the icon prefix); any other text
+  // message copies its content exactly as written. Never encode this text:
+  // encodeURIComponent would turn spaces into %20 in the clipboard.
+  const copyableText = special ? specialText : msg.content?.trim() ? msg.content : null
+  const hasCopyableText = Boolean(copyableText) && !isVoice && !isCall
+  const showCopyState = (ok) => {
+    clearTimeout(copiedTimer.current)
+    setCopied(ok)
+    setCopyFailed(!ok)
+    copiedTimer.current = setTimeout(() => {
+      setCopied(false)
+      setCopyFailed(false)
+    }, ok ? 1200 : 4000)
+  }
+  // Robust clipboard write. The async Clipboard API is tried first. On iOS,
+  // where it can fail silently, the fallback focuses a temporary textarea,
+  // selects the full range, and only then runs execCommand('copy'). Copied
+  // is shown only after one of those two actually succeeds.
+  async function writePlainTextToClipboard(text) {
+    if (!text) return false
+    if (navigator.clipboard) {
+      try {
+        await navigator.clipboard.writeText(text)
+        return true
+      } catch {
+        // Fall through to the textarea fallback below.
+      }
+    }
+    try {
+      const area = document.createElement('textarea')
+      area.value = text
+      area.setAttribute('readonly', '')
+      area.style.position = 'fixed'
+      area.style.top = '0'
+      area.style.left = '0'
+      area.style.width = '1px'
+      area.style.height = '1px'
+      area.style.opacity = '0'
+      document.body.appendChild(area)
+      area.focus()
+      area.setSelectionRange(0, area.value.length)
+      const ok = document.execCommand('copy')
+      area.remove()
+      return ok === true
+    } catch {
+      return false
+    }
+  }
+  async function copyText() {
+    if (!copyableText) return
+    showCopyState(await writePlainTextToClipboard(copyableText))
+  }
+  // Media and file messages keep Copy link as a separate action. It copies
+  // the file link only, never message text, and never an encoded version
+  // of that link.
+  async function copyLink() {
+    if (!url) return
+    showCopyState(await writePlainTextToClipboard(url))
+  }
+
   const grouped = useMemo(() => {
     const map = new Map()
     for (const r of reactions) {
@@ -2889,7 +2947,9 @@ function Message({
 
   // Long-press on touch, right-click or double-click on desktop opens tapbacks.
   // In a read-only owner view, no gesture opens the reaction picker.
-  const gestures = readOnly
+  // In selection mode the long-press picker is suspended for this one
+  // bubble, so a long press can start a native text selection instead.
+  const gestures = readOnly || selecting
     ? {}
     : {
     onPointerDown: (e) => {
@@ -2959,11 +3019,12 @@ function Message({
           )
         )}
         <div
-          className="pieces"
+          ref={piecesRef}
+          className={`pieces ${selecting ? 'selecting' : ''}`}
           style={dragX ? { transform: `translateX(${dragX}px)`, transition: 'none' } : undefined}
           onClick={(e) => {
             e.stopPropagation()
-            if (e.detail === 1) setRevealed((r) => !r)
+            if (!selecting && e.detail === 1) setRevealed((r) => !r)
           }}
           {...gestures}
           {...swipeHandlers}
@@ -3132,6 +3193,34 @@ function Message({
             </button>
           )}
 
+          {hasCopyableText && !selecting && (
+            <button
+              className="copy-hint"
+              title="Copy"
+              aria-label="Copy message"
+              onClick={(e) => {
+                e.stopPropagation()
+                copyText()
+              }}
+            >
+              <ClipboardIcon />
+            </button>
+          )}
+
+          {selecting && (
+            <button
+              className="copy-hint select-done"
+              title="Done"
+              aria-label="Done selecting text"
+              onClick={(e) => {
+                e.stopPropagation()
+                setSelecting(false)
+              }}
+            >
+              Done
+            </button>
+          )}
+
           {pickerOpen && !readOnly && (
             <>
               <div className="tapback-bar">
@@ -3162,14 +3251,34 @@ function Message({
                     Save
                   </button>
                 )}
-                {(msg.content?.trim() || url) && (
+                {hasCopyableText && (
                   <button
                     onClick={() => {
                       onClosePicker()
-                      copy()
+                      copyText()
                     }}
                   >
-                    {msg.content?.trim() ? 'Copy' : 'Copy link'}
+                    Copy
+                  </button>
+                )}
+                {url && (
+                  <button
+                    onClick={() => {
+                      onClosePicker()
+                      copyLink()
+                    }}
+                  >
+                    Copy link
+                  </button>
+                )}
+                {hasCopyableText && (
+                  <button
+                    onClick={() => {
+                      onClosePicker()
+                      setSelecting(true)
+                    }}
+                  >
+                    Select text
                   </button>
                 )}
                 <button
@@ -3205,9 +3314,10 @@ function Message({
             </>
           )}
         </div>
-        {(last || revealed || copied || msg._status) && (
+        {(last || revealed || copied || copyFailed || msg._status) && (
           <div className="ticks">
             {copied && <span className="copied-flash">Copied</span>}
+            {copyFailed && <span className="copied-flash copy-failed">Copy failed, select the text and copy it by hand</span>}
             <span className="ticks-time">
               {new Date(msg.created_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
             </span>
@@ -3895,6 +4005,13 @@ const ClipIcon = () => (
 const ArrowUpIcon = () => (
   <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
     <path d="M12 19V5M5.5 11.5L12 5l6.5 6.5" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+)
+const ClipboardIcon = () => (
+  <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+    <rect x="8" y="3" width="10" height="4" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.8" />
+    <path d="M6 7h12a1.5 1.5 0 0 1 1.5 1.5V20a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 20V8.5A1.5 1.5 0 0 1 6 7z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+    <path d="M9 12h6M9 16h4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
   </svg>
 )
 const SmileIcon = () => (

@@ -658,7 +658,68 @@ video.media { cursor: default; }
 
 @media (hover: none) {
   .pieces { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  /* Selection mode only: this one bubble becomes selectable again, with
+     native handles and the native copy menu, on touch devices too. */
+  .pieces.selecting,
+  .pieces.selecting .bubble,
+  .pieces.selecting .jumbo-emoji {
+    -webkit-user-select: text;
+    user-select: text;
+    -webkit-touch-callout: default;
+  }
 }
+
+/* ---- copyable messages ---- */
+
+/* Visible copy button, next to the react and reply hints. It sits on the
+   centre-facing side of the bubble (the same side as the react hint), so
+   it is inside the chat area on phones. Unlike the react and reply hints
+   it is always shown, not hover-only, because tapping it is the point. */
+.copy-hint {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--fill);
+  color: var(--muted);
+  cursor: pointer;
+  z-index: 2;
+}
+.row.theirs .copy-hint { right: -36px; }
+.row.mine .copy-hint { left: -36px; }
+.copy-hint:hover { color: var(--text); }
+.copy-hint:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+/* On desktop the react hint appears on hover at the same spot, so the copy
+   button drops below it instead of overlapping it. */
+@media (hover: hover) {
+  .row:hover .copy-hint { top: calc(50% + 30px); }
+}
+/* Done replaces the copy button while one bubble is in selection mode. */
+.copy-hint.select-done {
+  width: auto;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--blue);
+  color: #fff;
+}
+.copy-failed { background: var(--danger); color: #fff; }
+/* Selection mode, desktop and touch: the bubble text itself is selectable. */
+.pieces.selecting,
+.pieces.selecting .bubble,
+.pieces.selecting .jumbo-emoji {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+.pieces.selecting .bubble { cursor: text; }
 
 /* ---- composer ---- */
 
