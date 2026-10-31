@@ -671,28 +671,36 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   // rows beyond the first chunk are reached by scrolling / Load more,
   // not by a Previous/Next pager. pageRows is therefore the loaded
   // rows, not just the current chunk.
-  // S/N definition, thread tabs (Database, References, Notes):
-  // visual order is newest-first, but S/N is the ORIGINAL ascending
-  // serial, not the visual position. The oldest row is S/N 1, at the
-  // bottom, and numbers go up as you go up the list, so the newest
-  // row at the top has S/N = total (for trades, trade 211 shows
-  // S/N 211 when the total is 211, then 210, 209, 208, and so on
-  // down to S/N 1 at the bottom). Load-more appends older rows below
-  // with decreasing S/N, without renumbering rows already shown.
-  // Queue and Sync log keep their previous ascending order; only
-  // the three thread tabs are displayed newest-first. Thread tabs
-  // arrive newest-first because their pages were fetched with
-  // ?order=desc; S/N is then total minus the visual index.
+  // S/N definition, thread tabs (Database, References, Notes) and
+  // Latest: S/N is the ROW'S OWN id, which is its ORIGINAL ascending
+  // serial, not its visual position in whatever list happened to
+  // load. The oldest row is S/N 1, at the bottom, and numbers go up
+  // as you go up the list, so the newest row at the top has S/N =
+  // total (for trades, trade 211 shows S/N 211 when the total is
+  // 211, then 210, 209, 208, and so on down to S/N 1 at the bottom).
+  // This replaces the old total-minus-visual-index formula, which
+  // broke on 2026-10-31: when the newest chunk was missing from the
+  // loaded list, the first loaded row (trade 161, MCF/CP/9533-S26)
+  // was labelled S/N 211, and every row below it was shifted by 50.
+  // A row's id never changes with loading, filtering, or scrolling,
+  // so the same trade now shows the same S/N in Latest, Database,
+  // References, and Notes. Verified 2026-10-31: trades, references,
+  // and notes ids are sequential 1..total in this project, so id
+  // equals the original serial; if a future row ever lacks an id,
+  // the fallback below still uses total minus visual index.
+  // Queue uses the same rule (queue ids 1..19 in this project),
+  // so a queue item keeps its number even if an earlier chunk is
+  // missing. Sync log keeps its previous combined chronological
+  // order, which is not a serial.
   const pageRows = tabKind
     ? Array.from({ length: tabPage + 1 }, (_, p) => pages[`${tabKind}:${p}`]?.rows ?? []).flat()
     : []
   const pageTotal = pageData?.total ?? (tabKind ? pages[`${tabKind}:0`]?.total : null) ?? counts[tabKind === 'sync-log' ? 'sync_log' : tabKind] ?? 0
-  // Original ascending serial for thread tabs: visual index 0 is the
-  // newest row, so its S/N is the total, and S/N decreases downwards.
-  // pageTotal is set by the first loaded page (fetchPageDesc returns
-  // total in the same response), so rows are never rendered before
-  // their total is known; the fallback only guards a missing total.
+  // Stable serial: the row's own id first, never its position in
+  // the loaded list. The old total-minus-visual-index formula is
+  // kept only as a fallback for a row with no id.
   const threadSerial = (visualIndex) => (pageTotal > 0 ? pageTotal - visualIndex : pageRows.length - visualIndex)
+  const rowSerial = (row, visualIndex) => (row?.id != null ? row.id : threadSerial(visualIndex))
   const threadPageKey = `${tabKind}:${tabPage}`
   const rawPageIsLoading = tabKind ? !!pageLoading[threadPageKey] : false
   const pageIsLoading = rawPageIsLoading && pageRows.length === 0
@@ -1000,7 +1008,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       <tbody>
                         {data.latestTrades.map((t, i) => (
                           <tr key={t.id}>
-                            <td className="sn-col">{i + 1}</td>
+                            <td className="sn-col">{rowSerial(t, i)}</td>
                             {SLIM_DB_COLUMNS.map(([h, field]) => (
                               <td key={h}>{field === 'stage' ? <StagePill stage={t.stage} /> : field === 'buyer' || field === 'seller' ? <PartyCell name={t[field]} /> : show(t[field])}</td>
                             ))}
@@ -1029,7 +1037,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                     {data.latestTrades.map((t, i) => (
                       <article key={t.id} className="project-card">
                         <div className="project-card-head">
-                          <span className="project-card-sn">{i + 1}</span>
+                          <span className="project-card-sn">{rowSerial(t, i)}</span>
                           <strong className="project-card-title">{show(t.contract_ref)}</strong>
                           <span className="project-card-stage"><StagePill stage={t.stage} /></span>
                         </div>
@@ -1068,7 +1076,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       <li key={q.id}>
                         <div className="project-row">
                           <span className="project-row-name">
-                            {i + 1}. {show(q.subject || q.message_id)}
+                            {rowSerial(q, i)}. {show(q.subject || q.message_id)}
                           </span>
                           <span className="muted">
                             {show(q.sender)} · {q.status} · {when(q.created_at)}
@@ -1145,7 +1153,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       <tbody>
                         {data.latestTrades.map((t, i) => (
                           <tr key={t.id}>
-                            <td className="sn-col">{i + 1}</td>
+                            <td className="sn-col">{rowSerial(t, i)}</td>
                             {SLIM_DB_COLUMNS.map(([h, field]) => (
                               <td key={h}>{field === 'stage' ? <StagePill stage={t.stage} /> : field === 'buyer' || field === 'seller' ? <PartyCell name={t[field]} /> : show(t[field])}</td>
                             ))}
@@ -1174,7 +1182,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                     {data.latestTrades.map((t, i) => (
                       <article key={t.id} className="project-card">
                         <div className="project-card-head">
-                          <span className="project-card-sn">{i + 1}</span>
+                          <span className="project-card-sn">{rowSerial(t, i)}</span>
                           <strong className="project-card-title">{show(t.contract_ref)}</strong>
                           <span className="project-card-stage"><StagePill stage={t.stage} /></span>
                         </div>
@@ -1274,7 +1282,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                         ) : (
                           dbFilteredRows.map(({ t, idx: i }) => (
                             <tr key={t.id}>
-                              <td className="sn-col">{threadSerial(i)}</td>
+                              <td className="sn-col">{rowSerial(t, i)}</td>
                               <td><span className="db-ref">{show(t.contract_ref)}</span></td>
                               <td><PartyCell name={t.buyer} /></td>
                               <td><PartyCell name={t.seller} /></td>
@@ -1308,7 +1316,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                     {dbFilteredRows.map(({ t, idx: i }) => (
                       <article key={t.id} className="project-card">
                         <div className="project-card-head">
-                          <span className="project-card-sn">{threadSerial(i)}</span>
+                          <span className="project-card-sn">{rowSerial(t, i)}</span>
                           <strong className="project-card-title">{show(t.contract_ref)}</strong>
                           <span className="project-card-stage"><StagePill stage={t.stage} /></span>
                         </div>
@@ -1361,7 +1369,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                         ) : (
                           pageRows.map((r, i) => (
                             <tr key={r.id}>
-                              <td className="sn-col">{threadSerial(i)}</td>
+                              <td className="sn-col">{rowSerial(r, i)}</td>
                               {REFERENCE_COLUMNS.map(([h, field]) => (
                                 <td key={h}>{field === 'updated_at' ? when(r[field]) : show(r[field])}</td>
                               ))}
@@ -1375,7 +1383,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                     {pageRows.map((r, i) => (
                       <article key={r.id} className="project-card">
                         <div className="project-card-head">
-                          <span className="project-card-sn">{threadSerial(i)}</span>
+                          <span className="project-card-sn">{rowSerial(r, i)}</span>
                           <strong className="project-card-title">{show(r.shadow_ref)}</strong>
                         </div>
                         <dl className="project-card-fields">
@@ -1423,7 +1431,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                         ) : (
                           pageRows.map((n, i) => (
                             <tr key={n.id}>
-                              <td className="sn-col">{threadSerial(i)}</td>
+                              <td className="sn-col">{rowSerial(n, i)}</td>
                               {NOTE_COLUMNS.map(([h, field]) =>
                                 NOTE_LONG_TEXT_FIELDS.includes(field) ? (
                                   <td key={h} className="raw-message-cell">
@@ -1456,7 +1464,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                     {pageRows.map((n, i) => (
                       <article key={n.id} className="project-card">
                         <div className="project-card-head">
-                          <span className="project-card-sn">{threadSerial(i)}</span>
+                          <span className="project-card-sn">{rowSerial(n, i)}</span>
                           <strong className="project-card-title">Note {n.id}</strong>
                           <span className="project-card-stage">{show(n.priority)}</span>
                         </div>
