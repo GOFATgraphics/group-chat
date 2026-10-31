@@ -2741,7 +2741,7 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
 .db-panel-head h2 { margin: 0; font-size: 28px; font-weight: 800; letter-spacing: -.02em; }
 .db-panel-head p { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
 .db-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-.db-search input { width: 320px; max-width: 100%; min-height: 46px; padding: 0 16px; border: 0; border-radius: 999px; background: var(--fill); color: var(--text); }
+.db-search input { width: 320px; max-width: 100%; min-height: 46px; padding: 0 16px; border: 0; border-radius: 999px; background: var(--fill); color: var(--text); font-size: 16px; }
 .db-search input::placeholder { color: var(--muted); opacity: 1; }
 .db-toggle { display: inline-flex; align-items: center; min-height: 44px; padding: 0 18px; border: 0; border-radius: 999px; font-size: 14px; font-weight: 700; background: #E7F3FF; color: #0750C7; }
 .db-empty-note, .db-filter-note { padding: 0 28px; }
@@ -2823,3 +2823,33 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
   .db-search input { width: 100%; }
   .db-tools { width: 100%; }
 }
+
+/* Dashboard split + phone zoom, 2026-10-31, local build only.
+   - Desktop hero picture removed: on wide screens (>=641px) the
+     hero target icon and faint decorative rings are hidden, so the
+     hero is text and stats only. On phone (<=640px) the icon and
+     rings stay, matching the Phone.png target.
+   - Phone zoom: viewport meta in index.html now disables user
+     scaling; this CSS adds a mobile-only floor for the one editable
+     control that was below 16px (the read-only API-key instructions
+     textarea, 13px -> 16px on mobile only, desktop unchanged) and a
+     pan-only touch-action on phone so pinch gestures do not zoom.
+     All other editable controls were audited and are already
+     >=16px: login 16, composer textarea 17, list search 17,
+     group name 17, tool rows 16, poll inputs 17-18, project name
+     16, API-key name 16, dashboard search now explicit 16.
+   - No-pager infinite scroll: .project-loadmore is a plain count
+     line plus a Load more button; the IntersectionObserver sentinel
+     in LoadMoreFooter auto-loads the next 50 when it scrolls into
+     view, and the button is the fallback if that does not fire. */
+@media (min-width: 641px) {
+  .db-hero-icon, .db-hero-rings { display: none; }
+  .db-hero-title { gap: 0; }
+}
+@media (max-width: 640px) {
+  html, body { touch-action: pan-x pan-y; }
+  .api-key-instructions { font-size: 16px; }
+}
+.project-loadmore { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 0; border-top: 1px solid var(--separator); }
+.project-loadmore .project-pager-btn { min-height: 44px; padding: 0 18px; border: 0; border-radius: 999px; background: var(--fill); color: var(--text); font-weight: 600; }
+.db-panel .project-loadmore { padding: 16px 28px; }

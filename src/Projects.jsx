@@ -343,27 +343,41 @@ const SLIM_DB_COLUMNS = [
   ['Stage', 'stage'],
 ]
 
-function Pager({ page, total, onPage }) {
-  const start = total === 0 ? 0 : page * PAGE_SIZE + 1
-  const end = Math.min(total, (page + 1) * PAGE_SIZE)
-  const lastPage = total === 0 ? 0 : Math.floor((total - 1) / PAGE_SIZE)
+function LoadMoreFooter({ loaded, total, loading, onLoadMore }) {
+  const sentinelRef = useRef(null)
+  const hasMore = loaded < total
+  useEffect(() => {
+    if (!hasMore || loading) return undefined
+    const el = sentinelRef.current
+    if (!el || typeof IntersectionObserver === 'undefined') return undefined
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) onLoadMore()
+      },
+      { root: null, rootMargin: '200px', threshold: 0 }
+    )
+    obs.observe(el)
+    return () => obs.disconnect()
+  }, [hasMore, loading, onLoadMore, loaded])
   return (
-    <div className="project-pager" role="navigation" aria-label="Page">
-      <button type="button" className="project-pager-btn" disabled={page <= 0} onClick={() => onPage(page - 1)}>
-        &lsaquo; Previous
-      </button>
+    <div className="project-loadmore" role="navigation" aria-label="More rows">
       <span className="muted">
-        Showing {start}-{end} of {total}
+        Showing {loaded} of {total}
       </span>
-      <button type="button" className="project-pager-btn" disabled={page >= lastPage} onClick={() => onPage(page + 1)}>
-        Next &rsaquo;
-      </button>
+      {hasMore ? (
+        <>
+          <div ref={sentinelRef} aria-hidden="true" />
+          <button type="button" className="project-pager-btn" disabled={loading} onClick={onLoadMore}>
+            {loading ? 'Loading more…' : 'Load more'}
+          </button>
+        </>
+      ) : null}
     </div>
   )
 }
 
 export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
-  const [tab, setTab] = useState('queue')
+  const [tab, setTab] = useState('dashboard')
   const [panelOpen, setPanelOpen] = useState(false)
   const panelCloseRef = useRef(null)
   const closePanel = () => setPanelOpen(false)
@@ -387,7 +401,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   // never refetches a page already loaded, and opening the dashboard
   // never loads a full table at all. Key is `${kind}:${page}`.
   const [pages, setPages] = useState({})
-  const [pageNums, setPageNums] = useState({ queue: 0, stages: 0, latest: 0, database: 0, references: 0, notes: 0, log: 0 })
+  const [pageNums, setPageNums] = useState({ dashboard: 0, queue: 0, stages: 0, latest: 0, database: 0, references: 0, notes: 0, log: 0 })
   const [pageLoading, setPageLoading] = useState({})
   const [pageError, setPageError] = useState({})
   const [syncBusyId, setSyncBusyId] = useState(null)
@@ -443,7 +457,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
     setError('')
     setData(null)
     setPages({})
-    setPageNums({ queue: 0, stages: 0, latest: 0, database: 0, references: 0, notes: 0, log: 0 })
+    setPageNums({ dashboard: 0, queue: 0, stages: 0, latest: 0, database: 0, references: 0, notes: 0, log: 0 })
     fetchDashboard(token, project.id)
       .then((d) => {
         if (!cancelled) setData(d)
@@ -492,10 +506,20 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   const isEmptyCellValue = (v) =>
     v === null || v === undefined || (typeof v === 'string' && (v.trim() === '' || v.trim() === '—' || v.trim() === '-')) || (Array.isArray(v) && v.length === 0)
   const pageData = tabKind ? pages[`${tabKind}:${tabPage}`] : null
-  const pageRows = pageData?.rows ?? []
-  const pageTotal = pageData?.total ?? counts[tabKind === 'sync-log' ? 'sync_log' : tabKind] ?? 0
-  const pageIsLoading = tabKind ? !!pageLoading[`${tabKind}:${tabPage}`] : false
-  const pageErr = tabKind ? pageError[`${tabKind}:${tabPage}`] : ''
+  // Infinite scroll (no pager at all, user direction 2026-10-31): all
+  // pages loaded so far for this tab are concatenated, in order, so
+  // rows beyond the first 50 are reached by scrolling / Load more,
+  // not by a Previous/Next pager. pageRows is therefore the loaded
+  // rows, not just the current page. S/N below is i + 1, the global
+  // position in that concatenated list.
+  const pageRows = tabKind
+    ? Array.from({ length: tabPage + 1 }, (_, p) => pages[`${tabKind}:${p}`]?.rows ?? []).flat()
+    : []
+  const pageTotal = pageData?.total ?? (tabKind ? pages[`${tabKind}:0`]?.total : null) ?? counts[tabKind === 'sync-log' ? 'sync_log' : tabKind] ?? 0
+  const rawPageIsLoading = tabKind ? !!pageLoading[`${tabKind}:${tabPage}`] : false
+  const pageIsLoading = rawPageIsLoading && pageRows.length === 0
+  const pageLoadingMore = rawPageIsLoading && pageRows.length > 0
+  const pageErr = pageRows.length === 0 && tabKind ? pageError[`${tabKind}:${tabPage}`] : ''
   // Database design, page-local counts and filters (see state note).
   const dbPageMatched = pageRows.filter((t) => t.stage === 'matched').length
   const dbPageNew = pageRows.filter((t) => t.stage === 'new').length
@@ -562,6 +586,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
 
   const wide = true
   const panelTabs = [
+    ['dashboard', 'Dashboard'],
     ['queue', 'Queue'],
     ['stages', 'Stages'],
     ['latest', 'Latest'],
@@ -620,6 +645,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           top bar plus side panel (iPhone) already do exactly the same
           navigation, so a second pair here was a duplicate. onBack /
           onBackToChats are still used by the side panel below. */}
+      {tab === 'dashboard' && (
       <header className="project-header db-hero">
         <svg className="db-hero-rings" aria-hidden="true" width="420" height="420" viewBox="0 0 420 420" fill="none">
           <circle cx="210" cy="210" r="190" stroke="#fff" stroke-width="28" />
@@ -650,8 +676,10 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           </div>
         )}
       </header>
+      )}
       <nav className="project-tabs" aria-label="Dashboard sections">
         {[
+          ['dashboard', 'Dashboard'],
           ['queue', 'Queue'],
           ['stages', 'Stages'],
           ['latest', 'Latest'],
@@ -670,6 +698,103 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
         <p className="project-empty">{error}</p>
       ) : (
         <>
+          {tab === 'dashboard' && (
+            <>
+<section aria-label="Stages">
+              <h2>Stages</h2>
+              {loading ? (
+                <p className="muted">Loading counts…</p>
+              ) : (
+                <>
+                  <div className="project-stage-grid">
+                    {STAGES.map((s) => (
+                      <article key={s.key} className="project-stage-card">
+                        <div className="project-stage-count">{stageCounts[s.key] ?? 0}</div>
+                        <h3>{s.label}</h3>
+                        <p className="muted">{s.text}</p>
+                      </article>
+                    ))}
+                  </div>
+                </>
+              )}
+            </section>
+<section aria-label="Latest trades">
+              <h2>Latest</h2>
+              {syncMessage ? <p className="project-empty">{syncMessage}</p> : null}
+              {syncError ? <p className="project-empty">{syncError}</p> : null}
+              {loading ? (
+                <p className="project-empty">Loading latest trades…</p>
+              ) : !Array.isArray(data?.latestTrades) || data.latestTrades.length === 0 ? (
+                <p className="project-empty">No latest trades yet.</p>
+              ) : (
+                <>
+                  <div className="project-table-wrap">
+                    <table className="project-table">
+                      <thead>
+                        <tr>
+                          <th className="sn-col">S/N</th>
+                          {SLIM_DB_COLUMNS.map(([h]) => (
+                            <th key={h}>{h}</th>
+                          ))}
+                          <th>Details</th>
+                          <th>Sync</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.latestTrades.map((t, i) => (
+                          <tr key={t.id}>
+                            <td className="sn-col">{i + 1}</td>
+                            {SLIM_DB_COLUMNS.map(([h, field]) => (
+                              <td key={h}>{field === 'stage' ? show(t.stage) : show(t[field])}</td>
+                            ))}
+                            <td>
+                              <button type="button" className="raw-message-btn" onClick={() => onOpenDetail(t)} aria-label={`View full details for ${t.contract_ref || `trade ${t.id}`}`}>
+                                Details
+                              </button>
+                            </td>
+                            <td>
+                              <button
+                                type="button"
+                                className="raw-message-btn"
+                                disabled={syncBusyId === t.id || pendingSyncIds.has(t.id) || syncedIds.has(t.id)}
+                                onClick={() => onRequestSync(t)}
+                                aria-label={`Request sync for ${t.contract_ref || `trade ${t.id}`}`}
+                              >
+                                {syncedIds.has(t.id) ? 'Synced' : pendingSyncIds.has(t.id) ? 'Sync requested' : syncBusyId === t.id ? 'Requesting…' : 'Sync'}
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="project-card-list" aria-label="Latest trade cards">
+                    {data.latestTrades.map((t, i) => (
+                      <article key={t.id} className="project-card">
+                        <div className="project-card-head">
+                          <span className="project-card-sn">{i + 1}</span>
+                          <strong className="project-card-title">{show(t.contract_ref)}</strong>
+                          <span className="project-card-stage">{show(t.stage)}</span>
+                        </div>
+                        <p className="project-card-sub">{show(t.commodity)}{t.quantity != null ? ` · ${show(t.quantity)}` : ''}{t.disport ? ` · ${show(t.disport)}` : ''}</p>
+                        <dl className="project-card-fields">
+                          <div><dt>Buyer</dt><dd>{show(t.buyer)}</dd></div>
+                          <div><dt>Seller</dt><dd>{show(t.seller)}</dd></div>
+                          <div><dt>Disport</dt><dd>{show(t.disport)}</dd></div>
+                        </dl>
+                        <div className="project-card-actions">
+                          <button type="button" className="raw-message-btn project-card-primary" onClick={() => onOpenDetail(t)}>Details</button>
+                          <button type="button" className="raw-message-btn project-card-primary" disabled={syncBusyId === t.id || pendingSyncIds.has(t.id) || syncedIds.has(t.id)} onClick={() => onRequestSync(t)}>{syncedIds.has(t.id) ? 'Synced' : pendingSyncIds.has(t.id) ? 'Sync requested' : syncBusyId === t.id ? 'Requesting…' : 'Sync'}</button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </>
+              )}
+            </section>
+            </>
+          )}
+
           {tab === 'queue' && (
             <section aria-label="Queue">
               <h2>Queue</h2>
@@ -686,7 +811,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       <li key={q.id}>
                         <div className="project-row">
                           <span className="project-row-name">
-                            {tabPage * PAGE_SIZE + i + 1}. {show(q.subject || q.message_id)}
+                            {i + 1}. {show(q.subject || q.message_id)}
                           </span>
                           <span className="muted">
                             {show(q.sender)} · {q.status} · {when(q.created_at)}
@@ -695,7 +820,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       </li>
                     ))}
                   </ul>
-                  <Pager page={tabPage} total={pageTotal} onPage={(p) => setPageNums((prev) => ({ ...prev, queue: p }))} />
+                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} onLoadMore={() => setPageNums((prev) => ({ ...prev, queue: prev.queue + 1 }))} />
                 </>
               )}
             </section>
@@ -876,7 +1001,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                         ) : (
                           dbFilteredRows.map(({ t, idx: i }) => (
                             <tr key={t.id}>
-                              <td className="sn-col">{tabPage * PAGE_SIZE + i + 1}</td>
+                              <td className="sn-col">{i + 1}</td>
                               <td><span className="db-ref">{show(t.contract_ref)}</span></td>
                               <td><PartyCell name={t.buyer} /></td>
                               <td><PartyCell name={t.seller} /></td>
@@ -922,7 +1047,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                     {dbFilteredRows.map(({ t, idx: i }) => (
                       <article key={t.id} className="project-card">
                         <div className="project-card-head">
-                          <span className="project-card-sn">{tabPage * PAGE_SIZE + i + 1}</span>
+                          <span className="project-card-sn">{i + 1}</span>
                           <strong className="project-card-title">{show(t.contract_ref)}</strong>
                           <span className="project-card-stage"><StagePill stage={t.stage} /></span>
                         </div>
@@ -942,7 +1067,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       </article>
                     ))}
                   </div>
-                  <Pager page={tabPage} total={pageTotal} onPage={(p) => setPageNums((prev) => ({ ...prev, database: p }))} />
+                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} onLoadMore={() => setPageNums((prev) => ({ ...prev, database: prev.database + 1 }))} />
                 </>
               )}
             </section>
@@ -977,7 +1102,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                         ) : (
                           pageRows.map((r, i) => (
                             <tr key={r.id}>
-                              <td className="sn-col">{tabPage * PAGE_SIZE + i + 1}</td>
+                              <td className="sn-col">{i + 1}</td>
                               {REFERENCE_COLUMNS.map(([h, field]) => (
                                 <td key={h}>{field === 'updated_at' ? when(r[field]) : show(r[field])}</td>
                               ))}
@@ -991,7 +1116,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                     {pageRows.map((r, i) => (
                       <article key={r.id} className="project-card">
                         <div className="project-card-head">
-                          <span className="project-card-sn">{tabPage * PAGE_SIZE + i + 1}</span>
+                          <span className="project-card-sn">{i + 1}</span>
                           <strong className="project-card-title">{show(r.shadow_ref)}</strong>
                         </div>
                         <dl className="project-card-fields">
@@ -1003,7 +1128,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       </article>
                     ))}
                   </div>
-                  <Pager page={tabPage} total={pageTotal} onPage={(p) => setPageNums((prev) => ({ ...prev, references: p }))} />
+                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} onLoadMore={() => setPageNums((prev) => ({ ...prev, references: prev.references + 1 }))} />
                 </>
               )}
             </section>
@@ -1038,7 +1163,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                         ) : (
                           pageRows.map((n, i) => (
                             <tr key={n.id}>
-                              <td className="sn-col">{tabPage * PAGE_SIZE + i + 1}</td>
+                              <td className="sn-col">{i + 1}</td>
                               {NOTE_COLUMNS.map(([h, field]) =>
                                 NOTE_LONG_TEXT_FIELDS.includes(field) ? (
                                   <td key={h} className="raw-message-cell">
@@ -1071,7 +1196,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                     {pageRows.map((n, i) => (
                       <article key={n.id} className="project-card">
                         <div className="project-card-head">
-                          <span className="project-card-sn">{tabPage * PAGE_SIZE + i + 1}</span>
+                          <span className="project-card-sn">{i + 1}</span>
                           <strong className="project-card-title">Note {n.id}</strong>
                           <span className="project-card-stage">{show(n.priority)}</span>
                         </div>
@@ -1093,7 +1218,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       </article>
                     ))}
                   </div>
-                  <Pager page={tabPage} total={pageTotal} onPage={(p) => setPageNums((prev) => ({ ...prev, notes: p }))} />
+                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} onLoadMore={() => setPageNums((prev) => ({ ...prev, notes: prev.notes + 1 }))} />
                 </>
               )}
             </section>
@@ -1115,7 +1240,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       <li key={s.id}>
                         <div className="project-row">
                           <span className="project-row-name">
-                            {tabPage * PAGE_SIZE + i + 1}. {show(s.target)} · {s.target === 'sync_request' ? 'requested' : s.success ? 'ok' : 'failed'} · trade {s.trade_id}
+                            {i + 1}. {show(s.target)} · {s.target === 'sync_request' ? 'requested' : s.success ? 'ok' : 'failed'} · trade {s.trade_id}
                           </span>
                           <span className="muted">
                             {show(s.failure_reason)} · {when(s.created_at)}
@@ -1124,7 +1249,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       </li>
                     ))}
                   </ul>
-                  <Pager page={tabPage} total={pageTotal} onPage={(p) => setPageNums((prev) => ({ ...prev, log: p }))} />
+                  <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} onLoadMore={() => setPageNums((prev) => ({ ...prev, log: prev.log + 1 }))} />
                 </>
               )}
             </section>
