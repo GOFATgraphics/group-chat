@@ -138,8 +138,18 @@ export async function requestManualSync(token, projectId, tradeId) {
 }
 
 // Whole-page projects list. Back goes to chats.
+const SIDEBAR_TABS = [
+  ['dashboard', 'Dashboard'],
+  ['queue', 'Queue'],
+  ['stages', 'Stages'],
+  ['latest', 'Latest'],
+  ['database', 'Database view'],
+  ['references', 'References'],
+  ['notes', 'Notes'],
+  ['log', 'Sync log'],
+]
+
 export function ProjectsList({ projects, loading, error, onCreate, onOpen, onBack }) {
-  const SIDEBAR_TABS = panelTabs
   return (
     <main className="project-page" aria-label="Projects">
       <header className="project-header">
