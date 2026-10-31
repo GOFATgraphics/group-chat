@@ -99,18 +99,20 @@ export async function fetchPage(token, projectId, kind, page) {
   return { rows: Array.isArray(data[key]) ? data[key] : [], total: typeof data.total === 'number' ? data.total : 0 }
 }
 
-// Same endpoint, explicit offset/limit: the only way to serve a
-// newest-first thread list without a server change, because the
-// subcollection GET orders by id ascending and has no descending
-// option. Thread tabs (Database, References, Notes) load chunk 0 from
-// the END of the collection (offset total - 50) and reverse it, then
-// chunk 1, and so on, so the list reads newest first and load-more
-// appends older rows below. No new endpoint, no data change. Notes
-// load chunks stay 50 rows: the 100-per-page change was corrected
+// Newest-first page, ONE request, no probe: the server now honours
+// ?order=desc on the subcollection GET (see server/routes/projects.js),
+// so chunk 0 is the newest 50 rows, chunk 1 the next 50 older rows, and
+// so on, with the total in the same response. This replaces the old
+// probe-then-chunk logic, which could strand the UI on "Loading..."
+// forever (see the page-loading effect below): a cancelled probe left
+// its loading flag true, the probe guard then refused every later
+// attempt including Retry, and the loading text hid any error.
+// Notes load chunks stay 50 rows: the 100-per-page change was corrected
 // away, and 50 is the loading chunk, not a page the user navigates.
-export async function fetchPageAt(token, projectId, kind, offset, limit = 50) {
+export async function fetchPageDesc(token, projectId, kind, page) {
+  const offset = page * 50
   const slim = kind === 'trades' ? '&slim=1' : ''
-  const data = await apiFetch(token, `/api/projects/${projectId}/${kind}?limit=${limit}&offset=${offset}${slim}`, 'GET', undefined, 30000)
+  const data = await apiFetch(token, `/api/projects/${projectId}/${kind}?limit=50&offset=${offset}&order=desc${slim}`, 'GET', undefined, 30000)
   const key = kind === 'sync-log' ? 'sync_log' : kind
   return { rows: Array.isArray(data[key]) ? data[key] : [], total: typeof data.total === 'number' ? data.total : 0 }
 }
@@ -492,11 +494,6 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   // Retry counter per page key: bumping it re-runs the page effect
   // for the SAME page after a failure (see retryCurrentPage).
   const [pageAttempts, setPageAttempts] = useState({})
-  // Newest-first thread state (Database, References, Notes only):
-  // totals learned from a 1-row probe, chunks keyed rev, each chunk
-  // stored already reversed (newest first within the chunk).
-  const [threadTotals, setThreadTotals] = useState({})
-  const [threadChunks, setThreadChunks] = useState({})
   // Sync log combined view: queue rows loaded through the existing
   // queue endpoint only, in 50-row chunks, never created here.
   const [logQueue, setLogQueue] = useState([])
@@ -563,8 +560,6 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
     setPageNums({ dashboard: 0, queue: 0, stages: 0, latest: 0, database: 0, references: 0, notes: 0, log: 0 })
     setPageError({})
     setPageAttempts({})
-    setThreadTotals({})
-    setThreadChunks({})
     setLogQueue([])
     setLogQueueTotal(null)
     setLogQueueLoading(false)
@@ -589,15 +584,30 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   const tabKind = { queue: 'queue', database: 'trades', references: 'references', notes: 'notes', log: 'sync-log' }[tab]
   const tabPage = pageNums[tab] ?? 0
   const isThreadTab = tab === 'database' || tab === 'references' || tab === 'notes'
-  // Ascending tabs only (Queue, Sync log). Thread tabs use the effect below.
+  // One page-loading effect for every tab. Database, References and
+  // Notes use ?order=desc (fetchPageDesc), Queue and Sync log use the
+  // ascending fetchPage; both write into the same pages cache, so
+  // load-more just appends the next chunk and S/N never renumbers.
+  // Two rules that the old probe code broke, fixed here:
+  //  (1) finally ALWAYS clears the loading flag, even when the fetch
+  //      was cancelled by a tab switch. The old code skipped the
+  //      clear when cancelled, leaving pageLoading[key] true forever.
+  //  (2) there is NO "if already loading, return" guard keyed on that
+  //      flag. The old probe guard did exactly that, so a stuck flag
+  //      blocked every later attempt, including Retry, with no error
+  //      shown because the loading text outranked the error in render.
+  //      Here, a page already in the cache is the only skip condition.
   useEffect(() => {
-    if (!tabKind || isThreadTab) return undefined
+    if (!tabKind) return undefined
     const key = `${tabKind}:${tabPage}`
     if (pages[key]) return undefined
     let cancelled = false
     setPageLoading((prev) => ({ ...prev, [key]: true }))
     setPageError((prev) => ({ ...prev, [key]: '' }))
-    fetchPage(token, project.id, tabKind, tabPage)
+    const fetchFn = isThreadTab
+      ? fetchPageDesc(token, project.id, tabKind, tabPage)
+      : fetchPage(token, project.id, tabKind, tabPage)
+    fetchFn
       .then((res) => {
         if (!cancelled) setPages((prev) => ({ ...prev, [key]: res }))
       })
@@ -605,62 +615,15 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
         if (!cancelled) setPageError((prev) => ({ ...prev, [key]: err.message || 'Could not load this page.' }))
       })
       .finally(() => {
-        if (!cancelled) setPageLoading((prev) => ({ ...prev, [key]: false }))
+        // Always clear, cancelled or not: a cancelled fetch must never
+        // leave this tab stuck on "Loading..." with no Retry.
+        setPageLoading((prev) => ({ ...prev, [key]: false }))
       })
     return () => {
       cancelled = true
     }
   }, [tab, tabKind, tabPage, token, project.id, pages, isThreadTab, pageAttempts])
-  // Newest-first thread loading (Database, References, Notes). The
-  // probe learns the total, then chunk c loads from the end:
-  // offset total - (c + 1) * 50, reversed, so chunk 0 is the newest
-  // 50 rows. Appending a chunk never renumbers rows already shown.
-  useEffect(() => {
-    if (!tabKind || !isThreadTab) return undefined
-    const kind = tabKind
-    const total = threadTotals[kind]
-    if (total == null) {
-      const key = `${kind}:rev:probe`
-      if (pageLoading[key]) return undefined
-      let cancelled = false
-      setPageLoading((prev) => ({ ...prev, [key]: true }))
-      setPageError((prev) => ({ ...prev, [key]: '' }))
-      fetchPageAt(token, project.id, kind, 0, 1)
-        .then((res) => {
-          if (!cancelled) setThreadTotals((prev) => ({ ...prev, [kind]: res.total }))
-        })
-        .catch((err) => {
-          if (!cancelled) setPageError((prev) => ({ ...prev, [key]: err.message || 'Could not load this list.' }))
-        })
-        .finally(() => {
-          if (!cancelled) setPageLoading((prev) => ({ ...prev, [key]: false }))
-        })
-      return () => {
-        cancelled = true
-      }
-    }
-    const key = `${kind}:rev:${tabPage}`
-    if (threadChunks[key]) return undefined
-    const limit = Math.min(50, total - tabPage * 50)
-    if (limit <= 0) return undefined
-    const offset = Math.max(0, total - (tabPage + 1) * 50)
-    let cancelled = false
-    setPageLoading((prev) => ({ ...prev, [key]: true }))
-    setPageError((prev) => ({ ...prev, [key]: '' }))
-    fetchPageAt(token, project.id, kind, offset, limit)
-      .then((res) => {
-        if (!cancelled) setThreadChunks((prev) => ({ ...prev, [key]: { rows: [...res.rows].reverse(), total: res.total } }))
-      })
-      .catch((err) => {
-        if (!cancelled) setPageError((prev) => ({ ...prev, [key]: err.message || 'Could not load this page.' }))
-      })
-      .finally(() => {
-        if (!cancelled) setPageLoading((prev) => ({ ...prev, [key]: false }))
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [tab, tabKind, tabPage, token, project.id, isThreadTab, threadTotals, threadChunks, pageAttempts])
+
   // Sync log tab: queue rows for the combined view, through the
   // existing queue endpoint only, one 50-row chunk at a time, until
   // the queue total is reached. A queue failure never blocks the
@@ -682,7 +645,10 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
         if (!cancelled) setLogQueueError(err.message || 'Could not load queue items.')
       })
       .finally(() => {
-        if (!cancelled) setLogQueueLoading(false)
+        // Always clear, cancelled or not: same stuck-loading bug as
+        // the thread probe (a cancelled queue fetch left
+        // "Loading queue items..." on screen forever and blocked reload).
+        setLogQueueLoading(false)
       })
     return () => {
       cancelled = true
@@ -711,27 +677,20 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   // 209, and so on). Load-more appends older rows below without
   // renumbering rows already shown. Queue and Sync log keep their
   // previous ascending order; only the three thread tabs are reversed.
-  const threadRows = isThreadTab && tabKind
-    ? Array.from({ length: tabPage + 1 }, (_, c) => threadChunks[`${tabKind}:rev:${c}`]?.rows ?? []).flat()
+  // All tabs, thread and ascending alike, read from the same pages
+  // cache. Thread tabs arrive newest-first because their pages were
+  // fetched with ?order=desc, so S/N 1 is still the newest row and
+  // load-more appends older rows below without renumbering.
+  const pageRows = tabKind
+    ? Array.from({ length: tabPage + 1 }, (_, p) => pages[`${tabKind}:${p}`]?.rows ?? []).flat()
     : []
-  const pageRows = isThreadTab
-    ? threadRows
-    : tabKind
-      ? Array.from({ length: tabPage + 1 }, (_, p) => pages[`${tabKind}:${p}`]?.rows ?? []).flat()
-      : []
-  const threadTotal = isThreadTab && tabKind ? threadTotals[tabKind] : null
-  const pageTotal = isThreadTab
-    ? threadTotal ?? counts[tabKind] ?? 0
-    : pageData?.total ?? (tabKind ? pages[`${tabKind}:0`]?.total : null) ?? counts[tabKind === 'sync-log' ? 'sync_log' : tabKind] ?? 0
-  const threadPageKey = isThreadTab && tabKind ? `${tabKind}:rev:${tabPage}` : `${tabKind}:${tabPage}`
-  const threadProbeKey = isThreadTab && tabKind ? `${tabKind}:rev:probe` : null
-  const rawPageIsLoading = tabKind
-    ? !!(pageLoading[threadPageKey] || (isThreadTab && threadTotal == null && threadProbeKey && pageLoading[threadProbeKey]))
-    : false
+  const pageTotal = pageData?.total ?? (tabKind ? pages[`${tabKind}:0`]?.total : null) ?? counts[tabKind === 'sync-log' ? 'sync_log' : tabKind] ?? 0
+  const threadPageKey = `${tabKind}:${tabPage}`
+  const rawPageIsLoading = tabKind ? !!pageLoading[threadPageKey] : false
   const pageIsLoading = rawPageIsLoading && pageRows.length === 0
   const pageLoadingMore = rawPageIsLoading && pageRows.length > 0
   const pageErr = pageRows.length === 0 && tabKind
-    ? pageError[threadPageKey] || (threadProbeKey ? pageError[threadProbeKey] : '') || ''
+    ? pageError[threadPageKey] || ''
     : ''
   // Error on the current load-more page only, shown by the footer
   // while the rows already loaded stay visible.
@@ -740,11 +699,15 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   // total is not known yet); it never advances to the next page, so
   // a failed page cannot be silently skipped.
   const retryCurrentPage = () => {
-    const key = isThreadTab && threadTotal == null && threadProbeKey ? threadProbeKey : threadPageKey
+    const key = threadPageKey
     setPageError((prev) => ({ ...prev, [key]: '' }))
+    setPageLoading((prev) => ({ ...prev, [key]: false }))
     setPageAttempts((prev) => ({ ...prev, [key]: (prev[key] || 0) + 1 }))
   }
-  const retryLogQueue = () => setLogQueueError('')
+  const retryLogQueue = () => {
+    setLogQueueError('')
+    setLogQueueLoading(false)
+  }
   // Combined Sync log entries: queue items and sync-log rows in one
   // chronological list, oldest first, ties keep queue-before-sync
   // order (stable sort). Built only from rows already fetched; no
@@ -1571,7 +1534,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       )
                     })}
                   </ul>
-                  <p className="muted">Showing {combinedLog.length} combined entries: {pageRows.length} of {pageTotal} sync entries loaded{logQueueTotal != null ? `, ${logQueue.length} of ${logQueueTotal} queue items loaded` : ''}. Older sync entries load below as you scroll.</p>
+                  <p className="muted">Showing {combinedLog.length} combined entries: {pageRows.length} of {pageTotal} sync entries loaded{logQueueError ? `, queue items failed to load (tap Retry queue above)` : logQueueTotal != null ? `, ${logQueue.length} of ${logQueueTotal} queue items loaded` : logQueueLoading ? `, queue items still loading` : ''}. Older sync entries load below as you scroll.</p>
                   <LoadMoreFooter loaded={pageRows.length} total={pageTotal} loading={pageLoadingMore} error={pageLoadMoreError} onRetry={retryCurrentPage} onLoadMore={() => setPageNums((prev) => ({ ...prev, log: prev.log + 1 }))} />
                 </>
               )}

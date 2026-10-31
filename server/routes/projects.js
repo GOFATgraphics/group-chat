@@ -256,8 +256,13 @@ const subcollection = route({
     // of trades with a non-null full_data (ids only, cheap), not by
     // selecting full_data itself. Other collections ignore slim.
     const slim = req.query.slim === '1' && kind === 'trades'
+    // ?order=desc serves newest-first lists (Database, References,
+    // Notes) in ONE request, no client-side probe for the total and
+    // no offset-from-the-end maths. Default stays ascending, so the
+    // backfill and every existing caller are unchanged.
+    const descending = req.query.order === 'desc'
     const [rows, total, fullIds] = await Promise.all([
-      check(await sb.from(TABLES[kind]).select(slim ? SLIM_TRADE_FIELDS : '*').eq('project_id', id).order('id').range(offset, offset + limit - 1)),
+      check(await sb.from(TABLES[kind]).select(slim ? SLIM_TRADE_FIELDS : '*').eq('project_id', id).order('id', { ascending: !descending }).range(offset, offset + limit - 1)),
       countExact(sb, TABLES[kind], id),
       slim ? check(await sb.from('trades').select('id').eq('project_id', id).not('full_data', 'is', null)) : [],
     ])

@@ -2163,34 +2163,17 @@ export default function Chat({ session }) {
     .filter(([key]) => key !== viewKey(view))
     .reduce((sum, [, n]) => sum + n, 0)
 
-  // Project screens: the dashboard keeps a Chats / Projects switch
-  // above it on desktop (hidden on iPhone, where the dashboard top
-  // bar and side panel take over). The Projects list and Create pages
-  // have no switch: they already have Back to chats, and the switch
-  // was redundant clutter there. Chats goes straight back to the chat
-  // shell, Projects goes to the project list, and the dashboard hero
-  // has no second Back pair (removed as a duplicate of this switch).
-  // Chat state
-  // (view, messages, presence) is kept in this component and is not
-  // reset by switching, because projectScreen is only a render switch.
+  // Project screens: the dashboard has NO Chats / Projects switch
+  // above it, on desktop or phone. That switch lived in this file
+  // (Chat.jsx, project-switch), not in Projects.jsx, which is why a
+  // search of Projects.jsx for the top bar found nothing while live
+  // still showed it. Chats and Back to projects live only in the
+  // sidebar foot (desktop) and in the side panel (phone); when the
+  // sidebar is collapsed, only the small Menu restore button remains
+  // at the top. Chat state (view, messages, presence) is kept in this
+  // component and is not reset by switching, because projectScreen
+  // is only a render switch.
   if (projectScreen) {
-    const switchBar = (
-      <nav className="project-switch" aria-label="Chats or projects">
-        <button type="button" className="project-switch-btn" onClick={() => setProjectScreen(null)}>
-          Chats
-        </button>
-        <button
-          type="button"
-          className="project-switch-btn active"
-          onClick={() => {
-            refreshProjects()
-            setProjectScreen({ page: 'list' })
-          }}
-        >
-          Projects
-        </button>
-      </nav>
-    )
     if (projectScreen.page === 'list') {
       return (
         <>
@@ -2215,7 +2198,6 @@ export default function Chat({ session }) {
     if (projectScreen.page === 'dashboard') {
       return (
         <>
-          <div className="project-switch-dashboard">{switchBar}</div>
           <ProjectDashboard project={projectScreen.project} token={session?.access_token} onBack={() => setProjectScreen({ page: 'list' })} onBackToChats={() => setProjectScreen(null)} />
         </>
       )
