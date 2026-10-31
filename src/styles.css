@@ -2586,3 +2586,76 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
 .project-detail-row dt { font-weight: 600; overflow-wrap: anywhere; }
 .project-detail-row dd { margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 600px) { .project-detail-row { grid-template-columns: 1fr; } }
+
+/* ---- iPhone project dashboard (this build, local only) ----
+   Desktop and tablet are untouched: cards are hidden above 600px and
+   tables, sticky headers, colours and soft rows stay exactly as before.
+   At 600px and below, wide tables become stacked cards, tabs become
+   one scrollable pill bar, and every tap target is at least 44px tall.
+   Queue and Sync log already render as lists, so on iPhone their list
+   rows become cards by the same rule, no JSX change needed there. */
+.project-card-list { display: none; }
+@media (max-width: 600px) {
+  .project-page { padding: calc(12px + env(safe-area-inset-top)) 12px calc(16px + env(safe-area-inset-bottom)); }
+  .project-page-wide { overflow: hidden; }
+  .project-header { margin-bottom: 12px; gap: 10px; }
+  .project-header h1 { font-size: 22px; line-height: 1.25; overflow-wrap: anywhere; }
+  .project-header .muted { font-size: 14px; line-height: 1.4; overflow-wrap: anywhere; }
+  .project-header-actions { gap: 8px; }
+  .project-header-actions .project-back { flex: 1 1 40%; }
+  .project-back { min-height: 44px; padding: 10px 12px; display: inline-flex; align-items: center; font-size: 16px; }
+  .project-switch { padding: calc(10px + env(safe-area-inset-top)) 12px 0; gap: 8px; }
+  .project-switch-btn { flex: 1; min-height: 44px; padding: 12px 16px; font-size: 16px; }
+  .project-tabs { flex-wrap: nowrap; overflow-x: auto; scroll-snap-type: x proximity; -webkit-overflow-scrolling: touch; scrollbar-width: none; margin: 8px -12px 16px; padding: 0 12px 4px; }
+  .project-tabs::-webkit-scrollbar { display: none; }
+  .project-tab { flex: 0 0 auto; scroll-snap-align: start; min-height: 44px; padding: 12px 16px; font-size: 16px; }
+  .project-page-wide > section > h2 { font-size: 20px; margin: 0 0 8px; }
+  .project-stage-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .project-stage-card { padding: 14px 12px; }
+  .project-stage-count { font-size: 28px; }
+  .project-stage-card h3 { font-size: 15px; }
+  .project-table-wrap { display: none; }
+  .project-card-list { display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: 8px; }
+  .project-card { background: var(--raised); border: 0.5px solid var(--separator); border-radius: 14px; padding: 14px; min-width: 0; }
+  .project-card-head { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 8px; }
+  .project-card-sn { flex-shrink: 0; min-width: 28px; height: 28px; display: grid; place-items: center; border-radius: 999px; background: var(--fill); font-size: 13px; font-weight: 700; }
+  .project-card-title { flex: 1; min-width: 0; font-size: 17px; line-height: 1.3; overflow-wrap: anywhere; }
+  .project-card-stage { flex-shrink: 0; font-size: 13px; font-weight: 600; color: var(--muted); text-transform: capitalize; text-align: right; max-width: 90px; overflow-wrap: anywhere; }
+  .project-card-sub { margin: 0 0 10px; font-size: 15px; line-height: 1.4; overflow-wrap: anywhere; }
+  .project-card-fields { margin: 0; display: flex; flex-direction: column; gap: 6px; }
+  .project-card-fields > div { display: grid; grid-template-columns: 110px 1fr; gap: 8px; }
+  .project-card-fields dt { font-size: 13px; font-weight: 600; color: var(--muted); }
+  .project-card-fields dd { margin: 0; font-size: 15px; line-height: 1.4; overflow-wrap: anywhere; min-width: 0; }
+  .project-card-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .project-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .project-card-actions .raw-message-btn { flex: 1 1 40%; min-height: 44px; padding: 12px 14px; font-size: 16px; text-align: center; }
+  .project-card-actions .project-card-primary { color: var(--blue); font-weight: 600; }
+  .project-page-wide > section > ul.project-list { flex: 1; min-height: 0; overflow-y: auto; }
+  .project-page-wide > section > ul.project-list li { background: var(--raised); border: 0.5px solid var(--separator); border-radius: 14px; padding: 6px 14px; margin-bottom: 12px; }
+  .project-page-wide > section > ul.project-list .project-row { border-bottom: 0; padding: 8px 0; flex-direction: column; align-items: flex-start; }
+  .project-page-wide > section > ul.project-list .project-row .muted { text-align: left; font-size: 14px; line-height: 1.4; }
+  .project-list .project-row-name { font-size: 16px; }
+  .project-pager { flex-shrink: 0; margin: 12px 0 0; padding: 12px 0 calc(12px + env(safe-area-inset-bottom)); border-top: 0.5px solid var(--separator); background: var(--bg); }
+  .project-pager .muted { order: -1; width: 100%; text-align: center; font-size: 15px; }
+  .project-pager-btn { flex: 1; min-height: 44px; padding: 12px 16px; font-size: 16px; }
+  .raw-message-btn, .raw-message-close { min-height: 44px; padding: 12px 16px; font-size: 16px; }
+  .project-done-btn, .project-create-btn { min-height: 48px; width: 100%; font-size: 16px; }
+  .raw-message-backdrop { align-items: flex-end; padding: 0; }
+  .raw-message-dialog { max-width: 100%; width: 100%; max-height: 92dvh; border-radius: 20px 20px 0 0; padding-bottom: env(safe-area-inset-bottom); }
+  .raw-message-dialog-head strong { font-size: 15px; overflow-wrap: anywhere; min-width: 0; }
+  /* Chat polish, iPhone only: composer buttons reach 44px, bubbles and
+     images never force horizontal scroll. No chat behaviour changed,
+     inputs were already 16px, so iOS zoom behaviour is unchanged. */
+  .composer .circle-btn { width: 44px; height: 44px; }
+  .composer .send-btn { width: 44px; height: 44px; margin: 0; }
+  .bubble { max-width: 100%; overflow-wrap: anywhere; }
+  .media, .media-grid { max-width: 100%; }
+  .media-grid { max-width: 100%; }
+}
+@media (max-width: 390px) {
+  .project-header h1 { font-size: 20px; }
+  .project-stage-count { font-size: 24px; }
+  .project-stage-card { padding: 12px 10px; }
+  .project-card-fields > div { grid-template-columns: 96px 1fr; }
+  .project-tab { padding: 12px 14px; }
+}

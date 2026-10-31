@@ -669,6 +669,30 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       </tbody>
                     </table>
                   </div>
+                  <div className="project-card-list" aria-label="Database cards">
+                    {pageRows.map((t, i) => (
+                      <article key={t.id} className="project-card">
+                        <div className="project-card-head">
+                          <span className="project-card-sn">{tabPage * PAGE_SIZE + i + 1}</span>
+                          <strong className="project-card-title">{show(t.contract_ref)}</strong>
+                          <span className="project-card-stage">{show(t.stage)}</span>
+                        </div>
+                        <p className="project-card-sub">{show(t.commodity)}{t.quantity != null ? ` · ${show(t.quantity)}` : ''}{t.disport ? ` · ${show(t.disport)}` : ''}</p>
+                        <dl className="project-card-fields">
+                          <div><dt>Buyer</dt><dd>{show(t.buyer)}</dd></div>
+                          <div><dt>Seller</dt><dd>{show(t.seller)}</dd></div>
+                          <div><dt>Disport</dt><dd>{show(t.disport)}</dd></div>
+                        </dl>
+                        <div className="project-card-actions">
+                          {LONG_TEXT_COLUMNS.filter((col) => showEmptyColumns || !serverEmptyColumns.includes(col)).map((col) => (
+                            <button key={col} type="button" className="raw-message-btn" onClick={() => onViewLongText(t, col)} aria-label={`View ${col} for ${t.contract_ref || `trade ${t.id}`}`}>View {col}</button>
+                          ))}
+                          <button type="button" className="raw-message-btn project-card-primary" onClick={() => onOpenDetail(t)}>Details</button>
+                          <button type="button" className="raw-message-btn project-card-primary" disabled={syncBusyId === t.id || pendingSyncIds.has(t.id) || syncedIds.has(t.id)} onClick={() => onRequestSync(t)}>{syncedIds.has(t.id) ? 'Synced' : pendingSyncIds.has(t.id) ? 'Sync requested' : syncBusyId === t.id ? 'Requesting…' : 'Sync'}</button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
                   <Pager page={tabPage} total={pageTotal} onPage={(p) => setPageNums((prev) => ({ ...prev, database: p }))} />
                 </>
               )}
@@ -714,6 +738,22 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                         )}
                       </tbody>
                     </table>
+                  </div>
+                  <div className="project-card-list" aria-label="Reference cards">
+                    {pageRows.map((r, i) => (
+                      <article key={r.id} className="project-card">
+                        <div className="project-card-head">
+                          <span className="project-card-sn">{tabPage * PAGE_SIZE + i + 1}</span>
+                          <strong className="project-card-title">{show(r.shadow_ref)}</strong>
+                        </div>
+                        <dl className="project-card-fields">
+                          <div><dt>Live refs</dt><dd>{show(r.live_refs)}</dd></div>
+                          <div><dt>External refs</dt><dd>{show(r.external_refs)}</dd></div>
+                          <div><dt>Fingerprint</dt><dd className="project-card-clamp">{show(r.fingerprint)}</dd></div>
+                          <div><dt>Updated</dt><dd>{when(r.updated_at)}</dd></div>
+                        </dl>
+                      </article>
+                    ))}
                   </div>
                   <Pager page={tabPage} total={pageTotal} onPage={(p) => setPageNums((prev) => ({ ...prev, references: p }))} />
                 </>
@@ -779,6 +819,32 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                         )}
                       </tbody>
                     </table>
+                  </div>
+                  <div className="project-card-list" aria-label="Note cards">
+                    {pageRows.map((n, i) => (
+                      <article key={n.id} className="project-card">
+                        <div className="project-card-head">
+                          <span className="project-card-sn">{tabPage * PAGE_SIZE + i + 1}</span>
+                          <strong className="project-card-title">Note {n.id}</strong>
+                          <span className="project-card-stage">{show(n.priority)}</span>
+                        </div>
+                        <dl className="project-card-fields">
+                          <div><dt>Subject</dt><dd className="project-card-clamp">{show(n.subject)}</dd></div>
+                          <div><dt>Summary</dt><dd className="project-card-clamp">{show(n.summary)}</dd></div>
+                          <div><dt>Linked trade</dt><dd>{show(n.trade_id)}</dd></div>
+                          <div><dt>Action required</dt><dd>{show(n.action_required)}</dd></div>
+                          <div><dt>Created</dt><dd>{when(n.created_at)}</dd></div>
+                        </dl>
+                        <div className="project-card-actions">
+                          {NOTE_LONG_TEXT_FIELDS.map((field) => {
+                            const h = NOTE_COLUMNS.find(([, f]) => f === field)?.[0] || field
+                            return (
+                              <button key={field} type="button" className="raw-message-btn" onClick={() => setRawMessage({ ref: `Note ${n.id}`, column: h, text: n[field] || '' })} aria-label={`View ${h} for note ${n.id}`}>View {h}</button>
+                            )
+                          })}
+                        </div>
+                      </article>
+                    ))}
                   </div>
                   <Pager page={tabPage} total={pageTotal} onPage={(p) => setPageNums((prev) => ({ ...prev, notes: p }))} />
                 </>
