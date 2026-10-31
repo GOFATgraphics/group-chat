@@ -2163,11 +2163,13 @@ export default function Chat({ session }) {
     .filter(([key]) => key !== viewKey(view))
     .reduce((sum, [, n]) => sum + n, 0)
 
-  // Project screens: a persistent Chats / Projects switch sits above
-  // every project page, so chat and project no longer blindly replace
-  // each other. Chats goes straight back to the chat shell, Projects
-  // goes to the project list, and the dashboard also has its own
-  // Back to projects and Back to chats buttons below. Chat state
+  // Project screens: the dashboard keeps a Chats / Projects switch
+  // above it on desktop (hidden on iPhone, where the dashboard top
+  // bar and side panel take over). The Projects list and Create pages
+  // have no switch: they already have Back to chats, and the switch
+  // was redundant clutter there. Chats goes straight back to the chat
+  // shell, Projects goes to the project list, and the dashboard also
+  // has its own Back to projects and Back to chats buttons below. Chat state
   // (view, messages, presence) is kept in this component and is not
   // reset by switching, because projectScreen is only a render switch.
   if (projectScreen) {
@@ -2191,7 +2193,6 @@ export default function Chat({ session }) {
     if (projectScreen.page === 'list') {
       return (
         <>
-          {switchBar}
           <ProjectsList
             projects={projects}
             loading={projectsLoading}
@@ -2206,7 +2207,6 @@ export default function Chat({ session }) {
     if (projectScreen.page === 'create') {
       return (
         <>
-          {switchBar}
           <CreateProject onDone={createProjectAndOpen} onBack={() => setProjectScreen({ page: 'list' })} onBackToChats={() => setProjectScreen(null)} error={createError} />
         </>
       )

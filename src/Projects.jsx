@@ -142,15 +142,16 @@ export function ProjectsList({ projects, loading, error, onCreate, onOpen, onBac
   return (
     <main className="project-page" aria-label="Projects">
       <header className="project-header">
-        <button className="project-back" onClick={onBack} aria-label="Back to chats">
-          &lsaquo; Back to chats
-        </button>
+        <div className="project-list-topbar">
+          <button className="project-back" onClick={onBack} aria-label="Back to chats">
+            &lsaquo; Back to chats
+          </button>
+          <button className="project-list-new" onClick={onCreate} aria-label="Create new project">
+            + New
+          </button>
+        </div>
         <h1>Projects</h1>
       </header>
-      <p className="muted">Projects are containers for trade work. Each project gets its own queue, stages, database, references, notes, and sync log views.</p>
-      <button className="primary project-create-btn" onClick={onCreate}>
-        Create new project
-      </button>
       {error ? (
         <p className="project-empty">{error}</p>
       ) : loading ? (
@@ -163,7 +164,7 @@ export function ProjectsList({ projects, loading, error, onCreate, onOpen, onBac
             <li key={p.id}>
               <button className="project-row" onClick={() => onOpen(p)} aria-label={`Open project ${p.name}`}>
                 <span className="project-row-name">{p.name}</span>
-                <span className="muted">Open dashboard &rsaquo;</span>
+                <span className="project-row-arrow" aria-hidden="true">&rsaquo;</span>
               </button>
             </li>
           ))}
@@ -216,7 +217,6 @@ export function CreateProject({ onDone, onBack, onBackToChats, error }) {
         </button>
       </form>
       {error ? <p className="project-empty">{error}</p> : null}
-      <p className="muted">Done opens a new dashboard for this project. Sync to Google Sheets is by the operator script only; this app records sync requests and results in the Sync log, and never writes to Sheets, Drive, or Apps Script itself.</p>
     </main>
   )
 }
@@ -346,7 +346,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   // never refetches a page already loaded, and opening the dashboard
   // never loads a full table at all. Key is `${kind}:${page}`.
   const [pages, setPages] = useState({})
-  const [pageNums, setPageNums] = useState({ queue: 0, stages: 0, database: 0, references: 0, notes: 0, log: 0 })
+  const [pageNums, setPageNums] = useState({ queue: 0, stages: 0, latest: 0, database: 0, references: 0, notes: 0, log: 0 })
   const [pageLoading, setPageLoading] = useState({})
   const [pageError, setPageError] = useState({})
   const [syncBusyId, setSyncBusyId] = useState(null)
@@ -397,7 +397,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
     setError('')
     setData(null)
     setPages({})
-    setPageNums({ queue: 0, stages: 0, database: 0, references: 0, notes: 0, log: 0 })
+    setPageNums({ queue: 0, stages: 0, latest: 0, database: 0, references: 0, notes: 0, log: 0 })
     fetchDashboard(token, project.id)
       .then((d) => {
         if (!cancelled) setData(d)
@@ -506,6 +506,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   const panelTabs = [
     ['queue', 'Queue'],
     ['stages', 'Stages'],
+    ['latest', 'Latest'],
     ['database', 'Database view'],
     ['references', 'References'],
     ['notes', 'Notes'],
@@ -572,6 +573,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
         {[
           ['queue', 'Queue'],
           ['stages', 'Stages'],
+          ['latest', 'Latest'],
           ['database', 'Database view'],
           ['references', 'References'],
           ['notes', 'Notes'],
@@ -634,23 +636,83 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       </article>
                     ))}
                   </div>
-                  {Array.isArray(data?.latestTrades) && data.latestTrades.length > 0 ? (
-                    <>
-                      <h3>Latest trades</h3>
-                      <ul className="project-list">
-                        {data.latestTrades.map((t) => (
-                          <li key={t.id}>
-                            <div className="project-row">
-                              <span className="project-row-name">
-                                {show(t.contract_ref)} · {show(t.commodity)} {t.quantity != null ? show(t.quantity) : ''}
-                              </span>
-                              <span className="muted">{t.stage}</span>
-                            </div>
-                          </li>
+                </>
+              )}
+            </section>
+          )}
+
+          {tab === 'latest' && (
+            <section aria-label="Latest trades">
+              <h2>Latest</h2>
+              {syncMessage ? <p className="project-empty">{syncMessage}</p> : null}
+              {syncError ? <p className="project-empty">{syncError}</p> : null}
+              {loading ? (
+                <p className="project-empty">Loading latest trades…</p>
+              ) : !Array.isArray(data?.latestTrades) || data.latestTrades.length === 0 ? (
+                <p className="project-empty">No latest trades yet.</p>
+              ) : (
+                <>
+                  <div className="project-table-wrap">
+                    <table className="project-table">
+                      <thead>
+                        <tr>
+                          <th className="sn-col">S/N</th>
+                          {SLIM_DB_COLUMNS.map(([h]) => (
+                            <th key={h}>{h}</th>
+                          ))}
+                          <th>Details</th>
+                          <th>Sync</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.latestTrades.map((t, i) => (
+                          <tr key={t.id}>
+                            <td className="sn-col">{i + 1}</td>
+                            {SLIM_DB_COLUMNS.map(([h, field]) => (
+                              <td key={h}>{field === 'stage' ? show(t.stage) : show(t[field])}</td>
+                            ))}
+                            <td>
+                              <button type="button" className="raw-message-btn" onClick={() => onOpenDetail(t)} aria-label={`View full details for ${t.contract_ref || `trade ${t.id}`}`}>
+                                Details
+                              </button>
+                            </td>
+                            <td>
+                              <button
+                                type="button"
+                                className="raw-message-btn"
+                                disabled={syncBusyId === t.id || pendingSyncIds.has(t.id) || syncedIds.has(t.id)}
+                                onClick={() => onRequestSync(t)}
+                                aria-label={`Request sync for ${t.contract_ref || `trade ${t.id}`}`}
+                              >
+                                {syncedIds.has(t.id) ? 'Synced' : pendingSyncIds.has(t.id) ? 'Sync requested' : syncBusyId === t.id ? 'Requesting…' : 'Sync'}
+                              </button>
+                            </td>
+                          </tr>
                         ))}
-                      </ul>
-                    </>
-                  ) : null}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="project-card-list" aria-label="Latest trade cards">
+                    {data.latestTrades.map((t, i) => (
+                      <article key={t.id} className="project-card">
+                        <div className="project-card-head">
+                          <span className="project-card-sn">{i + 1}</span>
+                          <strong className="project-card-title">{show(t.contract_ref)}</strong>
+                          <span className="project-card-stage">{show(t.stage)}</span>
+                        </div>
+                        <p className="project-card-sub">{show(t.commodity)}{t.quantity != null ? ` · ${show(t.quantity)}` : ''}{t.disport ? ` · ${show(t.disport)}` : ''}</p>
+                        <dl className="project-card-fields">
+                          <div><dt>Buyer</dt><dd>{show(t.buyer)}</dd></div>
+                          <div><dt>Seller</dt><dd>{show(t.seller)}</dd></div>
+                          <div><dt>Disport</dt><dd>{show(t.disport)}</dd></div>
+                        </dl>
+                        <div className="project-card-actions">
+                          <button type="button" className="raw-message-btn project-card-primary" onClick={() => onOpenDetail(t)}>Details</button>
+                          <button type="button" className="raw-message-btn project-card-primary" disabled={syncBusyId === t.id || pendingSyncIds.has(t.id) || syncedIds.has(t.id)} onClick={() => onRequestSync(t)}>{syncedIds.has(t.id) ? 'Synced' : pendingSyncIds.has(t.id) ? 'Sync requested' : syncBusyId === t.id ? 'Requesting…' : 'Sync'}</button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
                 </>
               )}
             </section>

@@ -2464,6 +2464,16 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
 .project-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%; min-width: 0; padding: 14px 0; border: 0; border-bottom: 0.5px solid var(--separator); background: none; color: var(--text); text-align: left; }
 .project-row-name { font-size: 17px; font-weight: 600; flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .project-row .muted { min-width: 0; flex-shrink: 1; overflow-wrap: anywhere; text-align: right; }
+/* Projects list top bar (cleanup build): Back to chats on the left,
+   + New on the right, both at least 44px tall, then the Projects
+   title, then the project rows directly. No Chats / Projects switch,
+   no descriptive paragraph, and no full-width Create button on this
+   page. Project rows are whole-row tap cards: name left, > right,
+   no repeated "Open dashboard" text. */
+.project-list-topbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.project-list-topbar .project-back { min-height: 44px; padding: 10px 12px; display: inline-flex; align-items: center; }
+.project-list-new { min-height: 44px; padding: 10px 16px; font-size: 16px; font-weight: 600; border: 0.5px solid var(--separator); border-radius: 999px; background: var(--fill); color: var(--blue); }
+.project-row-arrow { flex-shrink: 0; font-size: 20px; color: var(--muted); }
 .project-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 20px; }
 .project-tab { border: 0.5px solid var(--separator); border-radius: 999px; background: var(--fill); color: var(--text); padding: 8px 14px; font-size: 15px; }
 .project-tab.active { background: var(--blue); color: #fff; border-color: var(--blue); }
