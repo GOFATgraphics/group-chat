@@ -53,16 +53,16 @@ export default function ChatList({ items, me, myAvatar, activeKey, onOpen, onSet
         </ul>
         {onOpenProjects && (
           <>
-            <div className="list-section">Project</div>
+            <div className="list-section">Projects</div>
             <ul className="convo-list">
               <li>
-                <button className="convo" onClick={onOpenProjects} aria-label="Open project">
+                <button className="convo" onClick={onOpenProjects} aria-label="Open projects">
                   <span className="convo-body">
                     <span className="convo-line">
-                      <span className="convo-title">project</span>
+                      <span className="convo-title">Projects</span>
                       <ChevronRight />
                     </span>
-                    <span className="convo-preview muted">Create a project and open its dashboard</span>
+                    <span className="convo-preview muted">Open your projects and dashboards</span>
                   </span>
                 </button>
               </li>

@@ -34,7 +34,7 @@ import { prepareForUpload, uploadWithProgress, saveMedia, imageLinksIn, withoutM
 import { playPop, playReceive, playSend, setSoundsEnabled, soundsEnabled, unlockAudio } from './sounds.js'
 
 const PAGE_SIZE = 100
-const MAX_FILE_BYTES = 50 * 1024 * 1024
+const MAX_FILE_BYTES = 25 * 1024 * 1024
 const URL_TTL_SECONDS = 60 * 60 * 12
 const TAPBACKS = ['❤️', '👍', '👎', '😂', '‼️', '❓', '🔥']
 const GROUP_WINDOW_MS = 5 * 60 * 1000
@@ -1584,7 +1584,7 @@ export default function Chat({ session }) {
       const picked = files.slice(0, MAX_ATTACHMENTS)
       if (files.length > MAX_ATTACHMENTS) setError('Maximum 5 pictures at a time')
       if (picked.some((f) => f.size > MAX_FILE_BYTES)) {
-        setError('Files must be 50 MB or smaller.')
+        setError('Files must be 25 MB or smaller.')
         return false
       }
       if (picked.length === 1) return send({ text, file: picked[0], duration })
@@ -1640,7 +1640,7 @@ export default function Chat({ session }) {
     // Photo, video, voice note or file: show it at once from the local copy,
     // then shrink (photos), upload with progress and save in the background.
     if (file.size > MAX_FILE_BYTES) {
-      setError('Files must be 50 MB or smaller.')
+      setError('Files must be 25 MB or smaller.')
       return false
     }
     const tempId = `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
@@ -2163,24 +2163,62 @@ export default function Chat({ session }) {
     .filter(([key]) => key !== viewKey(view))
     .reduce((sum, [, n]) => sum + n, 0)
 
-  // Whole Project pages take over the screen when open.
-  if (projectScreen?.page === 'list') {
-    return (
-      <ProjectsList
-        projects={projects}
-        loading={projectsLoading}
-        error={projectsError}
-        onCreate={() => setProjectScreen({ page: 'create' })}
-        onOpen={(project) => setProjectScreen({ page: 'dashboard', project })}
-        onBack={() => setProjectScreen(null)}
-      />
+  // Project screens: a persistent Chats / Projects switch sits above
+  // every project page, so chat and project no longer blindly replace
+  // each other. Chats goes straight back to the chat shell, Projects
+  // goes to the project list, and the dashboard also has its own
+  // Back to projects and Back to chats buttons below. Chat state
+  // (view, messages, presence) is kept in this component and is not
+  // reset by switching, because projectScreen is only a render switch.
+  if (projectScreen) {
+    const switchBar = (
+      <nav className="project-switch" aria-label="Chats or projects">
+        <button type="button" className="project-switch-btn" onClick={() => setProjectScreen(null)}>
+          Chats
+        </button>
+        <button
+          type="button"
+          className="project-switch-btn active"
+          onClick={() => {
+            refreshProjects()
+            setProjectScreen({ page: 'list' })
+          }}
+        >
+          Projects
+        </button>
+      </nav>
     )
-  }
-  if (projectScreen?.page === 'create') {
-    return <CreateProject onDone={createProjectAndOpen} onBack={() => setProjectScreen({ page: 'list' })} error={createError} />
-  }
-  if (projectScreen?.page === 'dashboard') {
-    return <ProjectDashboard project={projectScreen.project} token={session?.access_token} onBack={() => setProjectScreen({ page: 'list' })} />
+    if (projectScreen.page === 'list') {
+      return (
+        <>
+          {switchBar}
+          <ProjectsList
+            projects={projects}
+            loading={projectsLoading}
+            error={projectsError}
+            onCreate={() => setProjectScreen({ page: 'create' })}
+            onOpen={(project) => setProjectScreen({ page: 'dashboard', project })}
+            onBack={() => setProjectScreen(null)}
+          />
+        </>
+      )
+    }
+    if (projectScreen.page === 'create') {
+      return (
+        <>
+          {switchBar}
+          <CreateProject onDone={createProjectAndOpen} onBack={() => setProjectScreen({ page: 'list' })} onBackToChats={() => setProjectScreen(null)} error={createError} />
+        </>
+      )
+    }
+    if (projectScreen.page === 'dashboard') {
+      return (
+        <>
+          {switchBar}
+          <ProjectDashboard project={projectScreen.project} token={session?.access_token} onBack={() => setProjectScreen({ page: 'list' })} onBackToChats={() => setProjectScreen(null)} />
+        </>
+      )
+    }
   }
 
   return (

@@ -63,7 +63,32 @@ export async function createProject(token, name) {
 }
 
 export async function fetchDashboard(token, projectId) {
+  // Fast dashboard (server change, this build): project row, exact
+  // counts, stage counts, sync summary, emptyColumns and
+  // databaseColumns, plus the latest 20 slim trades and latest 20
+  // notes only. No 200-row full collections, no full_data payload.
+  // Full tables are paged through fetchPage below, 50 rows at a time.
   return apiFetch(token, `/api/projects/${projectId}`)
+}
+
+// One page of one collection, 50 rows, server limit/offset, with a
+// total count. Trades use ?slim=1: slim fields only, no full_data.
+// Returns { rows, total }.
+export async function fetchPage(token, projectId, kind, page) {
+  const offset = page * 50
+  const slim = kind === 'trades' ? '&slim=1' : ''
+  const data = await apiFetch(token, `/api/projects/${projectId}/${kind}?limit=50&offset=${offset}${slim}`)
+  const key = kind === 'sync-log' ? 'sync_log' : kind
+  return { rows: Array.isArray(data[key]) ? data[key] : [], total: typeof data.total === 'number' ? data.total : 0 }
+}
+
+// One trade row, full, for the Database Details popup only. This is
+// the only place a list view ever loads full_data, and only for the
+// one trade the user tapped. Returns the trade row (full_data may be
+// null if the trade was never backfilled).
+export async function fetchTradeDetail(token, projectId, tradeId) {
+  const data = await apiFetch(token, `/api/projects/${projectId}/trades/${tradeId}`)
+  return data.trade
 }
 
 // All rows of one subcollection for a project, paged through the
@@ -75,6 +100,8 @@ export async function fetchDashboard(token, projectId) {
 // the old first-200 behaviour, so no server change was needed here:
 // this helper just pages through it. Response keys are the collection
 // names themselves (trades, references, notes).
+// Legacy full-list helper, kept for API compatibility only. The
+// dashboard no longer calls it: it pages with fetchPage, 50 at a time.
 export async function fetchAllCollection(token, projectId, kind) {
   const all = []
   let offset = 0
@@ -118,7 +145,7 @@ export function ProjectsList({ projects, loading, error, onCreate, onOpen, onBac
         <button className="project-back" onClick={onBack} aria-label="Back to chats">
           &lsaquo; Back to chats
         </button>
-        <h1>project</h1>
+        <h1>Projects</h1>
       </header>
       <p className="muted">Projects are containers for trade work. Each project gets its own queue, stages, database, references, notes, and sync log views.</p>
       <button className="primary project-create-btn" onClick={onCreate}>
@@ -147,15 +174,22 @@ export function ProjectsList({ projects, loading, error, onCreate, onOpen, onBac
 }
 
 // Whole-page create project form. Done is disabled until a trimmed name exists.
-export function CreateProject({ onDone, onBack, error }) {
+export function CreateProject({ onDone, onBack, onBackToChats, error }) {
   const [name, setName] = useState('')
   const trimmed = name.trim()
   return (
     <main className="project-page" aria-label="Create a project">
       <header className="project-header">
-        <button className="project-back" onClick={onBack} aria-label="Back to projects">
-          &lsaquo; Back
-        </button>
+        <div className="project-header-actions">
+          <button className="project-back" onClick={onBack} aria-label="Back to projects">
+            &lsaquo; Back to projects
+          </button>
+          {onBackToChats ? (
+            <button className="project-back" onClick={onBackToChats} aria-label="Back to chats">
+              &lsaquo; Back to chats
+            </button>
+          ) : null}
+        </div>
         <h1>Create a project</h1>
       </header>
       <form
@@ -257,65 +291,81 @@ const NOTE_COLUMNS = [
 // Database view and is not a TradesDB column.
 const TRADESDB_SHEET_COLUMNS = ["timestamp", "Mercancia_Contract_ref", "trade_date", "purchase_or_sale", "total_quantity", "quantity_unit", "commodity_name", "origin", "incoterm", "destination_port", "shipment_window", "unit_price", "currency", "price_per_unit", "seller_name", "seller_address", "seller_contact", "seller_email", "seller_phone", "seller_signatory", "buyer_name", "buyer_address", "buyer_contact", "buyer_email", "buyer_phone", "buyer_signatory", "direct_business", "broker_name", "broker_address", "broker_contact", "broker_email", "broker_phone", "commission", "crop_year", "moisture_max", "protein_min", "oil_min", "purity_min", "admixture_max", "fibre_max", "ash_max", "starch_min", "aflatoxin_limit", "nut_count", "outturn_kor", "weevilled_max", "natural_variation", "physical_condition", "cleaning_method", "tolerance", "tolerance_type", "cargo_type", "container_type", "total_containers", "load_per_container", "partial_shipment", "transshipment", "free_time_dest", "shipment_advice", "insurance", "demurrage_free_time", "packing_type", "packing_size", "shipping_marks", "tagging_labels", "weight_quality_basis", "inspection_agency", "inspection_paid_by", "silica_gel", "fumigation_type", "container_lining", "inland_haulage", "thc_status", "payment_terms", "key_deadline", "beneficiary_name", "bank_name", "account_number", "swift_bic", "gst_number", "pan_number", "iec_code", "fssai_number", "exim_code", "arbitration_law", "import_permit_noc", "doc_instructions", "required_documents", "addendum_notes", "raw_message", "last_update", "contract_issuer", "additional_information", "trader_name", "product_category", "Parent_Folder_URL", "authorized_signatory", "back_to_back_source_ref", "column_98", "contract_no", "direction", "Folder_Banking_URL", "Folder_Contacts_URL", "Folder_Docs_URL", "Folder_Logistics_URL", "Folder_Packing_URL", "Folder_Specs_URL", "Has_notes", "mercancia_ref", "modification_notes", "Notes", "parent_reference", "Sender_Email", "trade_status", "trade_type", "WhatsApp_number"]
 
-export function ProjectDashboard({ project, token, onBack }) {
+const PAGE_SIZE = 50
+const SLIM_DB_COLUMNS = [
+  ['Contract ref', 'contract_ref'],
+  ['Buyer', 'buyer'],
+  ['Seller', 'seller'],
+  ['Commodity', 'commodity'],
+  ['Quantity', 'quantity'],
+  ['Disport', 'disport'],
+  ['Stage', 'stage'],
+]
+
+function Pager({ page, total, onPage }) {
+  const start = total === 0 ? 0 : page * PAGE_SIZE + 1
+  const end = Math.min(total, (page + 1) * PAGE_SIZE)
+  const lastPage = total === 0 ? 0 : Math.floor((total - 1) / PAGE_SIZE)
+  return (
+    <div className="project-pager" role="navigation" aria-label="Page">
+      <button type="button" className="project-pager-btn" disabled={page <= 0} onClick={() => onPage(page - 1)}>
+        &lsaquo; Previous
+      </button>
+      <span className="muted">
+        Showing {start}-{end} of {total}
+      </span>
+      <button type="button" className="project-pager-btn" disabled={page >= lastPage} onClick={() => onPage(page + 1)}>
+        Next &rsaquo;
+      </button>
+    </div>
+  )
+}
+
+export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   const [tab, setTab] = useState('queue')
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  // Database, References, and Notes tabs load separately, paged, so
-  // all seeded rows appear, not just the dashboard's capped first 200
-  // (trades 206, references 255, notes 1471).
-  const [dbTrades, setDbTrades] = useState(null)
-  const [dbLoading, setDbLoading] = useState(false)
-  const [dbError, setDbError] = useState('')
-  const [refRows, setRefRows] = useState(null)
-  const [refLoading, setRefLoading] = useState(false)
-  const [refError, setRefError] = useState('')
-  const [noteRows, setNoteRows] = useState(null)
-  const [noteLoading, setNoteLoading] = useState(false)
-  const [noteError, setNoteError] = useState('')
-  // Queue and Stages tabs also need full, paged lists, not the
-  // dashboard's capped first 200 rows: Stages counted 200 matched
-  // trades instead of the true 206, and a queue over 200 rows would
-  // be cut the same way. These load lazily on tab switch, like the
-  // Database, References, and Notes tabs, and fall back to the
-  // dashboard lists only while the paged load is in progress.
-  const [allQueue, setAllQueue] = useState(null)
-  const [queueLoading, setQueueLoading] = useState(false)
-  const [queueError, setQueueError] = useState('')
-  // Manual sync: one pending request at a time, by trade id, plus
-  // the last request message shown above the Database table.
+  // Paged tables, cached per project in this session: switching tabs
+  // never refetches a page already loaded, and opening the dashboard
+  // never loads a full table at all. Key is `${kind}:${page}`.
+  const [pages, setPages] = useState({})
+  const [pageNums, setPageNums] = useState({ queue: 0, stages: 0, database: 0, references: 0, notes: 0, log: 0 })
+  const [pageLoading, setPageLoading] = useState({})
+  const [pageError, setPageError] = useState({})
   const [syncBusyId, setSyncBusyId] = useState(null)
   const [syncMessage, setSyncMessage] = useState('')
   const [syncError, setSyncError] = useState('')
-  // Long-text popup: { ref, column, text } or null. The table cell
-  // shows a View button only, never the full text inline, so a long
-  // note cannot stretch its column and push following columns far
-  // away. raw_message already worked this way; addendum_notes,
-  // Notes, doc_instructions, required_documents, and
-  // additional_information now work the
-  // same way in Database, and in Notes the long Summary, Subject,
-  // and Message ID columns work the same way. Other columns stay
-  // inline, including addresses and shipping marks, which are short
-  // in normal rows, and in Notes Priority, Action required, Linked
-  // trade ID, and Created, which stay inline verbatim even when
-  // Action required is TRUE or an email address, because that is
-  // what the source Shadow Notes Log contained, seeded verbatim.
+  // Database long-text columns are View buttons in the list, exactly
+  // as before, but tapping one fetches that single trade only, so
+  // the list never needs full_data for every row. The Details popup
+  // shows the whole full sheet row for one trade, also on tap only.
   const LONG_TEXT_COLUMNS = ['addendum_notes', 'Notes', 'doc_instructions', 'required_documents', 'additional_information', 'raw_message']
   const NOTE_LONG_TEXT_FIELDS = ['message_id', 'subject', 'summary']
   const [rawMessage, setRawMessage] = useState(null)
+  // Database Details popup: one trade, full_data loaded on tap only.
+  const [detail, setDetail] = useState(null)
+  const [showEmptyColumns, setShowEmptyColumns] = useState(false)
 
   useEffect(() => {
-    if (!rawMessage) return undefined
-    const onKey = (e) => { if (e.key === 'Escape') setRawMessage(null) }
+    if (!rawMessage && !detail) return undefined
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        setRawMessage(null)
+        setDetail(null)
+      }
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [rawMessage])
+  }, [rawMessage, detail])
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
     setError('')
+    setData(null)
+    setPages({})
+    setPageNums({ queue: 0, stages: 0, database: 0, references: 0, notes: 0, log: 0 })
     fetchDashboard(token, project.id)
       .then((d) => {
         if (!cancelled) setData(d)
@@ -331,165 +381,44 @@ export function ProjectDashboard({ project, token, onBack }) {
     }
   }, [token, project.id])
 
+  const tabKind = { queue: 'queue', database: 'trades', references: 'references', notes: 'notes', log: 'sync-log' }[tab]
+  const tabPage = pageNums[tab] ?? 0
   useEffect(() => {
-    if ((tab !== 'database' && tab !== 'stages') || dbTrades !== null) return undefined
+    if (!tabKind) return undefined
+    const key = `${tabKind}:${tabPage}`
+    if (pages[key]) return undefined
     let cancelled = false
-    setDbLoading(true)
-    setDbError('')
-    fetchAllTrades(token, project.id)
-      .then((rows) => {
-        if (!cancelled) setDbTrades(rows)
+    setPageLoading((prev) => ({ ...prev, [key]: true }))
+    setPageError((prev) => ({ ...prev, [key]: '' }))
+    fetchPage(token, project.id, tabKind, tabPage)
+      .then((res) => {
+        if (!cancelled) setPages((prev) => ({ ...prev, [key]: res }))
       })
       .catch((err) => {
-        if (!cancelled) setDbError(err.message || 'Could not load trades.')
+        if (!cancelled) setPageError((prev) => ({ ...prev, [key]: err.message || 'Could not load this page.' }))
       })
       .finally(() => {
-        if (!cancelled) setDbLoading(false)
+        if (!cancelled) setPageLoading((prev) => ({ ...prev, [key]: false }))
       })
     return () => {
       cancelled = true
     }
-  }, [tab, token, project.id, dbTrades])
+  }, [tab, tabKind, tabPage, token, project.id, pages])
 
-  useEffect(() => {
-    if (tab !== 'references' || refRows !== null) return undefined
-    let cancelled = false
-    setRefLoading(true)
-    setRefError('')
-    fetchAllCollection(token, project.id, 'references')
-      .then((rows) => {
-        if (!cancelled) setRefRows(rows)
-      })
-      .catch((err) => {
-        if (!cancelled) setRefError(err.message || 'Could not load references.')
-      })
-      .finally(() => {
-        if (!cancelled) setRefLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [tab, token, project.id, refRows])
-
-  useEffect(() => {
-    if (tab !== 'notes' || noteRows !== null) return undefined
-    let cancelled = false
-    setNoteLoading(true)
-    setNoteError('')
-    fetchAllCollection(token, project.id, 'notes')
-      .then((rows) => {
-        if (!cancelled) setNoteRows(rows)
-      })
-      .catch((err) => {
-        if (!cancelled) setNoteError(err.message || 'Could not load notes.')
-      })
-      .finally(() => {
-        if (!cancelled) setNoteLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [tab, token, project.id, noteRows])
-
-  useEffect(() => {
-    if ((tab !== 'queue' && tab !== 'stages') || allQueue !== null) return undefined
-    let cancelled = false
-    setQueueLoading(true)
-    setQueueError('')
-    fetchAllCollection(token, project.id, 'queue')
-      .then((rows) => {
-        if (!cancelled) setAllQueue(rows)
-      })
-      .catch((err) => {
-        if (!cancelled) setQueueError(err.message || 'Could not load queue.')
-      })
-      .finally(() => {
-        if (!cancelled) setQueueLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [tab, token, project.id, allQueue])
-
-  const queue = data?.queue ?? []
-  const trades = data?.trades ?? []
-  const syncLog = data?.sync_log ?? []
-  // Stages and Queue use the full paged lists when loaded, falling
-  // back to the dashboard's capped lists only while loading. With
-  // all 206 seeded trades at stage 'matched' and an empty queue,
-  // Stages now shows Matched 206, not the dashboard cap of 200.
-  const stageTrades = dbTrades ?? trades
-  const stageQueue = allQueue ?? queue
-  const linkedQueueIds = new Set(stageTrades.map((t) => t.queue_id).filter((id) => id != null))
-  const stageCount = (key) =>
-    stageTrades.filter((t) => t.stage === key).length +
-    stageQueue.filter((q) => q.status === key && !linkedQueueIds.has(q.id)).length
-  const queueRows = allQueue ?? queue
-
-  // Database columns are dynamic, not hardcoded: they come from the
-  // full_data keys of the first trade that has full_data, in the order
-  // the backfill stored them (sheet header order), plus the app Stage
-  // column at the end, which is not a TradesDB column. Trades without
-  // full_data render '—' in the full columns and still show Stage, so
-  // the page works before the backfill runs. If no trade has full_data
-  // at all, the old simplified columns are used instead.
-  const dbRows = dbTrades ?? trades
-  const firstFull = dbRows.find((t) => t.full_data && typeof t.full_data === 'object' && !Array.isArray(t.full_data))
-  const dbColumns = firstFull
-    ? [...TRADESDB_SHEET_COLUMNS.filter((c) => Object.prototype.hasOwnProperty.call(firstFull.full_data, c)), ...Object.keys(firstFull.full_data).filter((c) => !TRADESDB_SHEET_COLUMNS.includes(c)), 'Stage', 'Sync']
-    : [...SIMPLE_COLUMNS.map(([h]) => h), 'Sync']
-  const dbCell = (t, col) => {
-    if (col === 'Stage') return show(t.stage)
-    if (firstFull) return t.full_data && typeof t.full_data === 'object' ? show(t.full_data[col]) : '—'
-    const field = SIMPLE_COLUMNS.find(([h]) => h === col)?.[1]
-    return show(field ? t[field] : undefined)
-  }
-  const dbFullCount = dbRows.filter((t) => t.full_data && typeof t.full_data === 'object').length
-  // Empty-column hiding, Database view only, presentation only: no
-  // column is removed from the sheet-order list and no data changes.
-  // A column is empty only when every loaded trade has no value for
-  // it: null, undefined, an empty/whitespace string, a dash-only
-  // string, or an empty array. 0 and false are NOT empty, so a
-  // numeric zero keeps its column visible. The list is recomputed
-  // from the loaded trades on every render, never hardcoded, so a
-  // future trade that fills a column makes that column reappear
-  // automatically even while empty columns stay hidden. Stage and
-  // Sync are app columns, never hidden. The toggle is shown only
-  // once the full paged trade list has loaded, so the count is not
-  // taken from the dashboard's capped first 200 rows.
-  const [showEmptyColumns, setShowEmptyColumns] = useState(false)
+  const counts = data?.counts ?? {}
+  const stageCounts = data?.stageCounts ?? {}
+  const pendingSyncIds = new Set(data?.pendingSyncIds ?? [])
+  const syncedIds = new Set(data?.syncedIds ?? [])
+  const databaseColumns = Array.isArray(data?.databaseColumns) ? data.databaseColumns : []
+  const serverEmptyColumns = Array.isArray(data?.emptyColumns) ? data.emptyColumns : []
   const isEmptyCellValue = (v) =>
     v === null || v === undefined || (typeof v === 'string' && (v.trim() === '' || v.trim() === '—' || v.trim() === '-')) || (Array.isArray(v) && v.length === 0)
-  const dbColumnValue = (t, col) => {
-    if (col === 'Stage') return t.stage
-    if (col === 'Sync') return 'Sync'
-    if (firstFull) return t.full_data && typeof t.full_data === 'object' ? t.full_data[col] : undefined
-    const field = SIMPLE_COLUMNS.find(([h]) => h === col)?.[1]
-    return field ? t[field] : undefined
-  }
-  const emptyDbColumns = firstFull
-    ? dbColumns.filter((col) => col !== 'Stage' && col !== 'Sync' && dbRows.every((t) => isEmptyCellValue(dbColumnValue(t, col))))
-    : []
-  const visibleDbColumns = showEmptyColumns ? dbColumns : dbColumns.filter((col) => !emptyDbColumns.includes(col))
-  // A trade has a pending manual request when the log has a
-  // 'sync_request' row for it with no completed 'google_sheet' row
-  // after it. The dashboard log is capped at 200, newest first,
-  // so a very old request could fall off this list; the operator
-  // script reads the full paged log and is the authority.
-  const pendingSyncIds = new Set(
-    (syncLog || [])
-      .filter((s) => s.target === 'sync_request')
-      .filter((s) => !(syncLog || []).some((c) => c.target === 'google_sheet' && c.trade_id === s.trade_id && c.created_at >= s.created_at))
-      .map((s) => s.trade_id)
-  )
-  // Once-only dedupe in the UI: a trade with any successful
-  // 'google_sheet' row shows 'Synced' and cannot be requested
-  // again from here, so a second tap cannot duplicate its row
-  // in the clean sheet. The operator script enforces the same
-  // rule even if a request row somehow arrives anyway.
-  const syncedIds = new Set(
-    (syncLog || []).filter((s) => s.target === 'google_sheet' && s.success).map((s) => s.trade_id)
-  )
+  const pageData = tabKind ? pages[`${tabKind}:${tabPage}`] : null
+  const pageRows = pageData?.rows ?? []
+  const pageTotal = pageData?.total ?? counts[tabKind === 'sync-log' ? 'sync_log' : tabKind] ?? 0
+  const pageIsLoading = tabKind ? !!pageLoading[`${tabKind}:${tabPage}`] : false
+  const pageErr = tabKind ? pageError[`${tabKind}:${tabPage}`] : ''
+
   const onRequestSync = async (trade) => {
     setSyncError('')
     setSyncMessage('')
@@ -506,21 +435,65 @@ export function ProjectDashboard({ project, token, onBack }) {
     }
   }
 
-  // Every dashboard tab uses the wide page variant (no 900px cap),
-  // so Queue and Stages match Database, References, Notes, and Sync
-  // log instead of sitting narrow and centered while the sheet-like
-  // tabs stretch full width. The project list and create form are
-  // separate components and keep the centered page. The per-tab
-  // class on main is only for the per-page header colour in
-  // styles.css; it changes no layout on its own.
+  const onOpenDetail = async (trade) => {
+    setDetail({ trade, loading: true, full: null, error: '' })
+    try {
+      const full = await fetchTradeDetail(token, project.id, trade.id)
+      setDetail({ trade, loading: false, full, error: '' })
+    } catch (err) {
+      setDetail({ trade, loading: false, full: null, error: err.message || 'Could not load this trade.' })
+    }
+  }
+
+  const onViewLongText = async (trade, col) => {
+    try {
+      const full = await fetchTradeDetail(token, project.id, trade.id)
+      setRawMessage({
+        ref: full.full_data?.Mercancia_Contract_ref || full.contract_ref || '',
+        column: col,
+        text: full.full_data?.[col] || '',
+      })
+    } catch (err) {
+      setRawMessage({ ref: trade.contract_ref || '', column: col, text: '' })
+    }
+  }
+
+  const detailFields = () => {
+    if (!detail?.full) return []
+    const fd = detail.full.full_data
+    if (fd && typeof fd === 'object' && !Array.isArray(fd)) {
+      const cols = databaseColumns.length > 0 ? databaseColumns : [...TRADESDB_SHEET_COLUMNS, ...Object.keys(fd).filter((c) => !TRADESDB_SHEET_COLUMNS.includes(c))]
+      return cols.map((col) => ({ col, value: fd[col] }))
+    }
+    return SLIM_DB_COLUMNS.map(([h, field]) => ({ col: h, value: detail.full[field] }))
+  }
+  const detailVisibleFields = detailFields().filter((f) => showEmptyColumns || !isEmptyCellValue(f.value))
+  const detailEmptyCount = detailFields().length - detailFields().filter((f) => !isEmptyCellValue(f.value)).length
+
   const wide = true
   return (
     <main className={`project-page${wide ? ' project-page-wide' : ''} project-page-${tab}`} aria-label={`Dashboard for ${project.name}`}>
       <header className="project-header">
-        <button className="project-back" onClick={onBack} aria-label="Back to projects">
-          &lsaquo; Back to projects
-        </button>
+        <div className="project-header-actions">
+          <button className="project-back" onClick={onBack} aria-label="Back to projects">
+            &lsaquo; Back to projects
+          </button>
+          {onBackToChats ? (
+            <button className="project-back" onClick={onBackToChats} aria-label="Back to chats">
+              &lsaquo; Back to chats
+            </button>
+          ) : null}
+        </div>
         <h1>{project.name}</h1>
+        {loading ? (
+          <p className="muted">Loading counts…</p>
+        ) : error ? (
+          <p className="project-empty">{error}</p>
+        ) : (
+          <p className="muted">
+            {counts.trades ?? 0} trades · {counts.references ?? 0} references · {counts.notes ?? 0} notes · {counts.queue ?? 0} queued · {counts.sync_log ?? 0} sync log entries
+          </p>
+        )}
       </header>
       <nav className="project-tabs" aria-label="Dashboard sections">
         {[
@@ -537,34 +510,37 @@ export function ProjectDashboard({ project, token, onBack }) {
         ))}
       </nav>
 
-      {loading ? (
-        <p className="project-empty">Loading dashboard…</p>
-      ) : error ? (
+      {error ? (
         <p className="project-empty">{error}</p>
       ) : (
         <>
           {tab === 'queue' && (
             <section aria-label="Queue">
               <h2>Queue</h2>
-              {queueLoading ? (
+              {pageIsLoading ? (
                 <p className="project-empty">Loading queue…</p>
-              ) : queueError ? (
-                <p className="project-empty">{queueError}</p>
-              ) : queueRows.length === 0 ? (
+              ) : pageErr ? (
+                <p className="project-empty">{pageErr}</p>
+              ) : pageRows.length === 0 ? (
                 <p className="project-empty">No trades queued yet. The one-trader test will land here.</p>
               ) : (
-                <ul className="project-list">
-                  {queueRows.map((q) => (
-                    <li key={q.id}>
-                      <div className="project-row">
-                        <span className="project-row-name">{show(q.subject || q.message_id)}</span>
-                        <span className="muted">
-                          {show(q.sender)} · {q.status} · {when(q.created_at)}
-                        </span>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+                <>
+                  <ul className="project-list">
+                    {pageRows.map((q, i) => (
+                      <li key={q.id}>
+                        <div className="project-row">
+                          <span className="project-row-name">
+                            {tabPage * PAGE_SIZE + i + 1}. {show(q.subject || q.message_id)}
+                          </span>
+                          <span className="muted">
+                            {show(q.sender)} · {q.status} · {when(q.created_at)}
+                          </span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                  <Pager page={tabPage} total={pageTotal} onPage={(p) => setPageNums((prev) => ({ ...prev, queue: p }))} />
+                </>
               )}
             </section>
           )}
@@ -572,16 +548,38 @@ export function ProjectDashboard({ project, token, onBack }) {
           {tab === 'stages' && (
             <section aria-label="Stages">
               <h2>Stages</h2>
-              {dbLoading ? <p className="muted">Loading all trades for exact counts…</p> : null}
-              <div className="project-stage-grid">
-                {STAGES.map((s) => (
-                  <article key={s.key} className="project-stage-card">
-                    <div className="project-stage-count">{stageCount(s.key)}</div>
-                    <h3>{s.label}</h3>
-                    <p className="muted">{s.text}</p>
-                  </article>
-                ))}
-              </div>
+              {loading ? (
+                <p className="muted">Loading counts…</p>
+              ) : (
+                <>
+                  <div className="project-stage-grid">
+                    {STAGES.map((s) => (
+                      <article key={s.key} className="project-stage-card">
+                        <div className="project-stage-count">{stageCounts[s.key] ?? 0}</div>
+                        <h3>{s.label}</h3>
+                        <p className="muted">{s.text}</p>
+                      </article>
+                    ))}
+                  </div>
+                  {Array.isArray(data?.latestTrades) && data.latestTrades.length > 0 ? (
+                    <>
+                      <h3>Latest trades</h3>
+                      <ul className="project-list">
+                        {data.latestTrades.map((t) => (
+                          <li key={t.id}>
+                            <div className="project-row">
+                              <span className="project-row-name">
+                                {show(t.contract_ref)} · {show(t.commodity)} {t.quantity != null ? show(t.quantity) : ''}
+                              </span>
+                              <span className="muted">{t.stage}</span>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  ) : null}
+                </>
+              )}
             </section>
           )}
 
@@ -591,89 +589,88 @@ export function ProjectDashboard({ project, token, onBack }) {
               {syncMessage ? <p className="project-empty">{syncMessage}</p> : null}
               {syncError ? <p className="project-empty">{syncError}</p> : null}
               <p className="muted">
-                Own database view inside the app, full width like the TradesDB sheet. Scroll sideways for more columns.
-                {dbRows.length > 0 && firstFull
-                  ? (dbFullCount === dbRows.length
-                      ? ` All ${dbRows.length} trades have full trade data.`
-                      : ` ${dbFullCount} of ${dbRows.length} trades have full trade data; the rest show —.`)
-                  : dbRows.length > 0
-                    ? ' Full trade data has not been backfilled yet, so the simplified columns are shown.'
-                    : ''}
+                Own database view inside the app, full width like the TradesDB sheet. This list is paged, 50 trades at a time, and shows the slim trade fields only, so it opens fast. Long-text columns are View buttons only: tapping one loads that one trade&apos;s text. Tap Details on a row to see that one trade&apos;s full sheet row, in sheet order, with empty fields hidden by default.
+                {data ? (data.hasFullData ? ` ${serverEmptyColumns.length} empty columns in the full sheet data.` : ' Full trade data has not been backfilled yet, so Details shows the slim fields.') : ''}
               </p>
-              {firstFull && dbTrades !== null && emptyDbColumns.length > 0 ? (
+              {data?.hasFullData && serverEmptyColumns.length > 0 ? (
                 <p className="muted">
-                  {showEmptyColumns ? `${emptyDbColumns.length} empty columns shown` : `${emptyDbColumns.length} empty columns hidden`}{' '}
+                  {showEmptyColumns ? `${serverEmptyColumns.length} empty columns shown` : `${serverEmptyColumns.length} empty columns hidden`}{' '}
                   <button type="button" className="raw-message-btn" onClick={() => setShowEmptyColumns((v) => !v)} aria-label={showEmptyColumns ? 'Hide empty columns' : 'Show empty columns'}>
                     {showEmptyColumns ? 'Hide empty columns' : 'Show empty columns'}
                   </button>
                 </p>
               ) : null}
-              {dbLoading ? (
+              {pageIsLoading ? (
                 <p className="project-empty">Loading trades…</p>
-              ) : dbError ? (
-                <p className="project-empty">{dbError}</p>
+              ) : pageErr ? (
+                <p className="project-empty">{pageErr}</p>
               ) : (
-                <div className="project-table-wrap">
-                  <table className="project-table">
-                    <thead>
-                      <tr>
-                        <th className="sn-col">S/N</th>
-                        {visibleDbColumns.map((col) => (
-                          <th key={col}>{col}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {dbRows.length === 0 ? (
+                <>
+                  <div className="project-table-wrap">
+                    <table className="project-table">
+                      <thead>
                         <tr>
-                          <td colSpan={Math.max(visibleDbColumns.length, 1) + 1} className="project-empty">
-                            No trades saved yet.
-                          </td>
+                          <th className="sn-col">S/N</th>
+                          {SLIM_DB_COLUMNS.map(([h]) => (
+                            <th key={h}>{h}</th>
+                          ))}
+                          {LONG_TEXT_COLUMNS.filter((col) => showEmptyColumns || !serverEmptyColumns.includes(col)).map((col) => (
+                            <th key={col}>{col}</th>
+                          ))}
+                          <th>Details</th>
+                          <th>Sync</th>
                         </tr>
-                      ) : (
-                        dbRows.map((t, i) => (
-                          <tr key={t.id}>
-                            <td className="sn-col">{i + 1}</td>
-                            {visibleDbColumns.map((col) =>
-                              LONG_TEXT_COLUMNS.includes(col) && firstFull ? (
+                      </thead>
+                      <tbody>
+                        {pageRows.length === 0 ? (
+                          <tr>
+                            <td colSpan={SLIM_DB_COLUMNS.length + LONG_TEXT_COLUMNS.filter((col) => showEmptyColumns || !serverEmptyColumns.includes(col)).length + 3} className="project-empty">
+                              No trades saved yet.
+                            </td>
+                          </tr>
+                        ) : (
+                          pageRows.map((t, i) => (
+                            <tr key={t.id}>
+                              <td className="sn-col">{tabPage * PAGE_SIZE + i + 1}</td>
+                              {SLIM_DB_COLUMNS.map(([h, field]) => (
+                                <td key={h}>{field === 'stage' ? show(t.stage) : show(t[field])}</td>
+                              ))}
+                              {LONG_TEXT_COLUMNS.filter((col) => showEmptyColumns || !serverEmptyColumns.includes(col)).map((col) => (
                                 <td key={col} className="raw-message-cell">
                                   <button
                                     type="button"
                                     className="raw-message-btn"
-                                    onClick={() =>
-                                      setRawMessage({
-                                        ref: t.full_data?.Mercancia_Contract_ref || t.contract_ref || '',
-                                        column: col,
-                                        text: t.full_data?.[col] || '',
-                                      })
-                                    }
-                                    aria-label={`View ${col} for ${t.full_data?.Mercancia_Contract_ref || t.contract_ref || 'this trade'}`}
+                                    onClick={() => onViewLongText(t, col)}
+                                    aria-label={`View ${col} for ${t.contract_ref || `trade ${t.id}`}`}
                                   >
                                     View
                                   </button>
                                 </td>
-                              ) : col === 'Sync' ? (
-                                <td key={col}>
-                                  <button
-                                    type="button"
-                                    className="raw-message-btn"
-                                    disabled={syncBusyId === t.id || pendingSyncIds.has(t.id) || syncedIds.has(t.id)}
-                                    onClick={() => onRequestSync(t)}
-                                    aria-label={`Request sync for ${t.contract_ref || `trade ${t.id}`}`}
-                                  >
-                                    {syncedIds.has(t.id) ? 'Synced' : pendingSyncIds.has(t.id) ? 'Sync requested' : syncBusyId === t.id ? 'Requesting…' : 'Sync'}
-                                  </button>
-                                </td>
-                              ) : (
-                                <td key={col}>{dbCell(t, col)}</td>
-                              )
-                            )}
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+                              ))}
+                              <td>
+                                <button type="button" className="raw-message-btn" onClick={() => onOpenDetail(t)} aria-label={`View full details for ${t.contract_ref || `trade ${t.id}`}`}>
+                                  Details
+                                </button>
+                              </td>
+                              <td>
+                                <button
+                                  type="button"
+                                  className="raw-message-btn"
+                                  disabled={syncBusyId === t.id || pendingSyncIds.has(t.id) || syncedIds.has(t.id)}
+                                  onClick={() => onRequestSync(t)}
+                                  aria-label={`Request sync for ${t.contract_ref || `trade ${t.id}`}`}
+                                >
+                                  {syncedIds.has(t.id) ? 'Synced' : pendingSyncIds.has(t.id) ? 'Sync requested' : syncBusyId === t.id ? 'Requesting…' : 'Sync'}
+                                </button>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                  <Pager page={tabPage} total={pageTotal} onPage={(p) => setPageNums((prev) => ({ ...prev, database: p }))} />
+                </>
               )}
             </section>
           )}
@@ -681,45 +678,45 @@ export function ProjectDashboard({ project, token, onBack }) {
           {tab === 'references' && (
             <section aria-label="References">
               <h2>References</h2>
-              <p className="muted">
-                Shadow Reference Bridge inside the app, full width like the sheet. Scroll sideways for more columns.
-                {refRows !== null ? ` ${refRows.length} references.` : ''}
-              </p>
-              {refLoading ? (
+              <p className="muted">Shadow Reference Bridge inside the app, full width like the sheet. Scroll sideways for more columns.</p>
+              {pageIsLoading ? (
                 <p className="project-empty">Loading references…</p>
-              ) : refError ? (
-                <p className="project-empty">{refError}</p>
+              ) : pageErr ? (
+                <p className="project-empty">{pageErr}</p>
               ) : (
-                <div className="project-table-wrap">
-                  <table className="project-table">
-                    <thead>
-                      <tr>
-                        <th className="sn-col">S/N</th>
-                        {REFERENCE_COLUMNS.map(([h]) => (
-                          <th key={h}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(refRows ?? []).length === 0 ? (
+                <>
+                  <div className="project-table-wrap">
+                    <table className="project-table">
+                      <thead>
                         <tr>
-                          <td colSpan={REFERENCE_COLUMNS.length + 1} className="project-empty">
-                            No references saved yet.
-                          </td>
+                          <th className="sn-col">S/N</th>
+                          {REFERENCE_COLUMNS.map(([h]) => (
+                            <th key={h}>{h}</th>
+                          ))}
                         </tr>
-                      ) : (
-                        (refRows ?? []).map((r, i) => (
-                          <tr key={r.id}>
-                            <td className="sn-col">{i + 1}</td>
-                            {REFERENCE_COLUMNS.map(([h, field]) => (
-                              <td key={h}>{field === 'updated_at' ? when(r[field]) : show(r[field])}</td>
-                            ))}
+                      </thead>
+                      <tbody>
+                        {pageRows.length === 0 ? (
+                          <tr>
+                            <td colSpan={REFERENCE_COLUMNS.length + 1} className="project-empty">
+                              No references saved yet.
+                            </td>
                           </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+                        ) : (
+                          pageRows.map((r, i) => (
+                            <tr key={r.id}>
+                              <td className="sn-col">{tabPage * PAGE_SIZE + i + 1}</td>
+                              {REFERENCE_COLUMNS.map(([h, field]) => (
+                                <td key={h}>{field === 'updated_at' ? when(r[field]) : show(r[field])}</td>
+                              ))}
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                  <Pager page={tabPage} total={pageTotal} onPage={(p) => setPageNums((prev) => ({ ...prev, references: p }))} />
+                </>
               )}
             </section>
           )}
@@ -727,64 +724,64 @@ export function ProjectDashboard({ project, token, onBack }) {
           {tab === 'notes' && (
             <section aria-label="Notes">
               <h2>Notes</h2>
-              <p className="muted">
-                Shadow Notes Log inside the app, full width like the sheet. Scroll sideways for more columns. A blank linked trade ID means the note had no matching trade.
-                {noteRows !== null ? ` ${noteRows.length} notes.` : ''}
-              </p>
-              {noteLoading ? (
+              <p className="muted">Shadow Notes Log inside the app, full width like the sheet. Scroll sideways for more columns. A blank linked trade ID means the note had no matching trade.</p>
+              {pageIsLoading ? (
                 <p className="project-empty">Loading notes…</p>
-              ) : noteError ? (
-                <p className="project-empty">{noteError}</p>
+              ) : pageErr ? (
+                <p className="project-empty">{pageErr}</p>
               ) : (
-                <div className="project-table-wrap">
-                  <table className="project-table">
-                    <thead>
-                      <tr>
-                        <th className="sn-col">S/N</th>
-                        {NOTE_COLUMNS.map(([h]) => (
-                          <th key={h}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(noteRows ?? []).length === 0 ? (
+                <>
+                  <div className="project-table-wrap">
+                    <table className="project-table">
+                      <thead>
                         <tr>
-                          <td colSpan={NOTE_COLUMNS.length + 1} className="project-empty">
-                            No notes saved yet.
-                          </td>
+                          <th className="sn-col">S/N</th>
+                          {NOTE_COLUMNS.map(([h]) => (
+                            <th key={h}>{h}</th>
+                          ))}
                         </tr>
-                      ) : (
-                        (noteRows ?? []).map((n, i) => (
-                          <tr key={n.id}>
-                            <td className="sn-col">{i + 1}</td>
-                            {NOTE_COLUMNS.map(([h, field]) =>
-                              NOTE_LONG_TEXT_FIELDS.includes(field) ? (
-                                <td key={h} className="raw-message-cell">
-                                  <button
-                                    type="button"
-                                    className="raw-message-btn"
-                                    onClick={() =>
-                                      setRawMessage({
-                                        ref: `Note ${n.id}`,
-                                        column: h,
-                                        text: n[field] || '',
-                                      })
-                                    }
-                                    aria-label={`View ${h} for note ${n.id}`}
-                                  >
-                                    View
-                                  </button>
-                                </td>
-                              ) : (
-                                <td key={h}>{field === 'created_at' ? when(n[field]) : show(n[field])}</td>
-                              )
-                            )}
+                      </thead>
+                      <tbody>
+                        {pageRows.length === 0 ? (
+                          <tr>
+                            <td colSpan={NOTE_COLUMNS.length + 1} className="project-empty">
+                              No notes saved yet.
+                            </td>
                           </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+                        ) : (
+                          pageRows.map((n, i) => (
+                            <tr key={n.id}>
+                              <td className="sn-col">{tabPage * PAGE_SIZE + i + 1}</td>
+                              {NOTE_COLUMNS.map(([h, field]) =>
+                                NOTE_LONG_TEXT_FIELDS.includes(field) ? (
+                                  <td key={h} className="raw-message-cell">
+                                    <button
+                                      type="button"
+                                      className="raw-message-btn"
+                                      onClick={() =>
+                                        setRawMessage({
+                                          ref: `Note ${n.id}`,
+                                          column: h,
+                                          text: n[field] || '',
+                                        })
+                                      }
+                                      aria-label={`View ${h} for note ${n.id}`}
+                                    >
+                                      View
+                                    </button>
+                                  </td>
+                                ) : (
+                                  <td key={h}>{field === 'created_at' ? when(n[field]) : show(n[field])}</td>
+                                )
+                              )}
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                  <Pager page={tabPage} total={pageTotal} onPage={(p) => setPageNums((prev) => ({ ...prev, notes: p }))} />
+                </>
               )}
             </section>
           )}
@@ -792,24 +789,31 @@ export function ProjectDashboard({ project, token, onBack }) {
           {tab === 'log' && (
             <section aria-label="Sync log">
               <h2>Sync log</h2>
-              <p className="muted">In-app sync requests and attempts, not the Notes log. A row with target sync_request is a Sync tap, or Ali marking a finished trade ready, awaiting Adam's operator script; a row with target google_sheet is a completed attempt by that script. A trade with a successful google_sheet row is synced once only and is never re-appended. The app never writes to Sheets itself, and Ali never executes a sync.</p>
-              {syncLog.length === 0 ? (
+              <p className="muted">In-app sync requests and attempts, not the Notes log. A row with target sync_request is a Sync tap, or Ali marking a finished trade ready, awaiting Adam&apos;s operator script; a row with target google_sheet is a completed attempt by that script. A trade with a successful google_sheet row is synced once only and is never re-appended. The app never writes to Sheets itself, and Ali never executes a sync.</p>
+              {pageIsLoading ? (
+                <p className="project-empty">Loading sync log…</p>
+              ) : pageErr ? (
+                <p className="project-empty">{pageErr}</p>
+              ) : pageRows.length === 0 ? (
                 <p className="project-empty">No log entries yet.</p>
               ) : (
-                <ul className="project-list">
-                  {syncLog.map((s) => (
-                    <li key={s.id}>
-                      <div className="project-row">
-                        <span className="project-row-name">
-                          {show(s.target)} · {s.target === 'sync_request' ? 'requested' : s.success ? 'ok' : 'failed'} · trade {s.trade_id}
-                        </span>
-                        <span className="muted">
-                          {show(s.failure_reason)} · {when(s.created_at)}
-                        </span>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+                <>
+                  <ul className="project-list">
+                    {pageRows.map((s, i) => (
+                      <li key={s.id}>
+                        <div className="project-row">
+                          <span className="project-row-name">
+                            {tabPage * PAGE_SIZE + i + 1}. {show(s.target)} · {s.target === 'sync_request' ? 'requested' : s.success ? 'ok' : 'failed'} · trade {s.trade_id}
+                          </span>
+                          <span className="muted">
+                            {show(s.failure_reason)} · {when(s.created_at)}
+                          </span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                  <Pager page={tabPage} total={pageTotal} onPage={(p) => setPageNums((prev) => ({ ...prev, log: p }))} />
+                </>
               )}
             </section>
           )}
@@ -838,6 +842,53 @@ export function ProjectDashboard({ project, token, onBack }) {
             </div>
             <div className="raw-message-dialog-body">
               {rawMessage.text || `No text stored for ${rawMessage.column || 'raw_message'}.`}
+            </div>
+          </div>
+        </div>
+      )}
+      {detail && (
+        <div className="raw-message-backdrop" onClick={() => setDetail(null)} role="presentation">
+          <div className="raw-message-dialog" role="dialog" aria-modal="true" aria-label={`Full details for ${detail.trade.contract_ref || `trade ${detail.trade.id}`}`} onClick={(e) => e.stopPropagation()}>
+            <div className="raw-message-dialog-head">
+              <strong>
+                Full details: {detail.trade.contract_ref || `trade ${detail.trade.id}`} · {detail.trade.commodity || ''} {detail.trade.quantity != null ? detail.trade.quantity : ''}
+              </strong>
+              <button type="button" className="raw-message-close" onClick={() => setDetail(null)} aria-label="Close">
+                Close
+              </button>
+            </div>
+            <div className="raw-message-dialog-body">
+              {detail.loading ? (
+                <p className="muted">Loading full trade data…</p>
+              ) : detail.error ? (
+                <p className="project-empty">{detail.error}</p>
+              ) : detailEmptyCount > 0 ? (
+                <>
+                  <p className="muted">
+                    {showEmptyColumns ? `${detailEmptyCount} empty fields shown` : `${detailEmptyCount} empty fields hidden`}{' '}
+                    <button type="button" className="raw-message-btn" onClick={() => setShowEmptyColumns((v) => !v)}>
+                      {showEmptyColumns ? 'Hide empty fields' : 'Show empty fields'}
+                    </button>
+                  </p>
+                  <dl className="project-detail-list">
+                    {detailVisibleFields.map((f) => (
+                      <div key={f.col} className="project-detail-row">
+                        <dt>{f.col}</dt>
+                        <dd>{show(f.value)}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </>
+              ) : (
+                <dl className="project-detail-list">
+                  {detailVisibleFields.map((f) => (
+                    <div key={f.col} className="project-detail-row">
+                      <dt>{f.col}</dt>
+                      <dd>{show(f.value)}</dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
             </div>
           </div>
         </div>

@@ -2570,3 +2570,19 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
 .project-page-wide .project-table tbody tr:nth-child(even) td.sn-col { background: color-mix(in srgb, #0f766e 6%, var(--bg)); }
 .project-page-wide .project-table tbody tr:nth-child(odd) td.sn-col { background: var(--bg); }
 .project-page-wide .project-table thead th.sn-col { z-index: 3; }
+
+/* Fast dashboard (this build): persistent Chats / Projects switch,
+   paged tables, and the Database Details popup. Per-tab header
+   colours, soft rows, sticky headers and S/N styling are unchanged. */
+.project-switch { display: flex; gap: 8px; padding: 10px 16px 0; background: var(--bg); }
+.project-switch-btn { border: 0.5px solid var(--separator); border-radius: 999px; background: var(--fill); color: var(--text); padding: 8px 16px; font-size: 15px; }
+.project-switch-btn.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+.project-header-actions { display: flex; gap: 16px; flex-wrap: wrap; }
+.project-pager { display: flex; align-items: center; gap: 12px; margin: 16px 0; flex-wrap: wrap; }
+.project-pager-btn { border: 0.5px solid var(--separator); border-radius: 999px; background: var(--fill); color: var(--text); padding: 8px 14px; font-size: 15px; }
+.project-pager-btn:disabled { opacity: 0.45; }
+.project-detail-list { margin: 12px 0 0; }
+.project-detail-row { display: grid; grid-template-columns: minmax(140px, 30%) 1fr; gap: 8px 16px; padding: 8px 0; border-bottom: 0.5px solid var(--separator); }
+.project-detail-row dt { font-weight: 600; overflow-wrap: anywhere; }
+.project-detail-row dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 600px) { .project-detail-row { grid-template-columns: 1fr; } }
