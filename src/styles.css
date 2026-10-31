@@ -2853,3 +2853,173 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
 .project-loadmore { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 0; border-top: 1px solid var(--separator); }
 .project-loadmore .project-pager-btn { min-height: 44px; padding: 0 18px; border: 0; border-radius: 999px; background: var(--fill); color: var(--text); font-weight: 600; }
 .db-panel .project-loadmore { padding: 16px 28px; }
+
+/* ── Admin rebuild 2026-10-31, local only ─────────────────────────
+   Job: scan trades, find one, open Details, sync it.
+   Direction chosen: dense admin table + flush sidebar. Rejected:
+   card-only (slower scanning 211 rows, harder to compare) and
+   top-tabs-only (duplicate navigation, no hierarchy).
+   Tokens, one scale each: spacing 8/12/16/24, type 13/15/20/28,
+   radius 8/12, hairline #e4e6eb / #eef0f3. No one-off values below
+   except the sidebar width (240px) and KPI value size, both tokens
+   in this block. */
+.project-page {
+  --admin-sp-8: 8px; --admin-sp-12: 12px; --admin-sp-16: 16px; --admin-sp-24: 24px;
+  --admin-line: #e4e6eb; --admin-line-soft: #eef0f3; --admin-text: #050505;
+  --admin-muted: #65676b; --admin-blue: #0866ff; --admin-blue-dark: #0653d6;
+  --admin-active-bg: #f0f2f5; --admin-radius: 8px; --admin-radius-lg: 12px;
+}
+/* One button system: 36px desktop, 44px phone, nowrap, no pills. */
+.raw-message-btn, .project-pager-btn, .db-toggle, .db-chip, .project-loadmore .project-pager-btn {
+  min-height: 36px; padding: 10px 16px; border: 1px solid var(--admin-line); border-radius: var(--admin-radius);
+  background: #fff; color: var(--admin-text); font-size: 15px; font-weight: 600; line-height: 1.2;
+  white-space: nowrap; box-shadow: none; cursor: pointer;
+}
+.raw-message-btn:hover:not(:disabled), .project-pager-btn:hover:not(:disabled), .db-toggle:hover, .db-chip:hover { background: var(--admin-active-bg); }
+.raw-message-btn:disabled, .project-pager-btn:disabled { opacity: .5; cursor: not-allowed; }
+.raw-message-btn:focus-visible, .project-pager-btn:focus-visible, .db-toggle:focus-visible, .db-chip:focus-visible, .admin-nav-item:focus-visible {
+  outline: 3px solid var(--admin-blue); outline-offset: 2px;
+}
+.db-chip[aria-pressed="true"] { background: var(--admin-blue); border-color: var(--admin-blue); color: #fff; }
+.db-search input { min-height: 36px; border: 1px solid var(--admin-line); border-radius: var(--admin-radius); font-size: 15px; }
+.admin-detail-heading { font-size: 15px; font-weight: 700; margin: 16px 0 8px; }
+/* Table: auto layout, no crushed percentage widths, headers never wrap mid-word. */
+.project-table { table-layout: auto; width: 100%; min-width: 0; }
+.project-table th {
+  font-size: 13px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--admin-muted);
+  padding: 12px 16px; white-space: nowrap; border-bottom: 1px solid var(--admin-line);
+}
+.project-table td { padding: 12px 16px; border-bottom: 1px solid var(--admin-line-soft); vertical-align: top; }
+.project-table th.sn-col, .project-table td.sn-col { min-width: 48px; }
+.project-table th:nth-child(2), .project-table td:nth-child(2) { min-width: 140px; }
+.db-panel .project-table { table-layout: auto; width: 100%; min-width: 0; }
+.db-panel .project-table th, .db-panel .project-table td { white-space: normal; overflow-wrap: anywhere; padding: 12px 16px; }
+.db-panel .project-table th { white-space: nowrap; }
+.db-panel .project-table td:nth-child(3), .db-panel .project-table td:nth-child(4) { min-width: 160px; }
+.db-panel .project-table td:nth-child(5) { min-width: 140px; }
+.db-panel .project-table th:nth-child(6), .db-panel .project-table td:nth-child(6) { white-space: nowrap; }
+.project-table-wrap { overflow-x: auto; }
+/* Dashboard hero -> separate KPI cards, no giant blue card, no picture on desktop. */
+.admin-hero { padding: 0 0 24px; border-bottom: 1px solid var(--admin-line); margin-bottom: 24px; }
+.admin-hero h1 { font-size: 28px; line-height: 1.2; margin: 0 0 8px; }
+.admin-kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-top: 16px; }
+.admin-kpi { background: #fff; border: 1px solid var(--admin-line); border-radius: var(--admin-radius-lg); padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+.admin-kpi-label { font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--admin-muted); }
+.admin-kpi-value { font-size: 28px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+/* Desktop sidebar: flush, full height, 240px, light-grey active + blue left bar. */
+.admin-sidebar { display: none; }
+@media (min-width: 1024px) {
+  .project-page { display: flex; align-items: stretch; }
+  .admin-sidebar {
+    display: flex; flex: none; width: 240px; height: 100vh; position: sticky; top: 0;
+    flex-direction: column; gap: 8px; padding: 24px 16px; background: #fff; border-right: 1px solid var(--admin-line); overflow-y: auto;
+  }
+  .admin-sidebar-brand { display: flex; flex-direction: column; gap: 8px; padding: 0 12px 16px; border-bottom: 1px solid var(--admin-line-soft); margin-bottom: 8px; }
+  .admin-sidebar-brand strong { font-size: 20px; line-height: 1.2; }
+  .admin-sidebar nav { display: flex; flex-direction: column; gap: 8px; flex: 1; }
+  .admin-nav-item {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%;
+    min-height: 36px; padding: 10px 12px; border: 0; border-left: 3px solid transparent; border-radius: var(--admin-radius);
+    background: transparent; color: var(--admin-text); font-size: 15px; font-weight: 600; text-align: left; cursor: pointer; white-space: nowrap;
+  }
+  .admin-nav-item:hover { background: var(--admin-active-bg); }
+  .admin-nav-item.active { background: var(--admin-active-bg); border-left-color: var(--admin-blue); }
+  .admin-nav-badge { min-width: 24px; padding: 2px 8px; border-radius: 999px; background: var(--admin-line); color: #3a3b3c; font-size: 12px; font-weight: 700; text-align: center; }
+  .admin-nav-item.active .admin-nav-badge { background: #fff; }
+  .admin-sidebar-foot { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--admin-line-soft); padding-top: 16px; }
+  .admin-content { flex: 1; min-width: 0; padding: 24px; }
+  .project-tabs, .project-topbar { display: none !important; }
+  .db-hero-icon, .db-hero-rings { display: none !important; }
+}
+@media (max-width: 1023px) {
+  .admin-sidebar { display: none; }
+  .admin-content { min-width: 0; }
+  .admin-kpis { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .admin-kpi:last-child { grid-column: 1 / -1; }
+  .admin-kpi-value { font-size: 24px; }
+}
+@media (max-width: 640px) {
+  .raw-message-btn, .project-pager-btn, .db-toggle, .db-chip { min-height: 44px; }
+  .db-search input { min-height: 44px; font-size: 16px; }
+  .admin-hero { padding-bottom: 16px; margin-bottom: 16px; }
+  .admin-hero h1 { font-size: 20px; }
+}
+
+/* ── Admin2 2026-10-31, local only ─────────────────────────────
+   Reference layout (Uxerflow/LeaseFlow screenshots), CURRENT webapp
+   theme only. Correction applied: NO Uxerflow orange, NO LeaseFlow
+   black. Palette kept from this app: primary blue #0866ff, Database
+   teal #0f766e, References deep blue #1e40af, Notes purple #6d28d9,
+   Sync log brown/amber #92400e, stage pills green Matched / blue New /
+   grey other, white cards, light grey page background, muted grey
+   text. Active sidebar item: light grey pill + blue left bar.
+   Primary button: blue, never black or orange. Tokens: spacing
+   8/12/16/24/32 only, type 13/15/20-28, radius 8/10/20, shadow soft. */
+.project-page { background: #f0f2f5; }
+.project-page .admin-content { background: #f0f2f5; }
+/* Sidebar: white, search box, uppercase section labels, bare icons,
+   count badges right-aligned in light grey, active = light grey + blue bar. */
+.admin-sidebar-search { display: block; padding: 0 12px 12px; }
+.admin-sidebar-search input {
+  width: 100%; min-height: 36px; padding: 0 12px; border: 1px solid #e4e6eb;
+  border-radius: 10px; background: #f0f2f5; color: #050505; font-size: 15px;
+}
+.admin-sidebar-search input::placeholder { color: #65676b; }
+.admin-sidebar-brand { flex-direction: row !important; align-items: center; }
+.admin-sidebar-mark {
+  flex: none; width: 36px; height: 36px; display: grid; place-items: center;
+  border-radius: 10px; background: #0866ff; color: #fff; font-size: 17px; font-weight: 800;
+}
+.admin-sidebar-brand-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.admin-sidebar-brand-text strong { font-size: 17px; }
+.admin-sidebar-label {
+  margin: 16px 12px 8px; font-size: 12px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: #65676b;
+}
+.admin-nav-icon { flex: none; width: 20px; text-align: center; color: #65676b; font-size: 15px; }
+.admin-nav-item.active .admin-nav-icon { color: #0866ff; }
+.admin-nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* White cards: large rounded corners, hairline border, soft shadow only. */
+.admin-card, .db-panel, .project-stage-card, .admin-kpi, .project-card {
+  background: #fff; border: 1px solid #e4e6eb; border-radius: 20px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.06);
+}
+.admin-card { padding: 24px; margin-bottom: 24px; }
+.admin-card > h2, .admin-card h2 { font-size: 28px; line-height: 1.2; margin: 0 0 16px; letter-spacing: -.02em; }
+.db-panel { padding: 0; overflow: hidden; }
+.db-panel .project-table-wrap { border-top: 1px solid #eef0f3; }
+.project-stage-card { border-radius: 20px; padding: 16px; }
+.project-stage-grid { gap: 16px; }
+/* KPI cards: label small grey, big number, small grey subtext, hairline separation. */
+.admin-kpi { border-radius: 20px; padding: 16px; }
+.admin-kpi-sub { font-size: 13px; color: #65676b; line-height: 1.4; }
+/* Page header on every tab: large bold title left, quiet toolbar right. */
+.admin-hero { border-bottom: 0; margin-bottom: 24px; padding: 0; }
+.admin-hero h1 { font-size: 28px; }
+.db-panel-head { padding: 24px 24px 16px; }
+/* Table inside a white card: small grey uppercase header, hairline rows,
+   comfortable padding, soft-tint status pills already in the app, no wrap. */
+.project-table th { color: #65676b; }
+.project-table td { padding: 12px 16px; }
+.db-pill--matched { background: #e3f6e8; color: #12702b; }
+.db-pill--new { background: #e7f3ff; color: #0750c7; }
+.db-pill--other { background: #e4e6eb; color: #3a3b3c; }
+/* Buttons: primary blue only for the single main action, secondary white
+   with hairline border, radius 10px, nowrap, visible focus. */
+.raw-message-btn, .project-pager-btn, .db-toggle, .db-chip { border-radius: 10px; }
+.db-chip[aria-pressed="true"] { background: #0866ff; border-color: #0866ff; color: #fff; }
+/* Per-page colours kept (tab badge / active accents come from the app, not the references). */
+@media (min-width: 1024px) {
+  .admin-sidebar { background: #fff; border-right: 1px solid #e4e6eb; }
+  .admin-content { padding: 32px; }
+  .admin-kpis { gap: 16px; }
+}
+@media (max-width: 1023px) {
+  .admin-content { padding: 16px; }
+  .admin-card { padding: 16px; border-radius: 16px; }
+  .admin-kpis { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 640px) {
+  .admin-card { padding: 16px; }
+  .admin-card > h2, .admin-card h2 { font-size: 20px; }
+}

@@ -139,6 +139,7 @@ export async function requestManualSync(token, projectId, tradeId) {
 
 // Whole-page projects list. Back goes to chats.
 export function ProjectsList({ projects, loading, error, onCreate, onOpen, onBack }) {
+  const SIDEBAR_TABS = panelTabs
   return (
     <main className="project-page" aria-label="Projects">
       <header className="project-header">
@@ -421,6 +422,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   // paged API has no search endpoint, so these filter the 50 rows
   // already loaded for the current page, never the whole collection.
   const [dbQuery, setDbQuery] = useState('')
+  const [sidebarQuery, setSidebarQuery] = useState('')
   const [dbStage, setDbStage] = useState('all')
 
   useEffect(() => {
@@ -583,6 +585,14 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   }
   const detailVisibleFields = detailFields().filter((f) => showEmptyColumns || !isEmptyCellValue(f.value))
   const detailEmptyCount = detailFields().length - detailFields().filter((f) => !isEmptyCellValue(f.value)).length
+  // Admin rebuild: long-text fields are shown as a labelled section
+  // inside Details only, never as table columns. They are already in
+  // detailFields() via databaseColumns, so split them out here.
+  const DETAIL_LONG_TEXT = ['addendum_notes', 'Notes', 'doc_instructions', 'required_documents', 'additional_information', 'raw_message']
+  const detailLongFields = detailFields().filter((f) => DETAIL_LONG_TEXT.includes(f.col))
+  const detailOtherFields = detailFields().filter((f) => !DETAIL_LONG_TEXT.includes(f.col))
+  const detailLongVisible = detailLongFields.filter((f) => showEmptyColumns || !isEmptyCellValue(f.value))
+  const detailOtherVisible = detailOtherFields.filter((f) => showEmptyColumns || !isEmptyCellValue(f.value))
 
   const wide = true
   const panelTabs = [
@@ -607,6 +617,32 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   }
   return (
     <main className={`project-page${wide ? ' project-page-wide' : ''} project-page-${tab}${panelOpen ? ' project-panel-open' : ''}`} aria-label={`Dashboard for ${project.name}`}>
+      <aside className="admin-sidebar" aria-label="Project navigation">
+        <div className="admin-sidebar-brand">
+          <span className="admin-sidebar-mark" aria-hidden="true">M</span>
+          <span className="admin-sidebar-brand-text"><strong>{project.name}</strong><span className="muted">Trade dashboard</span></span>
+        </div>
+        <label className="admin-sidebar-search">
+          <span className="sr-only">Search sections</span>
+          <input type="search" value={sidebarQuery} onChange={(e) => setSidebarQuery(e.target.value)} placeholder="Search sections" autoComplete="off" aria-label="Search sections" />
+        </label>
+        <p className="admin-sidebar-label">Main menu</p>
+        <nav aria-label="Dashboard sections">
+          {SIDEBAR_TABS.filter(([, label]) => label.toLowerCase().includes(sidebarQuery.trim().toLowerCase())).map(([key, label]) => (
+            <button key={key} type="button" className={`admin-nav-item ${tab === key ? 'active' : ''}`} onClick={() => goToTab(key)} aria-current={tab === key ? 'page' : undefined}>
+              <span className="admin-nav-icon" aria-hidden="true">{{ dashboard: '▦', queue: '☰', stages: '◐', latest: '↻', database: '▤', references: '🔗', notes: '✎', log: '⇋' }[key] || '•'}</span>
+              <span className="admin-nav-label">{label}</span>
+              {tabBadge(key) != null ? <span className="admin-nav-badge">{tabBadge(key)}</span> : null}
+            </button>
+          ))}
+        </nav>
+        <p className="admin-sidebar-label">Help</p>
+        <div className="admin-sidebar-foot">
+          <button type="button" className="admin-nav-item" onClick={goToChats}><span className="admin-nav-icon" aria-hidden="true">≡</span><span className="admin-nav-label">Chats</span></button>
+          <button type="button" className="admin-nav-item" onClick={goToProjects}><span className="admin-nav-icon" aria-hidden="true">‹</span><span className="admin-nav-label">Back to projects</span></button>
+        </div>
+      </aside>
+      <div className="admin-content">
       <div className="project-topbar" aria-label="Dashboard top bar">
         <button type="button" className="project-menu-btn" onClick={() => setPanelOpen((v) => !v)} aria-expanded={panelOpen} aria-label={panelOpen ? 'Close dashboard menu' : 'Open dashboard menu'}>
           ☰ Menu
@@ -646,33 +682,22 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           navigation, so a second pair here was a duplicate. onBack /
           onBackToChats are still used by the side panel below. */}
       {tab === 'dashboard' && (
-      <header className="project-header db-hero">
-        <svg className="db-hero-rings" aria-hidden="true" width="420" height="420" viewBox="0 0 420 420" fill="none">
-          <circle cx="210" cy="210" r="190" stroke="#fff" stroke-width="28" />
-          <circle cx="210" cy="210" r="115" stroke="#fff" stroke-width="28" />
-          <circle cx="210" cy="210" r="42" fill="#fff" />
-        </svg>
-        <div className="db-hero-title">
-          <div className="db-hero-icon" aria-hidden="true">
-            <svg width="36" height="36" viewBox="0 0 46 46" fill="none">
-              <circle cx="23" cy="23" r="20" stroke="#0866FF" stroke-width="5" />
-              <circle cx="23" cy="23" r="11" stroke="#4DA3FF" stroke-width="5" />
-              <circle cx="23" cy="23" r="3.5" fill="#0866FF" />
-            </svg>
-          </div>
+      <header className="admin-hero">
+        <div>
           <h1>{project.name}</h1>
+          <p className="muted">Scan trades, open details, sync the ones that are ready.</p>
         </div>
         {loading ? (
-          <p className="db-hero-muted">Loading counts…</p>
+          <p className="muted">Loading counts…</p>
         ) : error ? (
           <p className="project-empty">{error}</p>
         ) : (
-          <div className="db-stats" aria-label="Project counts">
-            <div className="db-stat"><span className="db-stat-label">Trades</span><span className="db-stat-value">{counts.trades ?? 0}</span></div>
-            <div className="db-stat"><span className="db-stat-label">References</span><span className="db-stat-value">{counts.references ?? 0}</span></div>
-            <div className="db-stat"><span className="db-stat-label">Notes</span><span className="db-stat-value">{counts.notes ?? 0}</span></div>
-            <div className="db-stat db-stat--accent"><span className="db-stat-label">Queued</span><span className="db-stat-value">{counts.queue ?? 0}</span></div>
-            <div className="db-stat"><span className="db-stat-label">Sync log entries</span><span className="db-stat-value">{counts.sync_log ?? 0}</span></div>
+          <div className="admin-kpis" aria-label="Project counts">
+            <div className="admin-kpi"><span className="admin-kpi-label">Trades</span><span className="admin-kpi-value">{counts.trades ?? 0}</span><span className="admin-kpi-sub">In the app database</span></div>
+            <div className="admin-kpi"><span className="admin-kpi-label">References</span><span className="admin-kpi-value">{counts.references ?? 0}</span><span className="admin-kpi-sub">Matched references</span></div>
+            <div className="admin-kpi"><span className="admin-kpi-label">Notes</span><span className="admin-kpi-value">{counts.notes ?? 0}</span><span className="admin-kpi-sub">Linked notes</span></div>
+            <div className="admin-kpi"><span className="admin-kpi-label">Queued</span><span className="admin-kpi-value">{counts.queue ?? 0}</span><span className="admin-kpi-sub">Awaiting finish</span></div>
+            <div className="admin-kpi"><span className="admin-kpi-label">Sync log entries</span><span className="admin-kpi-value">{counts.sync_log ?? 0}</span><span className="admin-kpi-sub">Requests and results</span></div>
           </div>
         )}
       </header>
@@ -700,7 +725,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
         <>
           {tab === 'dashboard' && (
             <>
-<section aria-label="Stages">
+<section className="admin-card" aria-label="Stages">
               <h2>Stages</h2>
               {loading ? (
                 <p className="muted">Loading counts…</p>
@@ -718,7 +743,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                 </>
               )}
             </section>
-<section aria-label="Latest trades">
+<section className="admin-card" aria-label="Latest trades">
               <h2>Latest</h2>
               {syncMessage ? <p className="project-empty">{syncMessage}</p> : null}
               {syncError ? <p className="project-empty">{syncError}</p> : null}
@@ -796,7 +821,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           )}
 
           {tab === 'queue' && (
-            <section aria-label="Queue">
+            <section className="admin-card" aria-label="Queue">
               <h2>Queue</h2>
               {pageIsLoading ? (
                 <p className="project-empty">Loading queue…</p>
@@ -827,7 +852,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           )}
 
           {tab === 'stages' && (
-            <section aria-label="Stages">
+            <section className="admin-card" aria-label="Stages">
               <h2>Stages</h2>
               {loading ? (
                 <p className="muted">Loading counts…</p>
@@ -848,7 +873,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           )}
 
           {tab === 'latest' && (
-            <section aria-label="Latest trades">
+            <section className="admin-card" aria-label="Latest trades">
               <h2>Latest</h2>
               {syncMessage ? <p className="project-empty">{syncMessage}</p> : null}
               {syncError ? <p className="project-empty">{syncError}</p> : null}
@@ -984,9 +1009,6 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                           {SLIM_DB_COLUMNS.map(([h]) => (
                             <th key={h}>{h}</th>
                           ))}
-                          {LONG_TEXT_COLUMNS.filter((col) => showEmptyColumns || !serverEmptyColumns.includes(col)).map((col) => (
-                            <th key={col}>{col}</th>
-                          ))}
                           <th>Details</th>
                           <th>Sync</th>
                         </tr>
@@ -994,7 +1016,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       <tbody>
                         {dbFilteredRows.length === 0 ? (
                           <tr>
-                            <td colSpan={SLIM_DB_COLUMNS.length + LONG_TEXT_COLUMNS.filter((col) => showEmptyColumns || !serverEmptyColumns.includes(col)).length + 3} className="project-empty">
+                            <td colSpan={SLIM_DB_COLUMNS.length + 3} className="project-empty">
                               {pageRows.length === 0 ? 'No trades saved yet.' : 'No trades on this page match these filters.'}
                             </td>
                           </tr>
@@ -1009,18 +1031,6 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                               <td className="db-num">{show(t.quantity)}</td>
                               <td>{show(t.disport)}</td>
                               <td><StagePill stage={t.stage} /></td>
-                              {LONG_TEXT_COLUMNS.filter((col) => showEmptyColumns || !serverEmptyColumns.includes(col)).map((col) => (
-                                <td key={col} className="raw-message-cell">
-                                  <button
-                                    type="button"
-                                    className="raw-message-btn"
-                                    onClick={() => onViewLongText(t, col)}
-                                    aria-label={`View ${col} for ${t.contract_ref || `trade ${t.id}`}`}
-                                  >
-                                    View
-                                  </button>
-                                </td>
-                              ))}
                               <td>
                                 <button type="button" className="raw-message-btn" onClick={() => onOpenDetail(t)} aria-label={`View full details for ${t.contract_ref || `trade ${t.id}`}`}>
                                   Details
@@ -1058,9 +1068,6 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                           <div><dt>Disport</dt><dd>{show(t.disport)}</dd></div>
                         </dl>
                         <div className="project-card-actions">
-                          {LONG_TEXT_COLUMNS.filter((col) => showEmptyColumns || !serverEmptyColumns.includes(col)).map((col) => (
-                            <button key={col} type="button" className="raw-message-btn" onClick={() => onViewLongText(t, col)} aria-label={`View ${col} for ${t.contract_ref || `trade ${t.id}`}`}>View {col}</button>
-                          ))}
                           <button type="button" className="raw-message-btn project-card-primary" onClick={() => onOpenDetail(t)}>Details</button>
                           <button type="button" className="raw-message-btn project-card-primary" disabled={syncBusyId === t.id || pendingSyncIds.has(t.id) || syncedIds.has(t.id)} onClick={() => onRequestSync(t)}>{syncedIds.has(t.id) ? 'Synced' : pendingSyncIds.has(t.id) ? 'Sync requested' : syncBusyId === t.id ? 'Requesting…' : 'Sync'}</button>
                         </div>
@@ -1074,7 +1081,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           )}
 
           {tab === 'references' && (
-            <section aria-label="References">
+            <section className="admin-card" aria-label="References">
               <h2>References</h2>
               {pageIsLoading ? (
                 <p className="project-empty">Loading references…</p>
@@ -1135,7 +1142,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           )}
 
           {tab === 'notes' && (
-            <section aria-label="Notes">
+            <section className="admin-card" aria-label="Notes">
               <h2>Notes</h2>
               {pageIsLoading ? (
                 <p className="project-empty">Loading notes…</p>
@@ -1225,7 +1232,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           )}
 
           {tab === 'log' && (
-            <section aria-label="Sync log">
+            <section className="admin-card" aria-label="Sync log">
               <h2>Sync log</h2>
               {pageIsLoading ? (
                 <p className="project-empty">Loading sync log…</p>
@@ -1256,6 +1263,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           )}
         </>
       )}
+      </div>
       {rawMessage && (
         <div className="raw-message-backdrop" onClick={() => setRawMessage(null)} role="presentation">
           <div
@@ -1307,8 +1315,22 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                       {showEmptyColumns ? 'Hide empty fields' : 'Show empty fields'}
                     </button>
                   </p>
+                  {detailLongVisible.length > 0 ? (
+                    <>
+                      <h3 className="admin-detail-heading">Long text</h3>
+                      <dl className="project-detail-list">
+                        {detailLongVisible.map((f) => (
+                          <div key={f.col} className="project-detail-row">
+                            <dt>{f.col}</dt>
+                            <dd>{show(f.value)}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </>
+                  ) : null}
+                  <h3 className="admin-detail-heading">All fields</h3>
                   <dl className="project-detail-list">
-                    {detailVisibleFields.map((f) => (
+                    {detailOtherVisible.map((f) => (
                       <div key={f.col} className="project-detail-row">
                         <dt>{f.col}</dt>
                         <dd>{show(f.value)}</dd>
@@ -1317,14 +1339,30 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                   </dl>
                 </>
               ) : (
+                <>
+                  {detailLongVisible.length > 0 ? (
+                  <>
+                    <h3 className="admin-detail-heading">Long text</h3>
+                    <dl className="project-detail-list">
+                      {detailLongVisible.map((f) => (
+                        <div key={f.col} className="project-detail-row">
+                          <dt>{f.col}</dt>
+                          <dd>{show(f.value)}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </>
+                ) : null}
+                <h3 className="admin-detail-heading">All fields</h3>
                 <dl className="project-detail-list">
-                  {detailVisibleFields.map((f) => (
+                  {detailOtherVisible.map((f) => (
                     <div key={f.col} className="project-detail-row">
                       <dt>{f.col}</dt>
                       <dd>{show(f.value)}</dd>
                     </div>
                   ))}
                 </dl>
+                </>
               )}
             </div>
           </div>
