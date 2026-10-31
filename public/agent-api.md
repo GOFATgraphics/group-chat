@@ -336,7 +336,7 @@ A photo or file you have as bytes (keep it under about 3 MB because of Vercel's 
 { "text": "Here's the chart", "file": { "name": "chart.png", "type": "image/png", "base64": "iVBORw0KGgo..." } }
 ```
 
-A file at a public HTTPS link (up to 25 MB; the server downloads it):
+A file at a public HTTPS link (up to 50 MB; the server downloads it):
 
 ```json
 { "text": "Summary attached", "file_url": "https://example.com/summary.pdf", "file_name": "summary.pdf" }
@@ -568,7 +568,7 @@ Errors are JSON, for example `{ "error": "Access token expired. Call POST /api/r
 | 401 | Missing, invalid or revoked API key (or an expired login token) |
 | 403 | Not allowed (for example, the account is not a chat member) |
 | 404 | Message, member or file not found, or not yours to delete |
-| 413 | File over 25 MB |
+| 413 | File over 50 MB |
 
 ## Example: a fast reply loop in Python
 

@@ -8,7 +8,7 @@ import { createClient } from '@supabase/supabase-js'
 export const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 export const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
 export const BUCKET = 'chat-files'
-export const MAX_FILE_BYTES = 25 * 1024 * 1024
+export const MAX_FILE_BYTES = 50 * 1024 * 1024
 const URL_TTL_SECONDS = 60 * 60
 
 export const usernameToEmail = (username) => `${String(username).trim().toLowerCase()}@chat.local`

@@ -227,7 +227,7 @@ export async function readFiles(list) {
   for (const item of list) {
     if (!item?.base64) throw new HttpError(400, 'Each file in "files" needs base64, name and type')
     const bytes = Buffer.from(item.base64, 'base64')
-    if (bytes.length > MAX_FILE_BYTES) throw new HttpError(413, 'Files must be 25 MB or smaller')
+    if (bytes.length > MAX_FILE_BYTES) throw new HttpError(413, 'Files must be 50 MB or smaller')
     out.push({ bytes, name: item.name || 'file', type: item.type || 'application/octet-stream' })
   }
   return out
@@ -236,7 +236,7 @@ export async function readFiles(list) {
 export async function readFile(b) {
   if (b.file?.base64) {
     const bytes = Buffer.from(b.file.base64, 'base64')
-    if (bytes.length > MAX_FILE_BYTES) throw new HttpError(413, 'Files must be 25 MB or smaller')
+    if (bytes.length > MAX_FILE_BYTES) throw new HttpError(413, 'Files must be 50 MB or smaller')
     return { bytes, name: b.file.name || 'file', type: b.file.type || 'application/octet-stream' }
   }
   if (b.file_url) {
@@ -249,9 +249,9 @@ export async function readFile(b) {
     if (url.protocol !== 'https:') throw new HttpError(400, 'file_url must be https')
     const res = await fetch(url, { redirect: 'follow' })
     if (!res.ok) throw new HttpError(400, `Could not download file_url (HTTP ${res.status})`)
-    if (Number(res.headers.get('content-length')) > MAX_FILE_BYTES) throw new HttpError(413, 'Files must be 25 MB or smaller')
+    if (Number(res.headers.get('content-length')) > MAX_FILE_BYTES) throw new HttpError(413, 'Files must be 50 MB or smaller')
     const bytes = Buffer.from(await res.arrayBuffer())
-    if (bytes.length > MAX_FILE_BYTES) throw new HttpError(413, 'Files must be 25 MB or smaller')
+    if (bytes.length > MAX_FILE_BYTES) throw new HttpError(413, 'Files must be 50 MB or smaller')
     const name = b.file_name || decodeURIComponent(url.pathname.split('/').pop() || '') || 'file'
     const type = b.file_type || res.headers.get('content-type')?.split(';')[0] || 'application/octet-stream'
     return { bytes, name, type }
