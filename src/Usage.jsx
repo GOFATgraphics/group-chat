@@ -1,10 +1,17 @@
-// Usage screen, mirroring ProjectsList. Data is a static snapshot from
-// the token estimator, not a live Muse billing feed. Muse does not
-// report token usage per chat, so these numbers are a market-price
-// comparison in USD, Claude Sonnet 5.5 benchmark, with prompt caching.
-// Refresh by re-running the estimator and updating USAGE_DATA below.
-// Adam and Ali are on separate Muses, so their totals are separate,
-// not one bill.
+// Usage screen, polished from GitHub dashboard patterns:
+// - next-shadcn-dashboard-starter (Kiranism, 7,207 stars): KPI cards,
+//   hairline borders, separate cards, one job per screen.
+// - open-dashboard (ahpxex, 36 shadcn admin shapes): card + table,
+//   label left, value right, muted notes that still pass contrast.
+// - ui_ux_design skill: one type scale, one spacing scale, one radius
+//   scale, visible focus, 44px touch targets, WCAG 2.2 AA contrast.
+// Tokens are the app's own: --bg, --text, --fill, --separator, --blue.
+// No new colours, no Tailwind (this app is plain CSS + Vite).
+// Data is a static snapshot from the token estimator, not a live Muse
+// billing feed. Muse does not report token usage per chat, so these
+// numbers are a market-price comparison in USD, Claude Sonnet 5.5
+// benchmark, with prompt caching. Refresh by re-running the estimator
+// and updating USAGE_DATA below. Adam and Ali are on separate Muses.
 
 export const USAGE_DATA = {
   range: 'Messages 1 to 1552',
@@ -58,40 +65,95 @@ function fmt(n) {
   return n.toLocaleString('en-US')
 }
 
-function Rows({ p }) {
+function Breakdown({ p }) {
+  const rows = [
+    ['Chat, prompt caching', p.chatTokens, p.chatCost],
+    ['Reasoning, modelled', p.reasoningTokens, p.reasoningCost],
+    [`Tool calls, ${fmt(p.toolCalls)} calls`, p.toolTokens, p.toolCost],
+    ['Voice transcription overhead', p.transcribeTokens, p.transcribeCost],
+    [`Trade work, ${p.tradeRefs} MCF refs`, p.tradeTokens, p.tradeCost],
+  ]
   return (
-    <tbody>
-      <tr><td>Chat, prompt caching</td><td style={{ textAlign: 'right' }}>{fmt(p.chatTokens)}</td><td style={{ textAlign: 'right' }}>${p.chatCost.toFixed(2)}</td></tr>
-      <tr><td>Reasoning, modelled</td><td style={{ textAlign: 'right' }}>{fmt(p.reasoningTokens)}</td><td style={{ textAlign: 'right' }}>${p.reasoningCost.toFixed(2)}</td></tr>
-      <tr><td>Tool calls, {fmt(p.toolCalls)} calls</td><td style={{ textAlign: 'right' }}>{fmt(p.toolTokens)}</td><td style={{ textAlign: 'right' }}>${p.toolCost.toFixed(2)}</td></tr>
-      <tr><td>Voice transcription overhead</td><td style={{ textAlign: 'right' }}>{fmt(p.transcribeTokens)}</td><td style={{ textAlign: 'right' }}>${p.transcribeCost.toFixed(2)}</td></tr>
-      <tr><td>Trade work, {p.tradeRefs} MCF refs</td><td style={{ textAlign: 'right' }}>{fmt(p.tradeTokens)}</td><td style={{ textAlign: 'right' }}>${p.tradeCost.toFixed(2)}</td></tr>
-    </tbody>
+    <table className="usage-table">
+      <tbody>
+        {rows.map(([label, tokens, cost]) => (
+          <tr key={label}>
+            <td>{label}</td>
+            <td className="num">{fmt(tokens)}</td>
+            <td className="num cost">${cost.toFixed(2)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function PersonCard({ name, note, p }) {
+  return (
+    <section className="usage-card" aria-label={`${name} usage`}>
+      <div className="usage-card-head">
+        <div>
+          <h2>{name}</h2>
+          <p className="usage-note">{fmt(p.replies)} replies</p>
+        </div>
+        <div className="usage-total">
+          <strong>${p.totalCost.toFixed(2)}</strong>
+          <span>{fmt(p.totalTokens)} tokens</span>
+        </div>
+      </div>
+      <Breakdown p={p} />
+      <p className="usage-note">
+        Voice: {p.voiceOutputs} outputs, {p.voiceOutputSeconds} seconds. {p.incomingVoice} incoming voice notes, {p.incomingVoiceSeconds} seconds.
+      </p>
+      {note ? <p className="usage-note">{note}</p> : null}
+    </section>
   )
 }
 
 export function Usage({ data = USAGE_DATA, onBack }) {
   const adam = data.adam
   const ali = data.ali
+  const combined = adam.totalCost + ali.totalCost
   return (
-    <main className="project-page" aria-label="Usage">
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <button type="button" onClick={onBack}>Back to chats</button>
+    <main className="project-page usage-page" aria-label="Usage">
+      <header className="project-header usage-header">
+        <button className="project-back" onClick={onBack} aria-label="Back to chats">
+          &lsaquo; Back to chats
+        </button>
         <h1>Usage</h1>
-      </div>
-      <p>{data.range}, updated {data.updated}. Currency {data.currency}, market benchmark, not Muse billing. Adam and Ali are on separate Muses.</p>
-      <section>
-        <h2>Adam: ${adam.totalCost.toFixed(2)} - {fmt(adam.totalTokens)} tokens, {adam.replies} replies</h2>
-        <table style={{ width: '100%' }}><Rows p={adam} /></table>
-        <p>Voice: {adam.voiceOutputs} voice outputs, {adam.voiceOutputSeconds} seconds. {adam.incomingVoice} incoming voice notes, {adam.incomingVoiceSeconds} seconds.</p>
+        <p className="usage-note">
+          {data.range}, updated {data.updated}. Currency {data.currency}, market benchmark, not Muse billing.
+        </p>
+      </header>
+
+      <section className="usage-kpis" aria-label="Totals">
+        <div className="usage-kpi">
+          <span className="usage-kpi-label">Adam</span>
+          <strong>${adam.totalCost.toFixed(2)}</strong>
+          <span>{fmt(adam.totalTokens)} tokens</span>
+        </div>
+        <div className="usage-kpi">
+          <span className="usage-kpi-label">Ali, separate</span>
+          <strong>${ali.totalCost.toFixed(2)}</strong>
+          <span>{fmt(ali.totalTokens)} tokens</span>
+        </div>
+        <div className="usage-kpi">
+          <span className="usage-kpi-label">Combined, for comparison</span>
+          <strong>${combined.toFixed(2)}</strong>
+          <span>Separate Muses, not one bill</span>
+        </div>
       </section>
-      <section>
-        <h2>Ali, separate: ${ali.totalCost.toFixed(2)} - {fmt(ali.totalTokens)} tokens, {ali.replies} replies</h2>
-        <table style={{ width: '100%' }}><Rows p={ali} /></table>
-        <p>Voice: {ali.voiceOutputs} voice outputs, {ali.voiceOutputSeconds} seconds. {ali.incomingVoice} incoming voice notes, {ali.incomingVoiceSeconds} seconds.</p>
-        <p>Ali private chats with Mubarak and Mudassir are not included, Adam cannot see them. Ali reasoning and tool tokens use the same assumptions as Adam, they are not measured from Ali own Muse.</p>
-      </section>
-      <p>Reasoning and tool framing are modelled, not measured by Muse. Voice durations are measured from single-message fetches. Refresh by re-running the estimator and updating USAGE_DATA.</p>
+
+      <PersonCard name="Adam" p={adam} />
+      <PersonCard
+        name="Ali, separate"
+        p={ali}
+        note="Ali private chats with Mubarak and Mudassir are not included, Adam cannot see them. Ali reasoning and tool tokens use the same assumptions as Adam, they are not measured from Ali own Muse."
+      />
+
+      <p className="usage-note">
+        Reasoning and tool framing are modelled, not measured by Muse. Voice durations are measured from single-message fetches. Refresh by re-running the estimator and updating USAGE_DATA.
+      </p>
     </main>
   )
 }

@@ -2512,6 +2512,48 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
    page; horizontal scroll stays inside the table wrap below, so the
    page itself never slides sideways. Chat rules are untouched. */
 .project-page { max-width: 900px; margin: 0 auto; padding: 20px 16px calc(32px + env(safe-area-inset-bottom)); background: var(--bg); color: var(--text); height: var(--app-height, 100dvh); overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+/* Usage page, shadcn dashboard pattern in plain CSS: KPI cards on top,
+   one card per person, hairline borders, radius 14px, one type scale
+   (28px title, 20px card title, 16px body, 14px note), 16px padding,
+   12px gaps. Contrast is paired explicitly, not left to inheritance:
+   light: #111 on #fff (18.9:1), note #555 on #fff (7.5:1);
+   dark: #fff on #000 (21:1), note #aaa on #000 (9.0:1). This fixes the
+   white-on-light screenshots: page background and text always move
+   together, in both themes. Back button reuses .project-back, so it
+   matches Projects, blue text, min 44px touch target. Focus is visible. */
+.usage-page { background: #ffffff; color: #111111; }
+.usage-page .project-back { min-height: 44px; padding: 10px 12px; display: inline-flex; align-items: center; }
+.usage-page .project-back:focus-visible, .usage-kpi:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.usage-header h1 { font-size: 28px; margin: 0; }
+.usage-note { font-size: 14px; line-height: 1.5; color: #555555; margin: 8px 0; overflow-wrap: anywhere; }
+.usage-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }
+@media (max-width: 600px) { .usage-kpis { grid-template-columns: 1fr; } }
+.usage-kpi { border: 0.5px solid var(--separator); border-radius: 14px; padding: 16px; background: var(--fill); color: var(--text); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.usage-kpi-label { font-size: 13px; font-weight: 600; color: #555555; }
+.usage-kpi strong { font-size: 24px; line-height: 1.2; overflow-wrap: anywhere; }
+.usage-kpi span:last-child { font-size: 14px; color: #555555; overflow-wrap: anywhere; }
+.usage-card { border: 0.5px solid var(--separator); border-radius: 14px; padding: 16px; background: var(--raised); margin: 0 0 16px; }
+.usage-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+.usage-card-head h2 { font-size: 20px; margin: 0; }
+.usage-total { text-align: right; flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; }
+.usage-total strong { font-size: 20px; }
+.usage-total span { font-size: 14px; color: #555555; }
+.usage-table { width: 100%; border-collapse: collapse; font-size: 16px; }
+.usage-table td { padding: 10px 0; border-bottom: 0.5px solid var(--separator); vertical-align: top; }
+.usage-table td.num { text-align: right; white-space: nowrap; padding-left: 12px; font-variant-numeric: tabular-nums; }
+.usage-table td.cost { font-weight: 600; }
+@media (prefers-color-scheme: dark) {
+  .usage-page { background: #000000; color: #ffffff; }
+  .usage-note, .usage-kpi-label, .usage-kpi span:last-child, .usage-total span { color: #aaaaaa; }
+  .usage-kpi { background: #1c1c1e; }
+  .usage-card { background: #1c1c1e; }
+}
+/* Same contrast guard for Projects: empty notes were #8e8e93 on white
+   (3.26:1, fails AA). Scoped to project pages only, chat untouched. */
+.project-page .project-empty { color: #555555; }
+@media (prefers-color-scheme: dark) {
+  .project-page .project-empty { color: #aaaaaa; }
+}
 .project-header h1 { overflow-wrap: anywhere; min-width: 0; }
 .project-header { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
 .project-header h1 { margin: 0; font-size: 28px; }
