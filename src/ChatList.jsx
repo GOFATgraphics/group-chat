@@ -7,7 +7,7 @@ import { AIBadge, KIND_ICON, XIcon, SearchIcon as SearchGlyph } from './icons.js
 // chats), newest first, with the last message, its time, unread count, who's
 // online and who's typing. On wide screens it stays beside the open chat.
 
-export default function ChatList({ items, me, myAvatar, activeKey, onOpen, onSettings, onNewGroup, Avatar, profiles = {}, avatars = {}, chatNameOf, onOpenMessage, onOpenProjects }) {
+export default function ChatList({ items, me, myAvatar, activeKey, onOpen, onSettings, onNewGroup, Avatar, profiles = {}, avatars = {}, chatNameOf, onOpenMessage, onOpenProjects, onOpenUsage }) {
   const [query, setQuery] = useState('')
   // Typing two or more letters also searches every message you can read.
   const found = useMessageSearch(onOpenMessage ? query : '')
@@ -63,6 +63,24 @@ export default function ChatList({ items, me, myAvatar, activeKey, onOpen, onSet
                       <ChevronRight />
                     </span>
                     <span className="convo-preview muted">Open your projects and dashboards</span>
+                  </span>
+                </button>
+              </li>
+            </ul>
+          </>
+        )}
+        {onOpenUsage && (
+          <>
+            <div className="list-section">Usage</div>
+            <ul className="convo-list">
+              <li>
+                <button className="convo" onClick={onOpenUsage} aria-label="Open usage">
+                  <span className="convo-body">
+                    <span className="convo-line">
+                      <span className="convo-title">Usage</span>
+                      <ChevronRight />
+                    </span>
+                    <span className="convo-preview muted">Adam and Ali token usage, USD</span>
                   </span>
                 </button>
               </li>

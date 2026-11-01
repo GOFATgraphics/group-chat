@@ -3,6 +3,7 @@ import { supabase, BUCKET, AVATAR_BUCKET, avatarUrl } from './supabase.js'
 import Splash from './Splash.jsx'
 import ChatList, { listPreview, listTime } from './ChatList.jsx'
 import { ProjectsList, CreateProject, ProjectDashboard, listProjects, createProject } from './Projects.jsx'
+import { Usage, USAGE_DATA } from './Usage.jsx'
 import GroupSheet from './Groups.jsx'
 import {
   AIBadge,
@@ -137,6 +138,11 @@ export default function Chat({ session }) {
     refreshProjects()
     setProjectScreen({ page: 'list' })
   }
+  // Usage screen, mirroring Projects: null = chats, true = usage page.
+  // When set, the whole Usage page replaces the chat shell, it is never
+  // rendered inside a chat pane or as a modal.
+  const [showUsage, setShowUsage] = useState(false)
+  const openUsage = () => setShowUsage(true)
   const createProjectAndOpen = async (name) => {
     const token = session?.access_token
     if (!token) {
@@ -2173,6 +2179,12 @@ export default function Chat({ session }) {
   // at the top. Chat state (view, messages, presence) is kept in this
   // component and is not reset by switching, because projectScreen
   // is only a render switch.
+  if (showUsage) {
+    return (
+      <Usage data={USAGE_DATA} onBack={() => setShowUsage(false)} />
+    )
+  }
+
   if (projectScreen) {
     if (projectScreen.page === 'list') {
       return (
@@ -2209,6 +2221,7 @@ export default function Chat({ session }) {
       <div className="pane-list-wrap" inert={!wide && screen === 'chat'}>
         <ChatList
           onOpenProjects={openProjects}
+          onOpenUsage={openUsage}
           items={listItems}
           me={me.username}
           myAvatar={avatars[myId]}
