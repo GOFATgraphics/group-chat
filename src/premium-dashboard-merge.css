@@ -1,11 +1,15 @@
-/* PremiumDashboard merge v2 stylesheet (local only, 2026-11-02).
+/* PremiumDashboard merge v3 stylesheet (local only, 2026-11-02).
    Scoped under .pd-merge so it overrides the older styles.css without
    editing it. Font: Inter from the pasted mock, with system fallback
    if the font fetch is blocked. No mock sample data lives here.
-   Dark mode is scoped to .pd-merge.pd-dark only: it restyles the
-   premium dashboard surfaces (hero, KPI, cards, tables, tabs) and
-   does NOT touch the app-wide styles.css theme, so Details dialogs,
-   the Menu side panel and phone cards keep the app theme. */
+   v3 dark mode: there is NO manual toggle and NO .pd-dark class.
+   Dashboard colours switch on the same @media (prefers-color-scheme:
+   dark) query that src/styles.css uses for the rest of the app, so
+   the dashboard switches exactly when dialogs, the Menu panel and
+   phone cards switch. The premium palette is kept (it is not
+   re-pointed at --bg/--text, which would turn the premium dark
+   sidebar white in light mode); only the switch that activates its
+   dark values changed, from manual to system. */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 .pd-merge {
@@ -25,16 +29,18 @@
   min-height: 100vh;
   transition: background-color 0.3s ease, color 0.3s ease;
 }
-.pd-merge.pd-dark {
-  --pd-bg-main: #0B0E14;
-  --pd-card: #111827;
-  --pd-hover: #1E293B;
-  --pd-text-main: #F8FAFC;
-  --pd-text-muted: #94A3B8;
-  --pd-border: #1E293B;
-  --pd-sidebar-bg: #05070A;
-  --pd-sidebar-hover: #111827;
-  --pd-indigo: #6366F1;
+@media (prefers-color-scheme: dark) {
+  .pd-merge {
+    --pd-bg-main: #0B0E14;
+    --pd-card: #111827;
+    --pd-hover: #1E293B;
+    --pd-text-main: #F8FAFC;
+    --pd-text-muted: #94A3B8;
+    --pd-border: #1E293B;
+    --pd-sidebar-bg: #05070A;
+    --pd-sidebar-hover: #111827;
+    --pd-indigo: #6366F1;
+  }
 }
 
 /* --- Sidebar: #0B0E14, 260px to 76px rail --- */
@@ -385,29 +391,17 @@
 }
 
 /* Dark mode: translucent stage pills, as in the v2 mock */
-.pd-merge.pd-dark .db-pill--matched { background: rgba(16, 185, 129, 0.15); color: #10B981; }
-.pd-merge.pd-dark .db-pill--new { background: rgba(245, 158, 11, 0.15); color: #F59E0B; }
-.pd-merge.pd-dark .db-pill--extracted { background: rgba(14, 165, 233, 0.15); color: #0EA5E9; }
-.pd-merge.pd-dark .db-pill--finished { background: rgba(99, 102, 241, 0.15); color: #6366F1; }
-.pd-merge.pd-dark .db-pill--other { background: var(--pd-hover); color: var(--pd-text-muted); }
-.pd-merge.pd-dark .pd-live { background: rgba(16, 185, 129, 0.1); color: #10B981; }
-.pd-merge.pd-dark .pd-live .premium-live-dot { box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2); }
-
-/* Theme toggle (next to Live counts) and mobile hamburger (header) */
-.pd-merge .pd-theme-toggle {
-  background: var(--pd-card);
-  border: 1px solid var(--pd-border);
-  border-radius: 50%;
-  width: 36px;
-  height: 36px;
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  color: var(--pd-text-main);
-  font-size: 18px;
-  line-height: 1;
-  flex-shrink: 0;
+@media (prefers-color-scheme: dark) {
+  .pd-merge .db-pill--matched { background: rgba(16, 185, 129, 0.15); color: #10B981; }
+  .pd-merge .db-pill--new { background: rgba(245, 158, 11, 0.15); color: #F59E0B; }
+  .pd-merge .db-pill--extracted { background: rgba(14, 165, 233, 0.15); color: #0EA5E9; }
+  .pd-merge .db-pill--finished { background: rgba(99, 102, 241, 0.15); color: #6366F1; }
+  .pd-merge .db-pill--other { background: var(--pd-hover); color: var(--pd-text-muted); }
+  .pd-merge .pd-live { background: rgba(16, 185, 129, 0.1); color: #10B981; }
+  .pd-merge .pd-live .premium-live-dot { box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2); }
 }
+
+/* Mobile hamburger (header) */
 .pd-merge .pd-mobile-menu-btn {
   display: none;
   background: transparent;
@@ -423,8 +417,10 @@
 /* Backdrop base (media block below positions it on phones) */
 .pd-merge .pd-mobile-backdrop { display: block; }
 /* Dark sidebar active state, as in the v2 mock */
-.pd-merge.pd-dark .pd-nav-item.active { color: #A5B4FC; }
-.pd-merge.pd-dark .pd-nav-item.active .pd-nav-badge { color: #A5B4FC; }
+@media (prefers-color-scheme: dark) {
+  .pd-merge .pd-nav-item.active { color: #A5B4FC; }
+  .pd-merge .pd-nav-item.active .pd-nav-badge { color: #A5B4FC; }
+}
 .pd-merge .pd-sidebar .admin-sidebar-search input { background: var(--pd-sidebar-hover); border-color: var(--pd-border); }
 
 /* Phones: the hamburger is the only sidebar entry; the desktop
