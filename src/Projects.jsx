@@ -1,4 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
+import './premium-dashboard-merge.css'
+
+// PREMIUM MERGE (local only, 2026-11-02, no push): presentation restyle of the
+// LIVE master Projects.jsx (head dde045b, SHA baff1904) to the PremiumDashboard
+// design pasted 2026-11-02 13:08 WAT. No data, paging, sync or RLS logic was
+// changed: all edits below are class names, icons, stage colours and the
+// sidebar collapse button only. KPI trend badges from the mock are NOT
+// included: they have no source in /api/projects and would be invented data.
 
 // Server-backed Project pages for the Mercancia trade upgrade.
 // Projects now live in the server tables from migration 0019
@@ -268,10 +276,10 @@ export function CreateProject({ onDone, onBack, onBackToChats, error }) {
 }
 
 const STAGES = [
-  { key: 'extracted', label: 'extracted', text: 'Adam has extracted trade details, awaiting finishing.' },
-  { key: 'finished', label: 'finished', text: 'Ali has completed the entry.' },
-  { key: 'matched', label: 'matched', text: 'Linked to an existing trade by contract ref.' },
-  { key: 'new', label: 'new', text: 'A brand-new trade, not matched to an existing one.' },
+  { key: 'extracted', label: 'extracted', text: 'Adam has extracted trade details, awaiting finishing.', color: '#94A3B8' },
+  { key: 'finished', label: 'finished', text: 'Ali has completed the entry.', color: '#60A5FA' },
+  { key: 'matched', label: 'matched', text: 'Linked to an existing trade by contract ref.', color: '#34D399' },
+  { key: 'new', label: 'new', text: 'A brand-new trade, not matched to an existing one.', color: '#FBBF24' },
 ]
 
 const show = (v) => (v === null || v === undefined || v === '' ? '—' : String(v))
@@ -286,10 +294,10 @@ const visualSerial = (i) => i + 1
 // blank buyer or seller. Display only: this never invents a party,
 // never patches a trade or a note, and never changes stored data.
 const AVATAR_PALETTE = [
-  ['#E7F3FF', '#0750C7'],
-  ['#E3F6E8', '#12702B'],
-  ['#EDE7FF', '#4B2BB8'],
-  ['#FDE8EF', '#A31650'],
+  ['#EEF2FF', '#4F46E5'],
+  ['#ECFDF5', '#059669'],
+  ['#F3E8FF', '#7E22CE'],
+  ['#FFF1F2', '#E11D48'],
 ]
 function partyTheme(name) {
   const words = String(name).replace(/[^A-Za-z ]/g, ' ').split(/\s+/).filter(Boolean)
@@ -317,9 +325,20 @@ function PartyCell({ name }) {
   )
 }
 function StagePill({ stage }) {
-  if (stage === 'matched') return <span className="db-pill db-pill--matched">Matched</span>
-  if (stage === 'new') return <span className="db-pill db-pill--new">New</span>
-  return <span className="db-pill db-pill--other">{show(stage)}</span>
+  const label = stage ? String(stage).charAt(0).toUpperCase() + String(stage).slice(1) : '—'
+  const cls = stage === 'matched' ? 'db-pill db-pill--matched' : stage === 'new' ? 'db-pill db-pill--new' : stage === 'extracted' ? 'db-pill db-pill--extracted' : stage === 'finished' ? 'db-pill db-pill--finished' : 'db-pill db-pill--other'
+  return <span className={cls}><span className="db-pill-dot" aria-hidden="true" />{label}</span>
+}
+// Premium sidebar icons (20px, from the pasted PremiumDashboard mock).
+const PD_ICONS = {
+  dashboard: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 20, height: 20 }}><rect x="3" y="3" width="7" height="9" /><rect x="14" y="3" width="7" height="5" /><rect x="14" y="12" width="7" height="9" /><rect x="3" y="16" width="7" height="5" /></svg>,
+  queue: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 20, height: 20 }}><line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" /><line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" /></svg>,
+  stages: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 20, height: 20 }}><path d="M21.21 15.89A10 10 0 1 1 8 2.83" /><path d="M22 12A10 10 0 0 0 12 2v10z" /></svg>,
+  latest: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 20, height: 20 }}><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M12 7v5l4 2" /></svg>,
+  database: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 20, height: 20 }}><rect x="3" y="3" width="18" height="18" rx="2" /><line x1="3" y1="9" x2="21" y2="9" /><line x1="3" y1="15" x2="21" y2="15" /></svg>,
+  references: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 20, height: 20 }}><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>,
+  notes: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 20, height: 20 }}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>,
+  log: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ width: 20, height: 20 }}><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" /><path d="M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>,
 }
 const when = (v) => {
   try {
@@ -469,7 +488,10 @@ function PageErrorNote({ error, onRetry }) {
 
 export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   const [tab, setTab] = useState('dashboard')
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  // Premium merge, responsive only: start collapsed on phone widths so the
+  // 260px sidebar never squeezes content to ~92px on first paint; the
+  // floating button still expands it. Desktop starts expanded, as before.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 768)
   const [panelOpen, setPanelOpen] = useState(false)
   const panelCloseRef = useRef(null)
   const closePanel = () => setPanelOpen(false)
@@ -913,9 +935,10 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
     return v == null ? null : Number(v).toLocaleString('en-US')
   }
   return (
-    <main className={`project-page${wide ? ' project-page-wide' : ''} project-page-${tab}${panelOpen ? ' project-panel-open' : ''}${sidebarCollapsed ? ' project-sidebar-collapsed' : ''}`} aria-label={`Dashboard for ${project.name}`}>
-      <aside className="admin-sidebar" aria-label="Project navigation">
-        <div className="admin-sidebar-brand">
+    <main className={`project-page${wide ? ' project-page-wide' : ''} project-page-${tab}${panelOpen ? ' project-panel-open' : ''}${sidebarCollapsed ? ' project-sidebar-collapsed' : ''} pd-merge`} aria-label={`Dashboard for ${project.name}`}>
+      <aside className={`pd-sidebar${sidebarCollapsed ? ' pd-collapsed' : ''}`} aria-label="Project navigation">
+        <button type="button" className="pd-collapse-btn" onClick={() => setSidebarCollapsed((v) => !v)} title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}><span className="pd-collapse-icon" aria-hidden="true">‹</span></button>
+        <div className="admin-sidebar-brand pd-brand">
           <span className="admin-sidebar-mark" aria-hidden="true">M</span>
           <span className="admin-sidebar-brand-text"><strong>{project.name}</strong><span className="muted">Trade dashboard</span></span>
         </div>
@@ -926,18 +949,19 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
         <p className="admin-sidebar-label">Main menu</p>
         <nav aria-label="Dashboard sections">
           {SIDEBAR_TABS.filter(([, label]) => label.toLowerCase().includes(sidebarQuery.trim().toLowerCase())).map(([key, label]) => (
-            <button key={key} type="button" className={`admin-nav-item ${tab === key ? 'active' : ''}`} onClick={() => goToTab(key)} aria-current={tab === key ? 'page' : undefined}>
-              <span className="admin-nav-icon" aria-hidden="true">{{ dashboard: '▦', queue: '☰', stages: '◐', latest: '↻', database: '▤', references: '🔗', notes: '✎', log: '⇋' }[key] || '•'}</span>
-              <span className="admin-nav-label">{label}</span>
-              {tabBadge(key) != null ? <span className="admin-nav-badge">{tabBadge(key)}</span> : null}
+            <button key={key} type="button" data-tooltip={label} className={`pd-nav-item ${tab === key ? 'active' : ''}`} onClick={() => goToTab(key)} aria-current={tab === key ? 'page' : undefined}>
+              <span className="pd-active-indicator" aria-hidden="true" />
+              <span className="pd-nav-icon" aria-hidden="true">{PD_ICONS[key] || '•'}</span>
+              <span className="pd-nav-label">{label}</span>
+              {tabBadge(key) != null ? <span className="pd-nav-badge">{tabBadge(key)}</span> : null}
             </button>
           ))}
         </nav>
         <p className="admin-sidebar-label">Help</p>
         <div className="admin-sidebar-foot">
-          <button type="button" className="admin-nav-item" onClick={goToChats}><span className="admin-nav-icon" aria-hidden="true">≡</span><span className="admin-nav-label">Chats</span></button>
-          <button type="button" className="admin-nav-item" onClick={goToProjects}><span className="admin-nav-icon" aria-hidden="true">‹</span><span className="admin-nav-label">Back to projects</span></button>
-          <button type="button" className="admin-nav-item admin-sidebar-collapse" onClick={() => setSidebarCollapsed(true)} aria-label="Collapse sidebar"><span className="admin-nav-icon" aria-hidden="true">«</span><span className="admin-nav-label">Collapse sidebar</span></button>
+          <button type="button" className="pd-nav-item" onClick={goToChats}><span className="pd-nav-icon" aria-hidden="true">≡</span><span className="pd-nav-label">Chats</span></button>
+          <button type="button" className="pd-nav-item" onClick={goToProjects}><span className="pd-nav-icon" aria-hidden="true">‹</span><span className="pd-nav-label">Back to projects</span></button>
+          <button type="button" className="pd-nav-item admin-sidebar-collapse" onClick={() => setSidebarCollapsed(true)} aria-label="Collapse sidebar"><span className="pd-nav-icon" aria-hidden="true">«</span><span className="pd-nav-label">Collapse sidebar</span></button>
         </div>
       </aside>
       <div className="admin-content">
@@ -982,13 +1006,13 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           reached from the Menu button. onBack / onBackToChats are
           still used by the sidebar foot and the side panel. */}
       {tab === 'dashboard' && (
-      <header className="admin-hero premium-hero">
-        <div className="premium-hero-main">
+      <header className="admin-hero premium-hero pd-hero">
+        <div className="premium-hero-main pd-hero-main">
           <h1>{project.name}</h1>
           <p className="muted">Scan trades, open details, sync the ones that are ready.</p>
         </div>
         <div className="premium-hero-toolbar" aria-label="Quick navigation">
-          <span className="premium-live"><span className="premium-live-dot" aria-hidden="true" />Live counts</span>
+          <span className="premium-live pd-live"><span className="premium-live-dot" aria-hidden="true" />Live counts</span>
           <button type="button" className="premium-toolbar-btn" onClick={() => goToTab('database')}>Database view</button>
           <button type="button" className="premium-toolbar-btn" onClick={() => goToTab('log')}>Sync log</button>
         </div>
@@ -997,19 +1021,19 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
         ) : error ? (
           <p className="project-empty">{error}</p>
         ) : (
-          <div className="admin-kpis" aria-label="Project counts">
-            <div className="admin-kpi"><span className="admin-kpi-label">Trades</span><span className="admin-kpi-value">{counts.trades ?? 0}</span><span className="admin-kpi-sub">In the app database</span></div>
-            <div className="admin-kpi"><span className="admin-kpi-label">References</span><span className="admin-kpi-value">{counts.references ?? 0}</span><span className="admin-kpi-sub">Matched references</span></div>
-            <div className="admin-kpi"><span className="admin-kpi-label">Notes</span><span className="admin-kpi-value">{counts.notes ?? 0}</span><span className="admin-kpi-sub">Linked notes</span></div>
-            <div className="admin-kpi"><span className="admin-kpi-label">Queued</span><span className="admin-kpi-value">{counts.queue ?? 0}</span><span className="admin-kpi-sub">Awaiting finish</span></div>
-            <div className="admin-kpi"><span className="admin-kpi-label">Sync log entries</span><span className="admin-kpi-value">{counts.sync_log ?? 0}</span><span className="admin-kpi-sub">Requests and results</span></div>
+          <div className="admin-kpis pd-kpis" aria-label="Project counts">
+            <div className="admin-kpi pd-kpi-card"><span className="pd-kpi-label">Trades</span><span className="pd-kpi-value">{counts.trades ?? 0}</span><span className="pd-kpi-sub">In the app database</span></div>
+            <div className="admin-kpi pd-kpi-card"><span className="pd-kpi-label">References</span><span className="pd-kpi-value">{counts.references ?? 0}</span><span className="pd-kpi-sub">Matched references</span></div>
+            <div className="admin-kpi pd-kpi-card"><span className="pd-kpi-label">Notes</span><span className="pd-kpi-value">{counts.notes ?? 0}</span><span className="pd-kpi-sub">Linked notes</span></div>
+            <div className="admin-kpi pd-kpi-card"><span className="pd-kpi-label">Queued</span><span className="pd-kpi-value">{counts.queue ?? 0}</span><span className="pd-kpi-sub">Awaiting finish</span></div>
+            <div className="admin-kpi pd-kpi-card"><span className="pd-kpi-label">Sync log entries</span><span className="pd-kpi-value">{counts.sync_log ?? 0}</span><span className="pd-kpi-sub">Requests and results</span></div>
           </div>
         )}
       </header>
       )}
-      <nav className="project-tabs" aria-label="Dashboard sections">
+      <nav className="project-tabs pd-pill-tabs" aria-label="Dashboard sections">
         {SIDEBAR_TABS.map(([key, label]) => (
-          <button key={key} className={`project-tab ${tab === key ? 'active' : ''}`} onClick={() => setTab(key)} aria-selected={tab === key}>
+          <button key={key} className={`pd-tab-btn ${tab === key ? 'active' : ''}`} onClick={() => setTab(key)} aria-selected={tab === key}>
             {label}{tabBadge(key) != null ? <span className="project-tab-badge">{tabBadge(key)}</span> : null}
           </button>
         ))}
@@ -1021,7 +1045,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
         <>
           {tab === 'dashboard' && (
             <>
-<section className="admin-card" aria-label="Stages">
+<section className="admin-card pd-card" aria-label="Stages">
               <h2>Stages</h2>
               {loading ? (
                 <p className="muted">Loading counts…</p>
@@ -1031,7 +1055,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                     {STAGES.map((s) => (
                       <article key={s.key} className="project-stage-card">
                         <div className="project-stage-count">{stageCounts[s.key] ?? 0}</div>
-                        <h3>{s.label}</h3>
+                        <h3><span className="pd-stage-dot" style={{ background: s.color }} aria-hidden="true" />{s.label}</h3>
                         <p className="muted">{s.text}</p>
                       </article>
                     ))}
@@ -1054,7 +1078,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                 </>
               )}
             </section>
-<section className="admin-card" aria-label="Latest trades">
+<section className="admin-card pd-card" aria-label="Latest trades">
               <h2>Latest</h2>
               {syncMessage ? <p className="project-empty">{syncMessage}</p> : null}
               {syncError ? <p className="project-empty">{syncError}</p> : null}
@@ -1132,7 +1156,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           )}
 
           {tab === 'queue' && (
-            <section className="admin-card" aria-label="Queue">
+            <section className="admin-card pd-card" aria-label="Queue">
               <h2>Queue</h2>
               {pageIsLoading ? (
                 <p className="project-empty">Loading queue…</p>
@@ -1163,7 +1187,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           )}
 
           {tab === 'stages' && (
-            <section className="admin-card" aria-label="Stages">
+            <section className="admin-card pd-card" aria-label="Stages">
               <h2>Stages</h2>
               {loading ? (
                 <p className="muted">Loading counts…</p>
@@ -1173,7 +1197,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
                     {STAGES.map((s) => (
                       <article key={s.key} className="project-stage-card">
                         <div className="project-stage-count">{stageCounts[s.key] ?? 0}</div>
-                        <h3>{s.label}</h3>
+                        <h3><span className="pd-stage-dot" style={{ background: s.color }} aria-hidden="true" />{s.label}</h3>
                         <p className="muted">{s.text}</p>
                       </article>
                     ))}
@@ -1199,7 +1223,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           )}
 
           {tab === 'latest' && (
-            <section className="admin-card" aria-label="Latest trades">
+            <section className="admin-card pd-card" aria-label="Latest trades">
               <h2>Latest</h2>
               <p className="muted">Newest first, latest at the top. S/N 1 is the newest trade, matching Database's top 20 exactly.</p>
               {syncMessage ? <p className="project-empty">{syncMessage}</p> : null}
@@ -1412,7 +1436,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           )}
 
           {tab === 'references' && (
-            <section className="admin-card" aria-label="References">
+            <section className="admin-card pd-card" aria-label="References">
               <h2>References</h2>
               <p className="muted">Newest first, latest at the top, oldest at the bottom. S/N 1 is the newest reference{pageTotal > 0 ? `, S/N ${pageTotal} is the oldest` : ''}. Older references load below as you scroll, one continuous list, not pages.</p>
               {pageIsLoading ? (
@@ -1474,7 +1498,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           )}
 
           {tab === 'notes' && (
-            <section className="admin-card" aria-label="Notes">
+            <section className="admin-card pd-card" aria-label="Notes">
               <h2>Notes</h2>
               <p className="muted">Newest first, latest at the top, oldest at the bottom. S/N 1 is the newest note{pageTotal > 0 ? `, S/N ${pageTotal} is the oldest` : ''}. Older notes load below as you scroll, one continuous list, not pages. Rows load in 50-row chunks behind the scenes; there is no page navigation.</p>
               {pageIsLoading ? (
@@ -1565,7 +1589,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
           )}
 
           {tab === 'log' && (
-            <section className="admin-card" aria-label="Sync log">
+            <section className="admin-card pd-card" aria-label="Sync log">
               <h2>Sync log</h2>
               <p className="muted">Queue items and their sync requests and results together, in order, in one list. Tap Details on any entry for its full fields. Nothing here creates a sync request and no sync data is changed; sync requests are made from Database and Latest.</p>
               {pageIsLoading && combinedLog.length === 0 ? (
