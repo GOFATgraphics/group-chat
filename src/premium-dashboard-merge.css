@@ -428,3 +428,52 @@
 @media (max-width: 900px) {
   .pd-merge .project-sidebar-restore { display: none !important; }
 }
+
+/* --- v4: Menu panel removal + tight phone hero ---
+   Menu: the project-menu-btn pill and its project-panel JSX/state are
+   gone from Projects.jsx. The panel styles in styles.css are untouched
+   (that file is not a v4 push candidate), so they are now dead CSS.
+   Navigation safety: Chats and Back to projects live in the sidebar
+   foot, which is the hamburger drawer on phones and the rail on
+   desktop, and all tabs live in the sidebar nav and the pill bar.
+   The project-sidebar-restore button ("Menu" when the rail is
+   collapsed) is a DIFFERENT control, desktop only, hidden below
+   900px by the rule below the v2 block, so it is kept, not removed.
+   Hero gap, phone: no min-height, spacer element, or toolbar margin
+   was found in the code. What the code does have is two competing
+   hero layouts at equal specificity: premium .pd-hero (flex row,
+   wrap, space-between) and styles.css .project-page-wide
+   .premium-hero with .premium-hero-main flex: 1 1 320px. On a ~390px
+   phone that 320px basis plus the toolbar width forces the toolbar
+   onto a wrapped row, and which rule wins depends on bundle order.
+   This block ends that ambiguity on phones with higher-specificity
+   selectors (3 classes beat the wide rules' 2): the hero becomes a
+   plain block stack, title, toolbar 16px below it, KPIs 16px below
+   that, no wrapped-row gap. Desktop hero layout is unchanged. */
+@media (max-width: 900px) {
+  .pd-merge .admin-content .pd-hero {
+    display: block;
+    height: auto;
+    min-height: 0;
+    align-content: normal;
+    justify-content: normal;
+    gap: 0;
+  }
+  .pd-merge .admin-content .pd-hero-main {
+    flex: none;
+    width: 100%;
+  }
+  .pd-merge .admin-content .pd-hero-main p {
+    margin-bottom: 0;
+  }
+  .pd-merge .admin-content .premium-hero-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    width: 100%;
+    margin-top: 16px;
+  }
+  .pd-merge .admin-content .pd-kpis {
+    margin-top: 16px;
+  }
+}

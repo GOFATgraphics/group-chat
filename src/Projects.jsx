@@ -9,7 +9,7 @@ import './premium-dashboard-merge.css'
 // v3 change, presentation only: the v2 manual Sun/Moon toggle and the
 // .pd-dark class are REMOVED. Dashboard colours now switch on the same
 // @media (prefers-color-scheme: dark) query that src/styles.css uses for
-// the rest of the app, so the dashboard, dialogs, Menu panel and phone
+// the rest of the app, so the dashboard, dialogs and phone
 // cards all switch together with the device setting. No manual toggle
 // and no theme persistence are invented.
 
@@ -500,22 +500,16 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const closeMobileMenu = () => setMobileMenuOpen(false)
-  const [panelOpen, setPanelOpen] = useState(false)
-  const panelCloseRef = useRef(null)
-  const closePanel = () => setPanelOpen(false)
   const goToTab = (key) => {
     setTab(key)
-    setPanelOpen(false)
     setMobileMenuOpen(false)
   }
   const goToChats = () => {
-    setPanelOpen(false)
     setMobileMenuOpen(false)
     if (onBackToChats) onBackToChats()
     else onBack()
   }
   const goToProjects = () => {
-    setPanelOpen(false)
     setMobileMenuOpen(false)
     onBack()
   }
@@ -567,33 +561,19 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   const [dbStage, setDbStage] = useState('all')
 
   useEffect(() => {
-    if (!rawMessage && !detail && !panelOpen && !syncDetail) return undefined
+    if (!rawMessage && !detail && !syncDetail) return undefined
     const onKey = (e) => {
       if (e.key === 'Escape') {
         setRawMessage(null)
         setDetail(null)
-        setPanelOpen(false)
         setSyncDetail(null)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [rawMessage, detail, panelOpen, syncDetail])
+  }, [rawMessage, detail, syncDetail])
 
-  // Side panel: focus the close button first when it opens, and stop
-  // the page behind it from scrolling while it is open.
-  useEffect(() => {
-    if (!panelOpen) return undefined
-    if (panelCloseRef.current) panelCloseRef.current.focus()
-    const prevBody = document.body.style.overflow
-    const prevHtml = document.documentElement.style.overflow
-    document.body.style.overflow = 'hidden'
-    document.documentElement.style.overflow = 'hidden'
-    return () => {
-      document.body.style.overflow = prevBody
-      document.documentElement.style.overflow = prevHtml
-    }
-  }, [panelOpen])
+
 
   useEffect(() => {
     let cancelled = false
@@ -934,7 +914,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
 
   const wide = true
   // Premium redesign: SIDEBAR_TABS is shared at module level (no local
-  // panelTabs copy), so the sidebar, phone panel and pill bar cannot drift.
+  // panelTabs copy), so the sidebar, phone drawer and pill bar cannot drift.
   // Tab count badges, from the live dashboard API only, matching the
   // Desktop/Phone mock (Queue, Database, References, Notes, Sync log
   // carry a count; Stages and Latest do not). Never the mock's old
@@ -946,7 +926,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
     return v == null ? null : Number(v).toLocaleString('en-US')
   }
   return (
-    <main className={`project-page${wide ? ' project-page-wide' : ''} project-page-${tab}${panelOpen ? ' project-panel-open' : ''}${sidebarCollapsed ? ' project-sidebar-collapsed' : ''} pd-merge`} aria-label={`Dashboard for ${project.name}`}>
+    <main className={`project-page${wide ? ' project-page-wide' : ''} project-page-${tab}${sidebarCollapsed ? ' project-sidebar-collapsed' : ''} pd-merge`} aria-label={`Dashboard for ${project.name}`}>
       {mobileMenuOpen ? <div className="pd-mobile-backdrop" onClick={closeMobileMenu} role="presentation" aria-hidden="true" /> : null}
       <aside className={`pd-sidebar${sidebarCollapsed ? ' pd-collapsed' : ''}${mobileMenuOpen ? ' pd-mobile-open' : ''}`} aria-label="Project navigation">
         <button type="button" className="pd-collapse-btn pd-desktop-collapse-btn" onClick={() => setSidebarCollapsed((v) => !v)} title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}><span className="pd-collapse-icon" aria-hidden="true">‹</span></button>
@@ -984,40 +964,12 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
       ) : null}
       <div className="project-topbar" aria-label="Dashboard top bar">
         <button type="button" className="pd-mobile-menu-btn" onClick={() => setMobileMenuOpen(true)} aria-label="Open navigation">☰</button>
-        <button type="button" className="project-menu-btn" onClick={() => setPanelOpen((v) => !v)} aria-expanded={panelOpen} aria-label={panelOpen ? 'Close dashboard menu' : 'Open dashboard menu'}>
-          ☰ Menu
-        </button>
       </div>
-      {panelOpen ? (
-        <>
-          <div className="project-panel-backdrop" onClick={closePanel} role="presentation" aria-hidden="true" />
-          <div className="project-panel" role="dialog" aria-modal="true" aria-label="Dashboard menu">
-            <div className="project-panel-head">
-              <strong>Menu</strong>
-              <button ref={panelCloseRef} type="button" className="project-panel-close" onClick={closePanel} aria-label="Close dashboard menu">
-                ✕
-              </button>
-            </div>
-            <button type="button" className="project-panel-item" onClick={goToChats}>
-              Chats
-            </button>
-            <button type="button" className="project-panel-item" onClick={goToProjects}>
-              &lsaquo; Back to projects
-            </button>
-            <div className="project-panel-divider" role="presentation" />
-            {SIDEBAR_TABS.map(([key, label]) => (
-              <button key={key} type="button" className={`project-panel-item project-panel-tab ${tab === key ? 'active' : ''}`} onClick={() => goToTab(key)} aria-selected={tab === key}>
-                {label}{tabBadge(key) != null ? <span className="project-tab-badge">{tabBadge(key)}</span> : null}
-              </button>
-            ))}
-          </div>
-        </>
-      ) : null}
       {/* No Back buttons in the hero: the top Chats / Projects buttons
-          were removed as duplicates. Chats and Back to projects live
-          in the sidebar foot (desktop) and in the side panel (phone),
-          reached from the Menu button. onBack / onBackToChats are
-          still used by the sidebar foot and the side panel. */}
+          were removed as duplicates. v4: the phone Menu side panel is
+          also gone. Chats and Back to projects live in the sidebar
+          foot, which is the drawer on phones (hamburger) and the rail
+          on desktop. onBack / onBackToChats are still used there. */}
       {tab === 'dashboard' && (
       <header className="admin-hero premium-hero pd-hero">
         <div className="premium-hero-main pd-hero-main">
