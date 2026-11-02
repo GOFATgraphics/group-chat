@@ -477,3 +477,10 @@
     margin-top: 16px;
   }
 }
+
+/* --- v5: remaining Menu button removed ---
+   The project-sidebar-restore "Menu" button JSX is gone from
+   Projects.jsx, so no Menu pill remains in the dashboard top area at
+   any width. The phone hide rule above is now defence-in-depth only.
+   Expanding a collapsed rail still works via the floating
+   pd-collapse-btn chevron on the rail edge. */

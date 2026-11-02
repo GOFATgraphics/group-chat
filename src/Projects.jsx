@@ -957,11 +957,12 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
         </div>
       </aside>
       <div className="admin-content">
-      {sidebarCollapsed ? (
-        <button type="button" className="project-sidebar-restore" onClick={() => setSidebarCollapsed(false)} aria-label="Show sidebar">
-          ☰ Menu
-        </button>
-      ) : null}
+      {/* v5: the project-sidebar-restore "Menu" button is removed entirely,
+          so no Menu pill remains in the dashboard top area at any width.
+          Expanding a collapsed rail still works via the floating
+          pd-collapse-btn chevron on the rail edge (it toggles
+          sidebarCollapsed both ways), and via the rail's own collapse
+          button. */}
       <div className="project-topbar" aria-label="Dashboard top bar">
         <button type="button" className="pd-mobile-menu-btn" onClick={() => setMobileMenuOpen(true)} aria-label="Open navigation">☰</button>
       </div>
