@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import './premium-dashboard-merge.css'
 
-// PREMIUM MERGE (local only, 2026-11-02, no push): presentation restyle of the
-// LIVE master Projects.jsx (head dde045b, SHA baff1904) to the PremiumDashboard
-// design pasted 2026-11-02 13:08 WAT. No data, paging, sync or RLS logic was
-// changed: all edits below are class names, icons, stage colours and the
-// sidebar collapse button only. KPI trend badges from the mock are NOT
-// included: they have no source in /api/projects and would be invented data.
+// PREMIUM MERGE v2 (local only, 2026-11-02, no push): presentation restyle of the
+// LIVE master Projects.jsx (head 5a8b1678, which already contains v1) to the
+// PremiumDashboard v2 pasted 2026-11-02 13:49 WAT. No data, paging, sync or
+// RLS logic was changed. KPI trend badges from the mock are NOT included:
+// they have no source in /api/projects and would be invented data.
+// v2 changes, presentation only: mobile drawer below 900px (replacing v1's
+// phone-start-collapsed rail), scoped dashboard dark mode (default light,
+// no persistence invented; live code has no theme preference), tooltip
+// overflow fix. Table scroll wrapper and separate Details/Sync cells were
+// already present in live and are kept, not reworked.
 
 // Server-backed Project pages for the Mercancia trade upgrade.
 // Projects now live in the server tables from migration 0019
@@ -488,24 +492,31 @@ function PageErrorNote({ error, onRetry }) {
 
 export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   const [tab, setTab] = useState('dashboard')
-  // Premium merge, responsive only: start collapsed on phone widths so the
-  // 260px sidebar never squeezes content to ~92px on first paint; the
-  // floating button still expands it. Desktop starts expanded, as before.
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => typeof window !== 'undefined' && window.innerWidth <= 768)
+  // Premium merge v2: desktop sidebar starts expanded; below 900px the
+  // sidebar is hidden by default and opens as a drawer (mobileMenuOpen),
+  // replacing v1's phone-start-collapsed rail. Theme defaults to light;
+  // no persistence is invented (live code has no theme preference).
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [theme, setTheme] = useState('light')
+  const closeMobileMenu = () => setMobileMenuOpen(false)
   const [panelOpen, setPanelOpen] = useState(false)
   const panelCloseRef = useRef(null)
   const closePanel = () => setPanelOpen(false)
   const goToTab = (key) => {
     setTab(key)
     setPanelOpen(false)
+    setMobileMenuOpen(false)
   }
   const goToChats = () => {
     setPanelOpen(false)
+    setMobileMenuOpen(false)
     if (onBackToChats) onBackToChats()
     else onBack()
   }
   const goToProjects = () => {
     setPanelOpen(false)
+    setMobileMenuOpen(false)
     onBack()
   }
   const [data, setData] = useState(null)
@@ -935,9 +946,10 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
     return v == null ? null : Number(v).toLocaleString('en-US')
   }
   return (
-    <main className={`project-page${wide ? ' project-page-wide' : ''} project-page-${tab}${panelOpen ? ' project-panel-open' : ''}${sidebarCollapsed ? ' project-sidebar-collapsed' : ''} pd-merge`} aria-label={`Dashboard for ${project.name}`}>
-      <aside className={`pd-sidebar${sidebarCollapsed ? ' pd-collapsed' : ''}`} aria-label="Project navigation">
-        <button type="button" className="pd-collapse-btn" onClick={() => setSidebarCollapsed((v) => !v)} title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}><span className="pd-collapse-icon" aria-hidden="true">‹</span></button>
+    <main className={`project-page${wide ? ' project-page-wide' : ''} project-page-${tab}${panelOpen ? ' project-panel-open' : ''}${sidebarCollapsed ? ' project-sidebar-collapsed' : ''} pd-merge${theme === 'dark' ? ' pd-dark' : ''}`} aria-label={`Dashboard for ${project.name}`}>
+      {mobileMenuOpen ? <div className="pd-mobile-backdrop" onClick={closeMobileMenu} role="presentation" aria-hidden="true" /> : null}
+      <aside className={`pd-sidebar${sidebarCollapsed ? ' pd-collapsed' : ''}${mobileMenuOpen ? ' pd-mobile-open' : ''}`} aria-label="Project navigation">
+        <button type="button" className="pd-collapse-btn pd-desktop-collapse-btn" onClick={() => setSidebarCollapsed((v) => !v)} title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}><span className="pd-collapse-icon" aria-hidden="true">‹</span></button>
         <div className="admin-sidebar-brand pd-brand">
           <span className="admin-sidebar-mark" aria-hidden="true">M</span>
           <span className="admin-sidebar-brand-text"><strong>{project.name}</strong><span className="muted">Trade dashboard</span></span>
@@ -971,6 +983,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
         </button>
       ) : null}
       <div className="project-topbar" aria-label="Dashboard top bar">
+        <button type="button" className="pd-mobile-menu-btn" onClick={() => setMobileMenuOpen(true)} aria-label="Open navigation">☰</button>
         <button type="button" className="project-menu-btn" onClick={() => setPanelOpen((v) => !v)} aria-expanded={panelOpen} aria-label={panelOpen ? 'Close dashboard menu' : 'Open dashboard menu'}>
           ☰ Menu
         </button>
@@ -1013,6 +1026,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
         </div>
         <div className="premium-hero-toolbar" aria-label="Quick navigation">
           <span className="premium-live pd-live"><span className="premium-live-dot" aria-hidden="true" />Live counts</span>
+          <button type="button" className="pd-theme-toggle" onClick={() => setTheme((t) => (t === 'light' ? 'dark' : 'light'))} aria-label={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'} title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}>{theme === 'light' ? '☾' : '☀'}</button>
           <button type="button" className="premium-toolbar-btn" onClick={() => goToTab('database')}>Database view</button>
           <button type="button" className="premium-toolbar-btn" onClick={() => goToTab('log')}>Sync log</button>
         </div>
@@ -1033,7 +1047,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
       )}
       <nav className="project-tabs pd-pill-tabs" aria-label="Dashboard sections">
         {SIDEBAR_TABS.map(([key, label]) => (
-          <button key={key} className={`pd-tab-btn ${tab === key ? 'active' : ''}`} onClick={() => setTab(key)} aria-selected={tab === key}>
+          <button key={key} className={`pd-tab-btn ${tab === key ? 'active' : ''}`} onClick={() => goToTab(key)} aria-selected={tab === key}>
             {label}{tabBadge(key) != null ? <span className="project-tab-badge">{tabBadge(key)}</span> : null}
           </button>
         ))}
