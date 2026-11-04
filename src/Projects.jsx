@@ -796,6 +796,19 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
     inFlightPages.current.delete(key)
     setPageAttempts((prev) => ({ ...prev, [key]: (prev[key] || 0) + 1 }))
   }
+  // Restore the queue-retry helper lost in 1071545 (last exercised version:
+  // 2e4c355). The Sync log "Retry queue" button calls this; without it the
+  // click threw ReferenceError, which React error boundaries do not catch
+  // (event-handler errors bypass them), so the button was silently dead.
+  // Clearing the error re-runs the queue effect for the SAME page, since
+  // logQueuePage is not touched. Clearing loading matches the exercised
+  // version and guards against a stuck "Loading more…" if a cancelled
+  // fetch ever left the flag true; no fetch is in flight when the error
+  // is shown, so the second clear is safe.
+  const retryLogQueue = () => {
+    setLogQueueError('')
+    setLogQueueLoading(false)
+  }
   // Load More / sentinel advance: never widen a gap. If a lower chunk
   // is missing, repair it (Retry path) instead of incrementing
   // tabPage past it; if the current chunk failed, retry it; if it is

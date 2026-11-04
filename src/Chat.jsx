@@ -1222,9 +1222,23 @@ export default function Chat({ session }) {
       catchUp()
       refreshReads()
       refreshReactions()
-      const pending = pendingReadsRef.current
-      pendingReadsRef.current = []
-      if (pending.length) markAsRead(pending)
+      // Skip-and-keep on owner view and on the chat list: markAsRead returns
+      // early there (no view, owner view, or chat off-screen), so draining
+      // unconditionally would silently drop those reads. On those foregrounds
+      // the pending reads stay queued and are flushed on a later foreground
+      // into a non-owner chat.
+      //
+      // Pre-existing limitation, unchanged: returning into a DIFFERENT
+      // non-owner chat drains the queue but markAsRead filters rows to the
+      // current view, so reads queued under the old view are dropped on this
+      // return. Rescuing them would need markAsRead to accept the captured
+      // view; deliberately not done here. A future reader should not "fix"
+      // the guard back to an unconditional drain.
+      if (activeRef.current && viewRef.current && viewRef.current.type !== 'owner') {
+        const pending = pendingReadsRef.current
+        pendingReadsRef.current = []
+        if (pending.length) markAsRead(pending)
+      }
     }
     document.addEventListener('visibilitychange', onBack)
     window.addEventListener('focus', onBack)
