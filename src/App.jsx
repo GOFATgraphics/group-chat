@@ -1,4 +1,5 @@
 import { Component, useEffect, useState } from 'react'
+import { Analytics } from '@vercel/analytics/react'
 import { supabase } from './supabase.js'
 import Login from './Login.jsx'
 import Chat from './Chat.jsx'
@@ -51,12 +52,22 @@ export default function App() {
     return () => data.subscription.unsubscribe()
   }, [])
 
-  if (session === undefined) return <Splash />
-  return session ? (
-    <ChatErrorBoundary>
-      <Chat session={session} />
-    </ChatErrorBoundary>
-  ) : (
-    <Login />
+  if (session === undefined) return (
+    <>
+      <Splash />
+      <Analytics />
+    </>
+  )
+  return (
+    <>
+      {session ? (
+        <ChatErrorBoundary>
+          <Chat session={session} />
+        </ChatErrorBoundary>
+      ) : (
+        <Login />
+      )}
+      <Analytics />
+    </>
   )
 }
