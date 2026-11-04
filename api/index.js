@@ -23,6 +23,7 @@ import presence from '../server/routes/presence.js'
 import tools from '../server/routes/tools.js'
 import avatar from '../server/routes/avatar.js'
 import realtimeToken from '../server/routes/realtime-token.js'
+import stream from '../server/routes/stream.js'
 import { projects, project, subcollection, item } from '../server/routes/projects.js'
 
 const exact = {
@@ -47,6 +48,7 @@ const exact = {
   presence,
   avatar,
   'realtime/token': realtimeToken,
+  'messages/stream': stream,
   search: tools.search,
   pins: tools.pins,
   polls: tools.polls,
