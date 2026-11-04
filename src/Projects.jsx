@@ -499,13 +499,14 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   // theme state any more: colours follow the device setting via CSS.
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
-  // Drawer cutover is a viewport width (900px in premium-dashboard-merge.css),
-  // not the `wide` layout flag (always true here), so inert must track the
-  // media query, not `wide`. Without this, the suggested inert={!wide && ...}
-  // would always be false and the closed drawer would stay focusable.
-  const [isNarrow, setIsNarrow] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 900px)').matches)
+  // Drawer cutover is a viewport width (1023px in premium-dashboard-merge.css,
+  // after finding 4 Option B), not the `wide` layout flag (always true here),
+  // so inert must track the media query, not `wide`. Without this, the
+  // suggested inert={!wide && ...} would always be false and the closed
+  // drawer would stay focusable.
+  const [isNarrow, setIsNarrow] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches)
   useEffect(() => {
-    const mq = window.matchMedia('(max-width: 900px)')
+    const mq = window.matchMedia('(max-width: 1023px)')
     const onChange = () => setIsNarrow(mq.matches)
     mq.addEventListener('change', onChange)
     return () => mq.removeEventListener('change', onChange)

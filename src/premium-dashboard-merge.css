@@ -393,6 +393,62 @@
   .pd-merge .project-stage-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px; }
 }
 
+/* Finding 4, Option B: drawer-only below 1024px. The 900px block above stays
+   for phone hero/KPI layout; this block moves only the drawer controls to
+   1023px, so the sidebar is a rail at >=1024 and a drawer at <=1023, and
+   pill tabs are hidden at <=1023. Two companions the listed steps alone
+   would miss: (1) .project-topbar must become flex at <=1023, because
+   styles.css hides it except at <=600 and >=1024, so without this the
+   hamburger inside it would stay invisible at 601-1023 and the drawer
+   would be unreachable there (the same gap already exists at 601-900
+   today, where the topbar is hidden and only pill tabs show). (2) The
+   full mobile-open set moves with the drawer, not just fixed positioning
+   and the backdrop, or the drawer could not open at 901-1023. Note:
+   styles.css already hides .project-tabs at >=1024 with !important, so
+   after this change pill tabs are CSS-hidden at all widths; the JSX
+   still renders them. Unhiding them at >=1024 as a desktop fast-switch
+   would need a sixth step overriding that !important rule. */
+@media (max-width: 1023px) {
+  .pd-merge .project-topbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; flex-shrink: 0; }
+  .pd-merge .pd-pill-tabs { display: none; }
+  .pd-merge .pd-sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 260px;
+    transform: translateX(-100%);
+    transition: width 0.35s cubic-bezier(0.25, 0.8, 0.25, 1), transform 0.35s ease;
+    z-index: 50;
+    box-shadow: none;
+  }
+  .pd-merge .pd-sidebar.pd-mobile-open {
+    transform: translateX(0);
+    box-shadow: 0 0 40px rgba(0, 0, 0, 0.5);
+  }
+  .pd-merge .pd-sidebar.pd-collapsed { width: 260px; }
+  .pd-merge .pd-sidebar.pd-mobile-open .pd-nav-label {
+    position: static;
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+  }
+  .pd-merge .pd-sidebar.pd-mobile-open .pd-nav-badge { display: inline-block; }
+  .pd-merge .pd-sidebar.pd-mobile-open .pd-brand .admin-sidebar-brand-text,
+  .pd-merge .pd-sidebar.pd-mobile-open .admin-sidebar-search,
+  .pd-merge .pd-sidebar.pd-mobile-open .admin-sidebar-label { display: flex; }
+  .pd-merge .pd-sidebar.pd-mobile-open .admin-sidebar-search { display: block; }
+  .pd-merge .pd-desktop-collapse-btn { display: none !important; }
+  .pd-merge .pd-mobile-menu-btn { display: block !important; }
+  .pd-merge .pd-mobile-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(2px);
+    z-index: 40;
+  }
+}
+
 /* Dark mode: translucent stage pills, as in the v2 mock */
 @media (prefers-color-scheme: dark) {
   .pd-merge .db-pill--matched { background: rgba(16, 185, 129, 0.15); color: #10B981; }
