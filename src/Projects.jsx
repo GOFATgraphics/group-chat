@@ -499,6 +499,17 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   // theme state any more: colours follow the device setting via CSS.
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  // Drawer cutover is a viewport width (900px in premium-dashboard-merge.css),
+  // not the `wide` layout flag (always true here), so inert must track the
+  // media query, not `wide`. Without this, the suggested inert={!wide && ...}
+  // would always be false and the closed drawer would stay focusable.
+  const [isNarrow, setIsNarrow] = useState(() => typeof window !== 'undefined' && window.matchMedia('(max-width: 900px)').matches)
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 900px)')
+    const onChange = () => setIsNarrow(mq.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
   const closeMobileMenu = () => setMobileMenuOpen(false)
   const goToTab = (key) => {
     setTab(key)
@@ -941,7 +952,7 @@ export function ProjectDashboard({ project, token, onBack, onBackToChats }) {
   return (
     <main className={`project-page${wide ? ' project-page-wide' : ''} project-page-${tab}${sidebarCollapsed ? ' project-sidebar-collapsed' : ''} pd-merge`} aria-label={`Dashboard for ${project.name}`}>
       {mobileMenuOpen ? <div className="pd-mobile-backdrop" onClick={closeMobileMenu} role="presentation" aria-hidden="true" /> : null}
-      <aside className={`pd-sidebar${sidebarCollapsed ? ' pd-collapsed' : ''}${mobileMenuOpen ? ' pd-mobile-open' : ''}`} aria-label="Project navigation">
+      <aside className={`pd-sidebar${sidebarCollapsed ? ' pd-collapsed' : ''}${mobileMenuOpen ? ' pd-mobile-open' : ''}`} aria-label="Project navigation" inert={isNarrow && !mobileMenuOpen} aria-hidden={isNarrow && !mobileMenuOpen}>
         <button type="button" className="pd-collapse-btn pd-desktop-collapse-btn" onClick={() => setSidebarCollapsed((v) => !v)} title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}><span className="pd-collapse-icon" aria-hidden="true">‹</span></button>
         <div className="admin-sidebar-brand pd-brand">
           <span className="admin-sidebar-mark" aria-hidden="true">M</span>

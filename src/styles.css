@@ -1,7 +1,7 @@
 :root {
   --bg: #ffffff;
   --text: #000000;
-  --muted: #8e8e93;
+  --muted: #5a5a5f;
   --separator: #d1d1d6;
   --fill: #f2f2f7;
   --raised: #ffffff;
@@ -2984,6 +2984,9 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
 .raw-message-btn:disabled, .project-pager-btn:disabled { opacity: .5; cursor: not-allowed; }
 .raw-message-btn:focus-visible, .project-pager-btn:focus-visible, .db-toggle:focus-visible, .db-chip:focus-visible, .admin-nav-item:focus-visible {
   outline: 3px solid var(--admin-blue); outline-offset: 2px;
+}
+.project-list-new:focus-visible, .project-row:focus-visible, .admin-sidebar-search input:focus-visible, .db-search input:focus-visible, .project-panel-item:focus-visible {
+  outline: 2px solid #0866ff; outline-offset: 2px;
 }
 .db-chip[aria-pressed="true"] { background: var(--admin-blue); border-color: var(--admin-blue); color: #fff; }
 .db-search input { min-height: 36px; border: 1px solid var(--admin-line); border-radius: var(--admin-radius); font-size: 15px; }
