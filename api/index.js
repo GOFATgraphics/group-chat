@@ -22,6 +22,7 @@ import call from '../server/routes/call.js'
 import presence from '../server/routes/presence.js'
 import tools from '../server/routes/tools.js'
 import avatar from '../server/routes/avatar.js'
+import realtimeToken from '../server/routes/realtime-token.js'
 import { projects, project, subcollection, item } from '../server/routes/projects.js'
 
 const exact = {
@@ -45,6 +46,7 @@ const exact = {
   'ai/check': call.check,
   presence,
   avatar,
+  'realtime/token': realtimeToken,
   search: tools.search,
   pins: tools.pins,
   polls: tools.polls,
