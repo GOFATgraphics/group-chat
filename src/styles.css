@@ -2557,10 +2557,12 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
    There is no limit (decided 8 Nov 2026: "Just the look — show usage,
    no limit"), so the bars compare this week with the user's own busiest
    week and with their all-time total — never a % of a cap.
-   The breakdown table below the card reuses .usage-table. */
+   The breakdown table below the card reuses .usage-table.
+   UI rule (Ahmad, 8 Nov 2026): numbers only, no explanatory paragraphs
+   in the usage section — short labels only (see MyUsage.jsx). */
 .myusage { margin: 16px 4px 0; }
 .myusage-head { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; margin: 0 4px 6px; }
-.myusage-card { background: var(--raised); border: 0.5px solid var(--separator); border-radius: 24px; padding: 20px; }
+.myusage-card { background: var(--raised); border: 0.5px solid var(--separator); border-radius: 24px; padding: 20px 20px 14px; }
 .myusage-row { padding: 2px 0 16px; }
 .myusage-row + .myusage-row { padding-top: 4px; }
 .myusage-row-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
@@ -2572,14 +2574,19 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
 .myusage-divider { height: 0.5px; background: var(--separator); margin: 4px 0 10px; }
 .myusage-upgrade { background: none; border: 0; padding: 6px 0; font-size: 17px; color: var(--blue); cursor: pointer; min-height: 44px; }
 .myusage-upgrade:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-.myusage-totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 16px 0 4px; }
-@media (max-width: 600px) { .myusage-totals { grid-template-columns: 1fr; } }
+.myusage-coming { font-size: 14px; color: var(--muted); margin: 0; }
+.myusage-totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 20px 0 6px; }
+@media (max-width: 600px) { .myusage-totals { grid-template-columns: 1fr; gap: 14px; } }
 .myusage-totals > div { display: flex; flex-direction: column; gap: 2px; }
-.myusage-totals strong { font-size: 20px; overflow-wrap: anywhere; }
+.myusage-totals strong { font-size: 22px; letter-spacing: -0.01em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .myusage-totals span { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.myusage-voice { font-size: 13px; color: var(--muted); margin: 2px 0 14px; }
+.myusage-empty { font-size: 15px; color: var(--muted); margin: 12px 0; }
 .myusage-breakdown { margin-top: 8px; }
 .myusage-breakdown th { text-align: left; font-size: 13px; font-weight: 600; color: var(--muted); padding: 8px 0; border-bottom: 0.5px solid var(--separator); }
 .myusage-breakdown th.num { text-align: right; padding-left: 12px; }
+.myusage-breakdown td { padding: 12px 0; }
+.myusage-breakdown td:first-child { font-weight: 500; }
 .usage-table-wrap { overflow-x: auto; }
 /* Same contrast guard for Projects: empty notes were #8e8e93 on white
    (3.26:1, fails AA). Scoped to project pages only, chat untouched. */

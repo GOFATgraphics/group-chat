@@ -4,7 +4,14 @@ import { useEffect, useState } from 'react'
 // with their AI agent(s). Fetches GET /api/usage with the signed-in
 // session token. The numbers are ESTIMATES counted from chat text (see
 // server/usage.js): the agents run their own Muse, so the app cannot see
-// their real token usage — the screen says so, it is not a bill.
+// their real token usage.
+//
+// UI rule (Ahmad, 8 Nov 2026): numbers only, no explanatory paragraphs.
+// The card, totals, per-agent table and the voice line carry short labels
+// ("credits used", "tokens · 62 in / 1,574 out", "estimated cost"); the
+// one-word "estimated" on the cost is the only qualifier. Do NOT add
+// paragraphs explaining the rates, the estimate, the bars, or the
+// additional-tokens figure — they were removed at the user's request.
 //
 // The card is styled like the screenshot Ahmad sent (8 Nov 2026): a dark
 // rounded card with a "Free plan" row (weekly usage, reset date, blue
@@ -58,7 +65,7 @@ export function MyUsageCard({ data }) {
             <span className="myusage-pct">{fmtCredits(totals.weekCredits)} credits this week</span>
           </div>
           <p className="myusage-sub">Weekly usage resets on {week.resetLabel}</p>
-          <div className="myusage-bar" role="progressbar" aria-label="This week's usage compared with your busiest week so far" aria-valuenow={Math.round(weekBarPct)} aria-valuemin={0} aria-valuemax={100}>
+          <div className="myusage-bar" role="progressbar" aria-label="This week's usage" aria-valuenow={Math.round(weekBarPct)} aria-valuemin={0} aria-valuemax={100}>
             <div style={{ width: `${weekBarPct}%` }} />
           </div>
         </div>
@@ -69,7 +76,7 @@ export function MyUsageCard({ data }) {
             <span className="myusage-pct">{fmt(totals.totalTokens)} tokens</span>
           </div>
           <p className="myusage-sub">Never expires</p>
-          <div className="myusage-bar" role="progressbar" aria-label="This week's share of your all-time tokens" aria-valuenow={Math.round(allTimeBarPct)} aria-valuemin={0} aria-valuemax={100}>
+          <div className="myusage-bar" role="progressbar" aria-label="This week's share of all-time tokens" aria-valuenow={Math.round(allTimeBarPct)} aria-valuemin={0} aria-valuemax={100}>
             <div style={{ width: `${allTimeBarPct}%` }} />
           </div>
         </div>
@@ -82,11 +89,7 @@ export function MyUsageCard({ data }) {
         >
           Upgrade
         </button>
-        {upgradeNote && (
-          <p className="setting-note muted">
-            Upgrade isn&apos;t available yet — usage is display-only for now, nothing is limited or charged.
-          </p>
-        )}
+        {upgradeNote && <p className="myusage-coming">Coming soon.</p>}
       </div>
 
       <div className="myusage-totals" aria-label="Totals">
@@ -105,9 +108,8 @@ export function MyUsageCard({ data }) {
       </div>
 
       {totals.voiceNotes > 0 && (
-        <p className="usage-note">
-          Voice: {totals.voiceNotes} voice {totals.voiceNotes === 1 ? 'note' : 'notes'}, {fmtMinutes(totals.voiceMinutes)}.
-          Transcription and the transcript&apos;s tokens are included in the numbers above.
+        <p className="myusage-voice">
+          Voice: {totals.voiceNotes} voice {totals.voiceNotes === 1 ? 'note' : 'notes'} · {fmtMinutes(totals.voiceMinutes)}
         </p>
       )}
 
@@ -133,21 +135,8 @@ export function MyUsageCard({ data }) {
           </tbody>
         </table>
       ) : (
-        <p className="usage-note">
-          No AI agent chats yet — once the Admin approves an agent for you, your usage will show here.
-        </p>
+        <p className="myusage-empty">No AI agent chats yet.</p>
       )}
-
-      <p className="usage-note">
-        Estimated from your chat text at {data.benchmark.model} rates (${data.benchmark.inputPerMillionUsd} in / $
-        {data.benchmark.outputPerMillionUsd} out per 1M tokens); 1 credit = ${data.benchmark.creditUsd.toFixed(2)}.
-        Your agents run their own AI, so this is an estimate, not a bill. Group chats, call transcripts and files are not counted.
-      </p>
-      <p className="usage-note">
-        Additional tokens: the figure shown is your all-time token total — there is no extra token pack in v1.
-        There is no usage limit: the bars compare this week with your busiest week so far (Free plan) and with your
-        all-time total (Additional tokens). Nothing is limited or charged.
-      </p>
     </div>
   )
 }
