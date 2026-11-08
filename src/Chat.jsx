@@ -384,6 +384,36 @@ export default function Chat({ session }) {
   const isPublicSignup = !String(session?.user?.email ?? '').endsWith('@chat.local')
   const isRestricted = !isOwner && isPublicSignup
 
+  // Mubarak's profile id, for the one exception to the rule above: a
+  // restricted user may also see — and open — a DM with Mubarak, but only
+  // when there is actually a DM conversation with him (the welcome
+  // message sent on approval, migration 0021). No other human gets an
+  // exception. Derived from profiles by username, never a hardcoded UUID;
+  // null until profiles load. This is a useMemo above the early returns,
+  // like the other memos in this component (#310).
+  const ownerId = useMemo(
+    () => Object.entries(profiles).find(([, name]) => name === 'mubarak')?.[0] ?? null,
+    [profiles],
+  )
+
+  // How the admin is named in text a restricted user can read: "the
+  // Admin" / "The Admin" instead of "Mubarak". Display only — the account
+  // stays username "mubarak", and legacy members and the owner still see
+  // "Mubarak" everywhere.
+  const adminRef = isRestricted ? 'the Admin' : 'Mubarak'
+
+  // Display names for a restricted user: Mubarak shows as "Admin" in list
+  // rows, the chat header, message sender names, reply quotes and toasts.
+  // displayProfiles is the profiles map with that one name swapped, so
+  // any component handed it (Message, ChatList) shows "Admin" without
+  // knowing about the rule. Both are display only.
+  const displayProfiles = useMemo(
+    () => (isRestricted && ownerId ? { ...profiles, [ownerId]: 'Admin' } : profiles),
+    [isRestricted, ownerId, profiles],
+  )
+  const displayName = (id, fallback = '…') =>
+    isRestricted && ownerId && id === ownerId ? 'Admin' : (profiles[id] ?? fallback)
+
   const pairKey = (a, b) => [a, b].sort().join('|')
 
   const isMessageForView = useCallback(
@@ -544,6 +574,14 @@ export default function Chat({ session }) {
       rows.sort((a, b) => b.id - a.id)
       last[key] = rows[0]
       if (owner) continue
+      // Restricted users only ever get an unread count for their allowed
+      // conversations — their approved agent DMs and the Admin DM. A
+      // group or other-human count would surface as a badge on the back
+      // button for a conversation they cannot open.
+      if (isRestricted) {
+        const peer = key.startsWith('dm:') ? key.slice(3) : null
+        if (!peer || (!approvedAgentIds(myRequests).has(peer) && peer !== ownerId)) continue
+      }
       const seen = rows.find((m) => m.user_id === myId || readIds.has(m.id))
       counts[key] = rows.filter((m) => m.user_id !== myId && (!seen || m.id > seen.id)).length
     }
@@ -562,7 +600,7 @@ export default function Chat({ session }) {
       return next
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [myId, notifyTarget, addDmPeer, addOwnerPair])
+  }, [myId, notifyTarget, addDmPeer, addOwnerPair, isRestricted, myRequests, ownerId])
 
   useEffect(() => {
     loadInbox()
@@ -713,18 +751,23 @@ export default function Chat({ session }) {
   // Restricted users never sit in the Group Chat or a human DM: once their
   // approved assignments have loaded, move them into their first assigned
   // agent DM (a notification link or a stale view must not be a back door
-  // into the group). Before approval there is nothing to move to — the
-  // Agent Request home screen shows instead, whatever the view is. This
-  // effect lives above the early returns with every other effect, so the
-  // hook order never changes between renders (#310).
+  // into the group). The one exception is a DM with Mubarak himself, so
+  // the user can read the welcome message sent on approval — that view is
+  // left alone. Before approval there is nothing to move to — the Agent
+  // Request home screen shows instead, whatever the view is. This effect
+  // lives above the early returns with every other effect, so the hook
+  // order never changes between renders (#310).
   useEffect(() => {
     if (!isRestricted) return
     const approved = approvedAgentIds(myRequests)
-    if (approved.size > 0 && !(view.type === 'dm' && approved.has(view.peerId))) {
+    const inAllowedDm =
+      view.type === 'dm' &&
+      (approved.has(view.peerId) || (ownerId && view.peerId === ownerId && dmPeers.includes(ownerId)))
+    if (approved.size > 0 && !inAllowedDm) {
       openConversation({ type: 'dm', peerId: [...approved][0] })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isRestricted, myRequests, view])
+  }, [isRestricted, myRequests, view, ownerId, dmPeers])
 
   // The single place a realtime arrival becomes a notification. Own
   // messages and messages in the currently viewed conversation never reach
@@ -732,6 +775,20 @@ export default function Chat({ session }) {
   // The toast replaces any previous toast (latest wins, never a stack).
   const notify = useCallback(
     (m) => {
+      // Restricted users must never be told about anything outside their
+      // allowed conversations: no toast, no browser notification and no
+      // unread count for Group Chat, other humans' DMs, or unassigned AI.
+      // Their allowed conversations are their approved agent DMs and the
+      // Admin DM (the welcome message). Everything else is dropped here,
+      // at the single place a realtime arrival becomes a notification.
+      if (isRestricted) {
+        const peer = m.recipient_id == null ? null : m.user_id === myId ? m.recipient_id : m.user_id
+        const allowed =
+          peer != null &&
+          (m.user_id === myId || m.recipient_id === myId) &&
+          (approvedAgentIds(myRequests).has(peer) || peer === ownerId)
+        if (!allowed) return
+      }
       const target = notifyTarget(m)
       const preview = previewOf(m)
       setUnread((prev) => ({ ...prev, [target.key]: (prev[target.key] ?? 0) + 1 }))
@@ -739,8 +796,13 @@ export default function Chat({ session }) {
         setNotice({ key: target.key, view: target.view, senderId: m.user_id, preview, owner: target.owner })
       }
       if (browserNotificationsRef.current && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-        const sender = profilesRef.current[m.user_id] ?? 'Someone'
-        const convo = target.owner ? 'Owner view' : target.label ?? profilesRef.current[target.view.peerId] ?? 'Private chat'
+        // A restricted user sees "Admin" for Mubarak, never his name —
+        // including in a browser notification about the welcome DM.
+        const sender = isRestricted && m.user_id === ownerId ? 'Admin' : (profilesRef.current[m.user_id] ?? 'Someone')
+        const convo = target.owner
+          ? 'Owner view'
+          : (target.label ??
+            (isRestricted && target.view.peerId === ownerId ? 'Admin' : (profilesRef.current[target.view.peerId] ?? 'Private chat')))
         try {
           const n = new Notification(`${sender} · ${convo}`, { body: preview, tag: target.key })
           n.onclick = () => {
@@ -755,7 +817,7 @@ export default function Chat({ session }) {
         }
       }
     },
-    [notifyTarget, openTarget],
+    [notifyTarget, openTarget, isRestricted, myRequests, ownerId],
   )
 
   // Short preview used for a reply quote, in the composer and on a sent
@@ -1028,14 +1090,16 @@ export default function Chat({ session }) {
     // trigger enforces this too — this is the friendly check, so the user
     // sees guidance instead of a failed send.
     if (aiIds.has(id) && !isOwner && !approvedAgentIds(myRequests).has(id)) {
-      setError('This AI agent has not been assigned to you yet — request one from the home screen and wait for Mubarak to approve it.')
+      setError(`This AI agent has not been assigned to you yet — request one from the home screen and wait for ${adminRef} to approve it.`)
       return
     }
     // A restricted (public-signup) user may only open an approved assigned
-    // agent DM — never a human DM. The members sheet and search paths must
-    // not be a back door into a private chat with another member.
-    if (isRestricted && !approvedAgentIds(myRequests).has(id)) {
-      setError('This chat is not available to you — request an AI agent from the home screen and wait for Mubarak to approve it.')
+    // agent DM — never a human DM — with one exception: a DM with Mubarak
+    // himself, so the user can read the welcome message sent on approval.
+    // (Sending a reply there is allowed: it is the admin. The DB trigger
+    // only gates AI recipients, so the message saves like any other DM.)
+    if (isRestricted && !approvedAgentIds(myRequests).has(id) && id !== ownerId) {
+      setError(`This chat is not available to you — request an AI agent from the home screen and wait for ${adminRef} to approve it.`)
       return
     }
     addDmPeer(id)
@@ -2038,7 +2102,7 @@ export default function Chat({ session }) {
           <h1>No access</h1>
           <p className="muted">
             This account hasn&apos;t been added to the group chat yet. If you just signed up, try signing in again — if it
-            still doesn&apos;t work, ask Mubarak for help.
+            still doesn&apos;t work, ask {adminRef} for help.
           </p>
           <button className="primary" onClick={() => supabase.auth.signOut()}>
             Sign out
@@ -2129,7 +2193,7 @@ export default function Chat({ session }) {
   // Everyone else in the group, used only for the read-receipt rule:
   // a group message is blue only once every one of these has read it.
   const otherMemberIds = groupMemberIds.filter((id) => id !== myId)
-  const peerName = peerId ? profiles[peerId] ?? '…' : null
+  const peerName = peerId ? displayName(peerId) : null
   const ownerNameA = ownerA ? profiles[ownerA] ?? '…' : null
   const ownerNameB = ownerB ? profiles[ownerB] ?? '…' : null
   const ownerPairLabel = isOwnerView ? `${ownerNameA} and ${ownerNameB}` : null
@@ -2137,7 +2201,7 @@ export default function Chat({ session }) {
     .filter(([a, b]) => profiles[a] && profiles[b])
     .sort((p, q) => `${profiles[p[0]]} and ${profiles[p[1]]}`.localeCompare(`${profiles[q[0]]} and ${profiles[q[1]]}`))
 
-  const noticeSender = notice ? profiles[notice.senderId] ?? 'Someone' : null
+  const noticeSender = notice ? displayName(notice.senderId, 'Someone') : null
   const noticeLabel = notice
     ? notice.owner
       ? `Owner view · ${profiles[notice.view.aId] ?? '…'} and ${profiles[notice.view.bId] ?? '…'}`
@@ -2308,14 +2372,24 @@ export default function Chat({ session }) {
     fullListItems.sort((x, y) => (x.owner && y.owner ? y.stamp - x.stamp : 0))
   }
   // The list a restricted (public-signup) user actually sees: ONLY their
-  // approved assigned agent DM(s). This is the single enforcement point
-  // for the list — Group Chat, named groups, human DMs and unassigned AI
-  // are all filtered out here, even if another filter above let one
-  // through (for example an AI whose profile is not yet marked is_ai).
-  // The owner block above never runs for a restricted user (isOwner is
-  // false), so nothing owner-only can leak into this list either.
+  // approved assigned agent DM(s), plus — and only when there is actually
+  // a DM conversation with him — a DM with Mubarak, so the user can read
+  // the welcome message sent on approval. That row's title is "Admin":
+  // a restricted user never sees the admin's name. Group Chat, named
+  // groups, other human DMs and unassigned AI are all filtered out here,
+  // even if another filter above let one through (for example an AI whose
+  // profile is not yet marked is_ai). The owner block above never runs
+  // for a restricted user (isOwner is false), so nothing owner-only can
+  // leak into this list either.
   const listItems = isRestricted
-    ? fullListItems.filter((c) => c.view.type === 'dm' && myApprovedAgentIds.has(c.view.peerId))
+    ? fullListItems
+        .filter(
+          (c) =>
+            c.view.type === 'dm' &&
+            (myApprovedAgentIds.has(c.view.peerId) ||
+              (ownerId && c.view.peerId === ownerId && dmPeers.includes(ownerId))),
+        )
+        .map((c) => (c.view.peerId === ownerId ? { ...c, title: 'Admin' } : c))
     : fullListItems
   const otherUnread = Object.entries(unread)
     .filter(([key]) => key !== viewKey(view))
@@ -2393,7 +2467,7 @@ export default function Chat({ session }) {
           agentRequests={isOwner ? pendingRequests : []}
           onOpenRequest={setRequestSheet}
           Avatar={Avatar}
-          profiles={profiles}
+          profiles={displayProfiles}
           avatars={avatars}
           // Restricted users get no message search from the list: it
           // searches every message they can read, including Group Chat
@@ -2486,6 +2560,7 @@ export default function Chat({ session }) {
             onBrowseGroup={() => setHomeDismissed(true)}
             onRequestSent={reloadAgentRequests}
             canBrowseGroup={!isRestricted}
+            adminName={isRestricted ? 'Admin' : 'Mubarak'}
             onSignOut={() => supabase.auth.signOut()}
           />
         ) : (
@@ -2549,9 +2624,9 @@ export default function Chat({ session }) {
               onReply={() => !item.msg._status && startReply(item.msg)}
               highlightMentions={isGroup}
               myId={myId}
-              username={profiles[item.msg.user_id] ?? '…'}
+              username={displayName(item.msg.user_id)}
               avatar={avatars[item.msg.user_id]}
-              profiles={profiles}
+              profiles={displayProfiles}
               reactions={reactions[item.msg.id] ?? []}
               url={urls[item.msg.attachment_path] ?? item.msg._localUrl}
               urls={urls}
@@ -2654,9 +2729,9 @@ export default function Chat({ session }) {
                   mine={replyTo.user_id === myId}
                   readOnly
                   myId={myId}
-                  username={profiles[replyTo.user_id] ?? '…'}
+                  username={displayName(replyTo.user_id)}
                   avatar={avatars[replyTo.user_id]}
-                  profiles={profiles}
+                  profiles={displayProfiles}
                   reactions={reactions[replyTo.id] ?? []}
                   url={urls[replyTo.attachment_path]}
                   urls={urls}

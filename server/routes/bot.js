@@ -33,7 +33,7 @@ import { waitUntil } from '@vercel/functions'
 import { getVercelOidcToken } from '@vercel/oidc'
 import { timingSafeEqual } from 'node:crypto'
 import { client, usernameToEmail, markRead, broadcastTyping, HttpError, BUCKET } from '../lib.js'
-import { PERSONAS, defaultPersona } from '../personas.js'
+import { PERSONAS, defaultPersona, PRIVATE_GUARDRAIL } from '../personas.js'
 import { speak, transcribeAudio, voiceFor } from '../speech.js'
 
 const GATEWAY_URL = 'https://ai-gateway.vercel.sh'
@@ -258,7 +258,15 @@ async function respond(bot, incoming, llm) {
       : `\nIn the group chat, not every message needs you. If the newest message is clearly meant for ` +
         `someone else, someone else has already answered it, it is a conversation you have nothing to add to, ` +
         `or it just wraps up a topic, reply with exactly ${NO_REPLY} and nothing else. Always answer when ` +
-        `someone mentions you by name, asks you something, or replies to one of your messages.`)
+        `someone mentions you by name, asks you something, or replies to one of your messages.`) +
+    // Private-assistant guardrail (one shared text, personas.js): this
+    // agent talks to one person in this conversation only and must never
+    // expose the group chat, the company, the work, other members or other
+    // conversations. Appended for every agent — adam, ali, gauri, anurag —
+    // including the default persona, and even when BOT_PERSONA_<NAME>
+    // overrides the persona text above, because the guardrail is added
+    // here, at the single place the system prompt is assembled.
+    `\n\n${PRIVATE_GUARDRAIL}`
 
   // Show "typing…" while Claude writes the reply (it lasts ~6 s per event),
   // in the group chat as well as in private chats, exactly like a human

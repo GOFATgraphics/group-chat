@@ -11,12 +11,19 @@ import { hasActiveRequestFor, submitRequest, effectiveAgentId } from './agentReq
 // is no group chat for them to browse instead, so the button is hidden
 // and a Sign out link is shown instead (otherwise a user waiting for
 // approval would have no way out of this screen at all).
-export default function AgentRequest({ me, myId, aiAgents, requests, Avatar, onStartChat, onBrowseGroup, onRequestSent, canBrowseGroup = true, onSignOut }) {
+// adminName is "Admin" for a restricted user and "Mubarak" for everyone
+// else: a new user must never see the admin's name. Only the display
+// text changes — the admin account is still username "mubarak".
+export default function AgentRequest({ me, myId, aiAgents, requests, Avatar, onStartChat, onBrowseGroup, onRequestSent, canBrowseGroup = true, onSignOut, adminName = 'Mubarak' }) {
   const [preferred, setPreferred] = useState('')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [sent, setSent] = useState(false)
+
+  // "the Admin" / "The Admin" for a restricted user, "Mubarak" otherwise.
+  const adminRef = adminName === 'Admin' ? 'the Admin' : 'Mubarak'
+  const adminRefCap = adminName === 'Admin' ? 'The Admin' : 'Mubarak'
 
   const approved = requests.filter((r) => r.status === 'approved')
   const pending = requests.filter((r) => r.status === 'pending')
@@ -48,8 +55,8 @@ export default function AgentRequest({ me, myId, aiAgents, requests, Avatar, onS
     <div className="agent-home">
       <h1>Welcome, {me?.username ?? 'friend'} 👋</h1>
       <p className="muted">
-        This is your space to chat with an AI agent. Request one below and Mubarak, the admin, will approve your request
-        and assign an agent to you. Once approved, the agent appears in your chats and you can talk to them directly.
+        This is your space to chat with an AI agent. Request one below and {adminRef} will approve your request and
+        assign an agent to you. Once approved, the agent appears in your chats and you can talk to them directly.
       </p>
 
       <section>
@@ -97,7 +104,7 @@ export default function AgentRequest({ me, myId, aiAgents, requests, Avatar, onS
                 <span className="status-pill status-pending">Pending</span>
                 <span>
                   Request for {effectiveAgentId(r) ? agentName(effectiveAgentId(r)) : 'any available agent'}
-                  {r.message ? ` — “${r.message}”` : ''} — Mubarak will review it soon.
+                  {r.message ? ` — “${r.message}”` : ''} — {adminRefCap} will review it soon.
                 </span>
               </li>
             ))}
@@ -124,12 +131,12 @@ export default function AgentRequest({ me, myId, aiAgents, requests, Avatar, onS
 
       <section>
         <h2>Request an AI agent</h2>
-        {sent && <p className="success">Request sent. Mubarak will review it and let you know.</p>}
+        {sent && <p className="success">Request sent. {adminRefCap} will review it and let you know.</p>}
         <form className="login-card request-form" onSubmit={onSubmit}>
           <label>
             Preferred agent (optional)
             <select value={preferred} onChange={(e) => setPreferred(e.target.value)}>
-              <option value="">Let Mubarak choose</option>
+              <option value="">Let {adminRef} choose</option>
               {aiAgents.map((agent) => (
                 <option key={agent.id} value={agent.id} disabled={hasActiveRequestFor(requests, agent.id)}>
                   {agent.username}
@@ -145,14 +152,14 @@ export default function AgentRequest({ me, myId, aiAgents, requests, Avatar, onS
               onChange={(e) => setMessage(e.target.value)}
               maxLength={280}
               rows={3}
-              placeholder="A short note for Mubarak…"
+              placeholder={`A short note for ${adminRef}…`}
             />
           </label>
           {error && <div className="error">{error}</div>}
           <button className="primary" disabled={busy || chosenCovered}>
             {chosenCovered ? 'Already requested' : busy ? 'Sending…' : 'Send request'}
           </button>
-          <p className="muted">Mubarak (admin) can read chats in this app.</p>
+          <p className="muted">{adminName === 'Admin' ? 'The Admin' : 'Mubarak (admin)'} can read chats in this app.</p>
         </form>
       </section>
 

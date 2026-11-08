@@ -17,7 +17,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import { gateway } from '@ai-sdk/gateway'
 import { getVercelOidcToken } from '@vercel/oidc'
 import { route, auth, body, check, HttpError } from '../lib.js'
-import { PERSONAS, defaultPersona } from '../personas.js'
+import { PERSONAS, defaultPersona, PRIVATE_GUARDRAIL } from '../personas.js'
 import { speak, transcribeAudio } from '../speech.js'
 
 export const CALL_MODEL = process.env.CALL_MODEL || 'openai/gpt-realtime-2'
@@ -88,7 +88,7 @@ const start = route({
     const persona = process.env[`BOT_PERSONA_${ai.username.toUpperCase()}`] || PERSONAS[ai.username] || defaultPersona(ai.username)
     const minutes = Math.round(CALL_MAX_SECONDS / 60)
     const instructions =
-      `${persona}\n\n` +
+      `${persona}\n\n${PRIVATE_GUARDRAIL}\n\n` +
       `You are on a live voice call with ${me.username}, a member of your group chat. ` +
       `Talk like a real phone call: short, warm, natural sentences, one idea at a time, and let them speak. ` +
       `Never read out lists, markdown, links or emoji. Answer in the language ${me.username} speaks. ` +
