@@ -7,7 +7,11 @@ import { hasActiveRequestFor, submitRequest, effectiveAgentId } from './agentReq
 // request already made. Once the user has an approved agent they can
 // start a chat with, and once they dismiss this screen, the normal
 // group chat takes over.
-export default function AgentRequest({ me, myId, aiAgents, requests, Avatar, onStartChat, onBrowseGroup, onRequestSent }) {
+// canBrowseGroup is false for a restricted (public-signup) user: there
+// is no group chat for them to browse instead, so the button is hidden
+// and a Sign out link is shown instead (otherwise a user waiting for
+// approval would have no way out of this screen at all).
+export default function AgentRequest({ me, myId, aiAgents, requests, Avatar, onStartChat, onBrowseGroup, onRequestSent, canBrowseGroup = true, onSignOut }) {
   const [preferred, setPreferred] = useState('')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
@@ -152,9 +156,15 @@ export default function AgentRequest({ me, myId, aiAgents, requests, Avatar, onS
         </form>
       </section>
 
-      <button className="link" onClick={onBrowseGroup}>
-        Browse the group chat instead
-      </button>
+      {canBrowseGroup ? (
+        <button className="link" onClick={onBrowseGroup}>
+          Browse the group chat instead
+        </button>
+      ) : (
+        <button className="link" onClick={onSignOut}>
+          Sign out
+        </button>
+      )}
     </div>
   )
 }

@@ -97,9 +97,15 @@ export default function Chat({ session }) {
     mq.addEventListener('change', onChange)
     return () => mq.removeEventListener('change', onChange)
   }, [])
-  const [screen, setScreen] = useState(() =>
-    new URLSearchParams(window.location.search).get('view') ? 'chat' : 'list',
-  )
+  const [screen, setScreen] = useState(() => {
+    // A public-signup user starts on the chat pane, never the list: before
+    // approval there is no list for them, only the Agent Request screen
+    // (see isRestricted below — same @chat.local email check, so the
+    // owner and legacy members still start on the list as before).
+    const fromLink = new URLSearchParams(window.location.search).get('view')
+    const publicSignup = !String(session?.user?.email ?? '').endsWith('@chat.local')
+    return fromLink || publicSignup ? 'chat' : 'list'
+  })
   // The chat counts as "being read" only while it is on screen.
   const chatActive = wide || screen === 'chat'
   const activeRef = useRef(chatActive)
@@ -366,6 +372,17 @@ export default function Chat({ session }) {
 
   // The owner is detected by profile username, never by a hardcoded UUID.
   const isOwner = me?.username === 'mubarak'
+
+  // New-user privacy (8 Nov 2026): admin-created accounts always sign in
+  // as <username>@chat.local (create_chat_user, migration 0001); a public
+  // signup uses a real email. The session email is the marker — no new
+  // column, no live migration. A restricted user sees ONLY their approved
+  // assigned agent DM(s): no Group Chat, no named groups, no human DMs,
+  // no unassigned AI. Legacy members (@chat.local) keep the full list and
+  // Group Chat as today; the owner is exempt. An unknown email fails
+  // closed (restricted): every legacy account has a @chat.local email.
+  const isPublicSignup = !String(session?.user?.email ?? '').endsWith('@chat.local')
+  const isRestricted = !isOwner && isPublicSignup
 
   const pairKey = (a, b) => [a, b].sort().join('|')
 
@@ -693,6 +710,22 @@ export default function Chat({ session }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Restricted users never sit in the Group Chat or a human DM: once their
+  // approved assignments have loaded, move them into their first assigned
+  // agent DM (a notification link or a stale view must not be a back door
+  // into the group). Before approval there is nothing to move to — the
+  // Agent Request home screen shows instead, whatever the view is. This
+  // effect lives above the early returns with every other effect, so the
+  // hook order never changes between renders (#310).
+  useEffect(() => {
+    if (!isRestricted) return
+    const approved = approvedAgentIds(myRequests)
+    if (approved.size > 0 && !(view.type === 'dm' && approved.has(view.peerId))) {
+      openConversation({ type: 'dm', peerId: [...approved][0] })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRestricted, myRequests, view])
+
   // The single place a realtime arrival becomes a notification. Own
   // messages and messages in the currently viewed conversation never reach
   // here from the realtime handler, so they get no toast and no count.
@@ -996,6 +1029,13 @@ export default function Chat({ session }) {
     // sees guidance instead of a failed send.
     if (aiIds.has(id) && !isOwner && !approvedAgentIds(myRequests).has(id)) {
       setError('This AI agent has not been assigned to you yet — request one from the home screen and wait for Mubarak to approve it.')
+      return
+    }
+    // A restricted (public-signup) user may only open an approved assigned
+    // agent DM — never a human DM. The members sheet and search paths must
+    // not be a back door into a private chat with another member.
+    if (isRestricted && !approvedAgentIds(myRequests).has(id)) {
+      setError('This chat is not available to you — request an AI agent from the home screen and wait for Mubarak to approve it.')
       return
     }
     addDmPeer(id)
@@ -2175,14 +2215,26 @@ export default function Chat({ session }) {
   // ---- AI agent requests -------------------------------------------------
   // A new user who has no approved agent and no AI DM history sees the
   // Agent Request home screen instead of the group chat's "No messages
-  // yet". The owner (Mubarak) never sees it. Dismissing it (choosing a
-  // chat, or "Browse the group chat instead") hides it for the session.
+  // yet". The owner (Mubarak) never sees it. A restricted (public-signup)
+  // user always sees it until they have an approved agent — dismissing it
+  // is not an option for them (there is no group chat to browse instead),
+  // so homeDismissed and AI DM history are ignored for them. Legacy
+  // members keep the old behaviour: dismissing it, or already having AI
+  // DM history, hides it for the session.
   // NOTE: aiAgents / myApprovedAgentIds live above the early returns
   // (see the #310 comment there) — they must not be moved back here.
   const hasAiDmHistory = dmPeers.some((id) => aiIds.has(id))
-  const showAgentHome = !isOwner && !homeDismissed && myApprovedAgentIds.size === 0 && !hasAiDmHistory
+  const showAgentHome =
+    !isOwner && myApprovedAgentIds.size === 0 && (isRestricted || (!homeDismissed && !hasAiDmHistory))
+  // On phones the home screen IS the screen: a restricted user on it has
+  // no list to go back to, so the shell is forced onto the chat pane even
+  // if the screen state says 'list' (browser back / swipe).
+  const displayScreen = isRestricted && showAgentHome ? 'chat' : screen
 
-  const listItems = [
+  // The full list (legacy members and the owner). Restricted users get a
+  // filtered copy below — never the Group Chat, named groups, human DMs
+  // or unassigned AI, only their approved assigned agent DM(s).
+  const fullListItems = [
     {
       key: 'group',
       view: { type: 'group' },
@@ -2227,7 +2279,7 @@ export default function Chat({ session }) {
   if (isOwner) {
     for (const g of Object.values(groups).filter((x) => !x.members.includes(myId))) {
       const key = `group:${g.id}`
-      listItems.push({
+      fullListItems.push({
         key,
         owner: true,
         view: { type: 'group', groupId: g.id },
@@ -2241,7 +2293,7 @@ export default function Chat({ session }) {
     }
     for (const [a, b] of ownerPairList) {
       const key = `owner:${pairKey(a, b)}`
-      listItems.push({
+      fullListItems.push({
         key,
         owner: true,
         view: { type: 'owner', aId: a, bId: b },
@@ -2253,8 +2305,18 @@ export default function Chat({ session }) {
         stamp: stamp(key),
       })
     }
-    listItems.sort((x, y) => (x.owner && y.owner ? y.stamp - x.stamp : 0))
+    fullListItems.sort((x, y) => (x.owner && y.owner ? y.stamp - x.stamp : 0))
   }
+  // The list a restricted (public-signup) user actually sees: ONLY their
+  // approved assigned agent DM(s). This is the single enforcement point
+  // for the list — Group Chat, named groups, human DMs and unassigned AI
+  // are all filtered out here, even if another filter above let one
+  // through (for example an AI whose profile is not yet marked is_ai).
+  // The owner block above never runs for a restricted user (isOwner is
+  // false), so nothing owner-only can leak into this list either.
+  const listItems = isRestricted
+    ? fullListItems.filter((c) => c.view.type === 'dm' && myApprovedAgentIds.has(c.view.peerId))
+    : fullListItems
   const otherUnread = Object.entries(unread)
     .filter(([key]) => key !== viewKey(view))
     .reduce((sum, [, n]) => sum + n, 0)
@@ -2307,11 +2369,20 @@ export default function Chat({ session }) {
   }
 
   return (
-    <div ref={shellRef} className={`shell ${wide ? 'wide' : `on-${screen}`}`}>
-      <div className="pane-list-wrap" inert={!wide && screen === 'chat'}>
+    <div ref={shellRef} className={`shell ${wide ? 'wide' : `on-${displayScreen}`}`}>
+      {/* The Chats list is not rendered at all for a restricted user on the
+          Agent Request home screen: on phones the list is the first screen,
+          so rendering it — even empty — would still show "Chats" and invite
+          browsing. After approval the list shows only their agent DM(s). */}
+      {!(isRestricted && showAgentHome) && (
+      <div className="pane-list-wrap" inert={!wide && displayScreen === 'chat'}>
         <ChatList
-          onOpenProjects={openProjects}
-          onOpenUsage={openUsage}
+          // Restricted users get neither Projects nor Usage from the list:
+          // Usage shows Adam/Ali token totals (admin info) and Projects is
+          // the team's workspace — a public-signup user is here for their
+          // assigned agent only. ChatList hides both sections when null.
+          onOpenProjects={isRestricted ? null : openProjects}
+          onOpenUsage={isRestricted ? null : openUsage}
           items={listItems}
           me={me.username}
           myAvatar={avatars[myId]}
@@ -2324,7 +2395,10 @@ export default function Chat({ session }) {
           Avatar={Avatar}
           profiles={profiles}
           avatars={avatars}
-          onOpenMessage={openMessage}
+          // Restricted users get no message search from the list: it
+          // searches every message they can read, including Group Chat
+          // history. ChatList disables the search section when this is null.
+          onOpenMessage={isRestricted ? null : openMessage}
           chatNameOf={(m) =>
             m.group_id
               ? groups[m.group_id]?.name ?? 'Group'
@@ -2336,7 +2410,12 @@ export default function Chat({ session }) {
           }
         />
       </div>
-    <div className="chat pane-chat" ref={paneRef} inert={!chatActive} {...edgeSwipe}>
+      )}
+    <div className="chat pane-chat" ref={paneRef} inert={!(wide || displayScreen === 'chat')} {...edgeSwipe}>
+      {/* No top bar on the Agent Request home screen for a restricted user:
+          it would show the "Group Chat" title and a Chat info button that
+          lists every member. The home screen is the whole screen. */}
+      {!(isRestricted && showAgentHome) && (
       <header className="topbar">
         {/* Round glass buttons, iOS style: ‹ back to the chat list (with the
             unread count from other chats), ⋯ group info, 📞 call an AI. */}
@@ -2384,8 +2463,13 @@ export default function Chat({ session }) {
           </span>
         </button>
       </header>
+      )}
 
-      <PinStrip pins={pins} profiles={profiles} onJump={(id) => jumpTo(id)} preview={quotePreviewOf} />
+      {/* Group pins are hidden on the home screen too — they are Group
+          Chat messages a restricted user should not see. */}
+      {!(isRestricted && showAgentHome) && (
+        <PinStrip pins={pins} profiles={profiles} onJump={(id) => jumpTo(id)} preview={quotePreviewOf} />
+      )}
 
       <main className={`messages ${pins.length ? 'has-pins' : ''}`} ref={listRef} onScroll={onScroll} onClick={() => setPickerFor(null)}>
         {showAgentHome ? (
@@ -2401,6 +2485,8 @@ export default function Chat({ session }) {
             }}
             onBrowseGroup={() => setHomeDismissed(true)}
             onRequestSent={reloadAgentRequests}
+            canBrowseGroup={!isRestricted}
+            onSignOut={() => supabase.auth.signOut()}
           />
         ) : (
           <>
