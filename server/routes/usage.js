@@ -10,11 +10,18 @@ import {
 // Per-user token / credit usage, estimated from stored chat text
 // (see server/usage.js for the method and its limits).
 //
-//   GET /api/usage      -> the caller's own usage (their DMs with their
-//                          approved AI agents). Works for a Supabase
+//   GET /api/usage      -> the ADMIN's own usage (owner only since
+//                          8 Nov 2026 — see below). Works for a Supabase
 //                          access token and for a gck_ personal API key.
 //   GET /api/usage/all  -> every user's totals, admin (owner) only.
 //                          Totals only — never message content.
+//
+// VISIBILITY (decided 8 Nov 2026, reversing the earlier "each user sees
+// their own usage" rule): ONLY the admin (Mubarak, profiles.is_owner)
+// sees usage numbers at all. Regular users see no figures anywhere in
+// the UI, and GET /api/usage answers 403 for a non-owner. The numbers
+// stay computed the same way; they are just never shown or served to
+// anyone but the owner.
 //
 // Attribution rule (v1): a DM counts only where an APPROVED agent_requests
 // row pairs the user with the agent. Within that DM the user's messages
@@ -22,10 +29,10 @@ import {
 // and file contents are out of v1. Full history is counted (backfill from
 // the messages table); nothing new is collected.
 //
-// Privacy: /api/usage runs on the caller's own session, so Supabase RLS
-// already limits it to messages they can read. /api/usage/all runs on the
-// service-role client but returns aggregates only — no text, no per-message
-// rows, no attachment names.
+// Privacy: /api/usage/all runs on the service-role client but returns
+// aggregates only — no text, no per-message rows, no attachment names.
+// /api/usage is owner-only, so no non-owner can read numbers from it
+// even though it runs on the caller's own session.
 
 const MESSAGE_COLUMNS =
   'id, user_id, recipient_id, content, attachment_type, attachment_duration, call_duration, created_at'
@@ -72,11 +79,26 @@ function usageResponse(perAgent, week, busiestWeekCredits = 0) {
   }
 }
 
+// Shared owner check (profiles.is_owner, via the service-role client).
+// Throws 403 for anyone who is not the admin.
+async function checkOwner(userId) {
+  const adm = admin()
+  const { data: me, error: meError } = await adm
+    .from('profiles')
+    .select('is_owner')
+    .eq('id', userId)
+    .single()
+  if (meError) throw new HttpError(500, meError.message)
+  if (!me?.is_owner) throw new HttpError(403, 'Only the admin can see usage')
+}
+
 // Own usage: the caller's session, so RLS limits the read to messages
 // they can see. Approved pairs come from their own agent_requests.
+// Owner only (see the header): a non-owner gets 403.
 export const own = route({
   async GET(req) {
     const { sb, userId } = await auth(req)
+    await checkOwner(userId)
     const week = weekBounds()
     const requests = check(
       await sb
@@ -110,20 +132,13 @@ export const own = route({
   },
 })
 
-// Admin view: every user's totals. Owner only, checked against
-// profiles.is_owner via the service-role client.
+// Admin view: every user's totals. Owner only.
 export const all = route({
   async GET(req) {
     const { userId } = await auth(req)
     const week = weekBounds()
+    await checkOwner(userId)
     const adm = admin()
-    const { data: me, error: meError } = await adm
-      .from('profiles')
-      .select('is_owner')
-      .eq('id', userId)
-      .single()
-    if (meError) throw new HttpError(500, meError.message)
-    if (!me?.is_owner) throw new HttpError(403, 'Only the admin can see everyone’s usage')
 
     const requests = check(
       await adm

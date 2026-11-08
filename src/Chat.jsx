@@ -3027,7 +3027,7 @@ export default function Chat({ session }) {
               <p className="setting-note muted">This browser does not support browser notifications. The in-app notice still works.</p>
             )}
             <ApiKeys username={me.username} />
-            <MyUsage token={session?.access_token} />
+            <MyUsage token={session?.access_token} isOwner={isOwner} />
             <button className="sheet-signout" onClick={() => supabase.auth.signOut()}>
               Sign out
             </button>

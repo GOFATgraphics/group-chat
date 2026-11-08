@@ -1,10 +1,19 @@
 import { useEffect, useState } from 'react'
 
-// "My usage" — the Settings sheet section showing what this user has used
-// with their AI agent(s). Fetches GET /api/usage with the signed-in
-// session token. The numbers are ESTIMATES counted from chat text (see
-// server/usage.js): the agents run their own Muse, so the app cannot see
-// their real token usage.
+// "My usage" — the Settings sheet section.
+// Fetches GET /api/usage with the signed-in session token. The numbers
+// are ESTIMATES counted from chat text (see server/usage.js): the agents
+// run their own Muse, so the app cannot see their real token usage.
+//
+// VISIBILITY (Ahmad, 8 Nov 2026 — REVERSING the earlier "each user sees
+// their own usage" rule): ONLY the admin (Mubarak, the owner) sees usage
+// numbers at all. Regular users see ONLY the plan card shell — "Free
+// plan", "Weekly usage resets on <next Monday>", "Additional tokens" +
+// "Never expires", and the "Upgrade" link — with NO figures, NO progress
+// bars, NO stats block, NO per-agent table, NO voice line. The shell is
+// rendered without any API call, so no numbers ever reach a non-owner's
+// browser. The owner sees everything as before. `isOwner` defaults to
+// false (fail closed): numbers are hidden unless ownership is known.
 //
 // UI rule (Ahmad, 8 Nov 2026): numbers only, no explanatory paragraphs.
 // The card, totals, per-agent table and the voice line carry short labels
@@ -46,10 +55,54 @@ function fmtMinutes(min) {
   return v < 1 ? `${Math.round(v * 60)} sec` : `${v.toFixed(1)} min`
 }
 
+// Next Monday's label ("9 Nov"), computed client-side in UTC — the same
+// rule as server/usage.js weekBounds(). Used by the non-owner shell, which
+// renders without an API call and therefore has no server resetLabel.
+function nextMondayLabel(now = new Date()) {
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+  // Monday = 1 (Sunday = 0): days until next Monday (always 1–7 ahead).
+  const daysAhead = ((8 - d.getUTCDay()) % 7) || 7
+  d.setUTCDate(d.getUTCDate() + daysAhead)
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' })
+}
+
 // The summary card + per-agent breakdown, pure (no fetching) so it can be
-// rendered in tests with fixture data.
-export function MyUsageCard({ data }) {
+// rendered in tests with fixture data. For a non-owner, `data` is null and
+// only the plan card shell renders — no figures, no bars, no stats, no
+// table, no voice line.
+export function MyUsageCard({ data, isOwner = false }) {
   const [upgradeNote, setUpgradeNote] = useState(false)
+  if (!isOwner) {
+    return (
+      <div>
+        <div className="myusage-card" aria-label="My usage summary">
+          <div className="myusage-row">
+            <div className="myusage-row-top">
+              <span className="myusage-title">Free plan</span>
+            </div>
+            <p className="myusage-sub">Weekly usage resets on {nextMondayLabel()}</p>
+          </div>
+
+          <div className="myusage-row">
+            <div className="myusage-row-top">
+              <span className="myusage-title">Additional tokens</span>
+            </div>
+            <p className="myusage-sub">Never expires</p>
+          </div>
+
+          <div className="myusage-divider" />
+          <button
+            type="button"
+            className="myusage-upgrade"
+            onClick={() => setUpgradeNote(true)}
+          >
+            Upgrade
+          </button>
+          {upgradeNote && <p className="myusage-coming">Coming soon.</p>}
+        </div>
+      </div>
+    )
+  }
   const totals = data.totals
   const week = data.week
   const weekBarPct = totals.weekBarPct ?? 0
@@ -141,11 +194,14 @@ export function MyUsageCard({ data }) {
   )
 }
 
-export default function MyUsage({ token }) {
+export default function MyUsage({ token, isOwner = false }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
+    // Non-owners never see usage numbers: no fetch at all, so no figures
+    // ever reach their browser. The shell renders below.
+    if (!isOwner) return
     if (!token) {
       setError('You are not signed in. Sign in again to see your usage.')
       return
@@ -167,17 +223,19 @@ export default function MyUsage({ token }) {
     return () => {
       cancelled = true
     }
-  }, [token])
+  }, [token, isOwner])
 
   return (
     <section className="myusage" aria-label="My usage">
       <div className="myusage-head">My usage</div>
-      {error ? (
+      {!isOwner ? (
+        <MyUsageCard data={null} isOwner={false} />
+      ) : error ? (
         <p className="setting-note error">{error}</p>
       ) : !data ? (
         <p className="setting-note muted">Loading usage…</p>
       ) : (
-        <MyUsageCard data={data} />
+        <MyUsageCard data={data} isOwner />
       )}
     </section>
   )
