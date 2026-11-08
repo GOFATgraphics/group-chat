@@ -3013,10 +3013,6 @@ export default function Chat({ session }) {
                 onChange={(e) => togglePush(e.target.checked)}
               />
             </label>
-            <p className="setting-note muted">
-              Push notifications can reach you even when the app is closed, including on your lock screen. On iPhone, that only works if the app is
-              installed to your home screen first. See the note below the toggle if push is off.
-            </p>
             {pushStatus === 'unconfigured' && <p className="setting-note muted">{pushError}</p>}
             {pushStatus === 'denied' && (
               <p className="setting-note muted">

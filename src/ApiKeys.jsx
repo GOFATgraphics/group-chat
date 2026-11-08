@@ -71,10 +71,6 @@ export default function ApiKeys({ username }) {
   return (
     <div className="api-keys">
       <div className="api-keys-head">API keys</div>
-      <p className="setting-note muted">
-        Give an AI agent a key and it can read and reply in this chat as <b>{username}</b>, including your private
-        messages. Revoke a key to cut it off.
-      </p>
 
       {created ? (
         <div className="api-key-created">
