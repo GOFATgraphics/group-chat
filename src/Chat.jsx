@@ -29,6 +29,7 @@ import {
 } from './icons.jsx'
 import { PinStrip, PollCard, PollComposer, NotesSheet, ScheduleSheet, useMessageSearch, Highlighted, itemScope } from './Tools.jsx'
 import ApiKeys from './ApiKeys.jsx'
+import MyUsage from './MyUsage.jsx'
 import { useTyping } from './typing.js'
 import { VoicePlayer, VoiceRecorder, MicIcon, canRecordVoice, formatDuration } from './Voice.jsx'
 import MediaViewer from './MediaViewer.jsx'
@@ -149,9 +150,30 @@ export default function Chat({ session }) {
   }
   // Usage screen, mirroring Projects: null = chats, true = usage page.
   // When set, the whole Usage page replaces the chat shell, it is never
-  // rendered inside a chat pane or as a modal.
+  // rendered inside a chat pane or as a modal. For the owner (Mubarak)
+  // the page also loads live per-user totals from GET /api/usage/all;
+  // everyone else sees only the static Adam/Ali snapshot (Usage.jsx
+  // renders the admin section only when `admin` is passed).
   const [showUsage, setShowUsage] = useState(false)
-  const openUsage = () => setShowUsage(true)
+  const [adminUsage, setAdminUsage] = useState({ loading: false, error: '', data: null })
+  const openUsage = () => {
+    setShowUsage(true)
+    if (!isOwner) return
+    const token = session?.access_token
+    if (!token) {
+      setAdminUsage({ loading: false, error: 'You are not signed in. Sign in again to see everyone’s usage.', data: null })
+      return
+    }
+    setAdminUsage({ loading: true, error: '', data: null })
+    fetch('/api/usage/all', { headers: { Authorization: `Bearer ${token}` } })
+      .then(async (res) => {
+        const json = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(json.error || 'Could not load usage.')
+        return json
+      })
+      .then((json) => setAdminUsage({ loading: false, error: '', data: json }))
+      .catch((err) => setAdminUsage({ loading: false, error: err.message || 'Could not load usage.', data: null }))
+  }
   const createProjectAndOpen = async (name) => {
     const token = session?.access_token
     if (!token) {
@@ -2407,7 +2429,7 @@ export default function Chat({ session }) {
   // is only a render switch.
   if (showUsage) {
     return (
-      <Usage data={USAGE_DATA} onBack={() => setShowUsage(false)} />
+      <Usage data={USAGE_DATA} onBack={() => setShowUsage(false)} admin={isOwner ? adminUsage : null} />
     )
   }
 
@@ -3009,6 +3031,7 @@ export default function Chat({ session }) {
               <p className="setting-note muted">This browser does not support browser notifications. The in-app notice still works.</p>
             )}
             <ApiKeys username={me.username} />
+            <MyUsage token={session?.access_token} />
             <button className="sheet-signout" onClick={() => supabase.auth.signOut()}>
               Sign out
             </button>

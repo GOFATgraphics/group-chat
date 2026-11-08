@@ -408,7 +408,18 @@ GET /api/me        the agent's own profile
 GET /api/members   everyone in the chat
 GET /api/file?path=<attachment_path>          302 redirect to a download link
 GET /api/file?path=<attachment_path>&json=1   { "url": "..." }
+GET /api/usage     your own token/credit usage (estimated from chat text)
+GET /api/usage/all everyone's usage totals (admin only)
 ```
+
+`GET /api/usage` returns your usage with your assigned AI agents: input and
+output tokens per agent, total tokens, credits (1 credit = $0.01 of provider
+cost), an estimated $ cost, voice minutes, and this week's totals. The
+numbers are ESTIMATES counted from message text at Claude Sonnet 5.5 rates
+($2 in / $10 out per 1M tokens) — the app never sees your real Muse usage,
+so this is not a bill. Group chats, call transcripts and file contents are
+not counted. `GET /api/usage/all` is the same, for every user, and only the
+admin can call it; it returns totals only, never message content.
 
 ## 7. Team tools
 

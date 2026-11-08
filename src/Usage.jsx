@@ -110,7 +110,74 @@ function PersonCard({ name, note, p }) {
   )
 }
 
-export function Usage({ data = USAGE_DATA, onBack }) {
+function fmtMoney(n) {
+  const v = Number(n ?? 0)
+  return `$${v < 0.01 ? v.toFixed(4) : v.toFixed(2)}`
+}
+
+// Live per-user totals for the admin (Mubarak). `admin` is null for
+// everyone else — the section never renders for them. Totals only, no
+// message content ever reaches this screen.
+function AdminUsage({ admin }) {
+  if (!admin) return null
+  const { loading, error, data } = admin
+  return (
+    <section className="usage-card" aria-label="Everyone's usage">
+      <div className="usage-card-head">
+        <div>
+          <h2>Everyone</h2>
+          <p className="usage-note">Live totals from chat text, estimated at Sonnet 5.5 rates</p>
+        </div>
+      </div>
+      {loading ? (
+        <p className="usage-note">Loading everyone&apos;s usage…</p>
+      ) : error ? (
+        <p className="usage-note">{error}</p>
+      ) : !data || !data.users.length ? (
+        <p className="usage-note">No usage yet — nobody has chatted with an assigned agent.</p>
+      ) : (
+        <>
+          <div className="usage-table-wrap">
+            <table className="usage-table">
+              <thead>
+                <tr>
+                  <th scope="col">User</th>
+                  <th scope="col" className="num">Input</th>
+                  <th scope="col" className="num">Output</th>
+                  <th scope="col" className="num">Tokens</th>
+                  <th scope="col" className="num">Credits</th>
+                  <th scope="col" className="num">Cost</th>
+                  <th scope="col" className="num">Voice</th>
+                  <th scope="col" className="num">Msgs</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.users.map((u) => (
+                  <tr key={u.userId}>
+                    <td>{u.username}</td>
+                    <td className="num">{fmt(u.totals.inputTokens)}</td>
+                    <td className="num">{fmt(u.totals.outputTokens)}</td>
+                    <td className="num">{fmt(u.totals.totalTokens)}</td>
+                    <td className="num cost">{fmt(u.totals.credits)}</td>
+                    <td className="num">{fmtMoney(u.totals.costUsd)}</td>
+                    <td className="num">{u.totals.voiceMinutes < 1 ? `${Math.round(u.totals.voiceMinutes * 60)}s` : `${u.totals.voiceMinutes.toFixed(1)}m`}</td>
+                    <td className="num">{fmt(u.totals.messages)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="usage-note">
+            {fmt(data.totals.users)} {data.totals.users === 1 ? 'user' : 'users'} · {fmt(data.totals.totalTokens)} tokens ·{' '}
+            {fmt(data.totals.credits)} credits · {fmtMoney(data.totals.costUsd)} estimated. Totals only — no message content.
+          </p>
+        </>
+      )}
+    </section>
+  )
+}
+
+export function Usage({ data = USAGE_DATA, onBack, admin = null }) {
   const adam = data.adam
   const ali = data.ali
   const combined = adam.totalCost + ali.totalCost
@@ -126,6 +193,7 @@ export function Usage({ data = USAGE_DATA, onBack }) {
         </p>
       </header>
 
+      <AdminUsage admin={admin} />
       <section className="usage-kpis" aria-label="Totals">
         <div className="usage-kpi">
           <span className="usage-kpi-label">Adam</span>
