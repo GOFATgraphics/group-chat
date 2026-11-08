@@ -32,8 +32,8 @@ import Anthropic from '@anthropic-ai/sdk'
 import { waitUntil } from '@vercel/functions'
 import { getVercelOidcToken } from '@vercel/oidc'
 import { timingSafeEqual } from 'node:crypto'
-import { client, usernameToEmail, markRead, broadcastTyping, HttpError, BUCKET, authEmailFor } from '../lib.js'
-import { PERSONAS, defaultPersona, PRIVATE_GUARDRAIL, shouldApplyGuardrail } from '../personas.js'
+import { client, usernameToEmail, markRead, broadcastTyping, HttpError, BUCKET } from '../lib.js'
+import { PERSONAS, defaultPersona } from '../personas.js'
 import { speak, transcribeAudio, voiceFor } from '../speech.js'
 
 const GATEWAY_URL = 'https://ai-gateway.vercel.sh'
@@ -163,31 +163,6 @@ async function setup() {
   }
 }
 
-// Assembles one agent's system prompt. Exported so tests can call the
-// real assembly: the persona (or a BOT_PERSONA_<NAME> override, passed
-// in as `persona`), the member list, the group-chat reply guidance, and
-// — only when `guarded` is true — the shared private-assistant
-// guardrail. `guarded` is decided by the caller with
-// shouldApplyGuardrail (personas.js): a DM with a restricted
-// (public-signup) user only, never the group chat, never an original
-// member.
-export function buildSystemPrompt({ persona, botName, memberNames, otherBots, isDirect, guarded }) {
-  return (
-    `${persona}\n\n` +
-    `Your username in the chat is "${botName}". The members are: ${memberNames}.\n` +
-    (otherBots.length ? `${otherBots.join(', ')} ${otherBots.length > 1 ? 'are' : 'is'} also an AI member like you; don't drag them into back-and-forth chatter.\n` : '') +
-    `Each request shows the recent conversation, one message per line as "[#id] name: text". ` +
-    `Reply with only the text of your next chat message: no "[#id]", no name prefix, no quotes.` +
-    (isDirect
-      ? ''
-      : `\nIn the group chat, not every message needs you. If the newest message is clearly meant for ` +
-        `someone else, someone else has already answered it, it is a conversation you have nothing to add to, ` +
-        `or it just wraps up a topic, reply with exactly ${NO_REPLY} and nothing else. Always answer when ` +
-        `someone mentions you by name, asks you something, or replies to one of your messages.`) +
-    (guarded ? `\n\n${PRIVATE_GUARDRAIL}` : '')
-  )
-}
-
 async function respond(bot, incoming, llm) {
   const { sb, userId } = bot
   const isDirect = Boolean(incoming.recipient_id)
@@ -272,34 +247,18 @@ async function respond(bot, incoming, llm) {
 
   const members = Object.values(names).join(', ')
   const otherBots = [...botNames].filter((n) => n !== bot.name)
-
-  // The strict guardrail is for outsiders only (Ahmad, 8 Nov 2026): with
-  // the original members the agents talk normally, as group members
-  // always have. So it applies only in a DM with a restricted
-  // (public-signup) user — never in the group chat, never in a DM with
-  // an original member. The sender's email is not in profiles (it lives
-  // in auth.users), so look it up with the service-role client; when the
-  // lookup is unavailable the sender is treated as restricted (fail
-  // closed). No lookup at all for group messages or for the owner.
-  // Decided here, after the loop guards above, so skipped deliveries
-  // never pay for the lookup.
-  let guarded = false
-  if (isDirect && names[incoming.user_id] !== 'mubarak') {
-    guarded = shouldApplyGuardrail({
-      isDirect,
-      senderUsername: names[incoming.user_id],
-      senderEmail: await authEmailFor(incoming.user_id),
-    })
-  }
-
-  const system = buildSystemPrompt({
-    persona: bot.persona,
-    botName: bot.name,
-    memberNames: members,
-    otherBots,
-    isDirect,
-    guarded,
-  })
+  const system =
+    `${bot.persona}\n\n` +
+    `Your username in the chat is "${bot.name}". The members are: ${members}.\n` +
+    (otherBots.length ? `${otherBots.join(', ')} ${otherBots.length > 1 ? 'are' : 'is'} also an AI member like you; don't drag them into back-and-forth chatter.\n` : '') +
+    `Each request shows the recent conversation, one message per line as "[#id] name: text". ` +
+    `Reply with only the text of your next chat message: no "[#id]", no name prefix, no quotes.` +
+    (isDirect
+      ? ''
+      : `\nIn the group chat, not every message needs you. If the newest message is clearly meant for ` +
+        `someone else, someone else has already answered it, it is a conversation you have nothing to add to, ` +
+        `or it just wraps up a topic, reply with exactly ${NO_REPLY} and nothing else. Always answer when ` +
+        `someone mentions you by name, asks you something, or replies to one of your messages.`)
 
   // Show "typing…" while Claude writes the reply (it lasts ~6 s per event),
   // in the group chat as well as in private chats, exactly like a human
