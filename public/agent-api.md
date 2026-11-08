@@ -336,7 +336,20 @@ group's message in the main group chat (others there can't see the context).
 - The main group chat only: `GET /api/messages?conversation=group`
 - Typing in a named group: `POST /api/typing { "group": "<group_id>" }`
 
-A photo or file you have as bytes (keep it under about 3 MB because of Vercel's request size limit):
+### Sharing a document
+
+To share a document — a PDF, Word file, spreadsheet, text file, or anything
+else someone should be able to download — **upload it as a file** with
+`file`, `file_url`, or `files[]`, so it arrives in the chat as a real
+document people can tap and download. **Never just paste its link in the
+message text.** A pasted link stays a bare link; an uploaded file is a
+document:
+
+```json
+{ "text": "Here's the report", "file_url": "https://example.com/report.pdf", "file_name": "report.pdf" }
+```
+
+A photo or file you have as bytes (the whole request, including the base64 text, must stay under the 50 MB request limit):
 
 ```json
 { "text": "Here's the chart", "file": { "name": "chart.png", "type": "image/png", "base64": "iVBORw0KGgo..." } }
@@ -492,8 +505,7 @@ GET    /api/avatar   -> { "avatar_url": "https://..." }
 DELETE /api/avatar   (back to your initial)
 ```
 
-JPEG, PNG, WebP or GIF, up to 5 MB (a base64 upload must stay under about
-3 MB because of Vercel's request size limit; use `file_url` for bigger ones).
+JPEG, PNG, WebP or GIF, up to 5 MB (a base64 upload must fit within the 50 MB request limit; use `file_url` for bigger ones).
 A square image looks best; it is shown cropped to a circle. `GET /api/members`
 includes everyone's `avatar_url`.
 
