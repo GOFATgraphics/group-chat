@@ -1972,6 +1972,23 @@ export default function Chat({ session }) {
     return map
   }, [messages, extraOriginals])
 
+  // ---- AI agent requests: the two memos below MUST stay above the early
+  // returns below (same #310 trap as `originals` above): the first render
+  // (me undefined, Splash) must run exactly the same hooks as the render
+  // after me loads, or React throws "Rendered more hooks than during the
+  // previous render" and unmounts the whole chat. They only read state
+  // that already exists on the first render (empty aiIds / no requests),
+  // so they are safe here. The username is string-coerced so a malformed
+  // profile value can never be rendered as a React child either.
+  const aiAgents = useMemo(
+    () =>
+      [...aiIds]
+        .map((id) => ({ id, username: String(profiles[id] ?? '…'), avatar: avatars[id] }))
+        .sort((a, b) => a.username.localeCompare(b.username)),
+    [aiIds, profiles, avatars],
+  )
+  const myApprovedAgentIds = useMemo(() => approvedAgentIds(myRequests), [myRequests])
+
   if (me === undefined) return <Splash />
   if (me === null) {
     return (
@@ -2160,14 +2177,8 @@ export default function Chat({ session }) {
   // Agent Request home screen instead of the group chat's "No messages
   // yet". The owner (Mubarak) never sees it. Dismissing it (choosing a
   // chat, or "Browse the group chat instead") hides it for the session.
-  const aiAgents = useMemo(
-    () =>
-      [...aiIds]
-        .map((id) => ({ id, username: profiles[id] ?? '…', avatar: avatars[id] }))
-        .sort((a, b) => a.username.localeCompare(b.username)),
-    [aiIds, profiles, avatars],
-  )
-  const myApprovedAgentIds = useMemo(() => approvedAgentIds(myRequests), [myRequests])
+  // NOTE: aiAgents / myApprovedAgentIds live above the early returns
+  // (see the #310 comment there) — they must not be moved back here.
   const hasAiDmHistory = dmPeers.some((id) => aiIds.has(id))
   const showAgentHome = !isOwner && !homeDismissed && myApprovedAgentIds.size === 0 && !hasAiDmHistory
 
