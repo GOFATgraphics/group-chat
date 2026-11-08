@@ -1,6 +1,6 @@
 import { Component, useEffect, useState } from 'react'
 import { supabase } from './supabase.js'
-import Login from './Login.jsx'
+import Auth from './Auth.jsx'
 import Chat from './Chat.jsx'
 import Splash from './Splash.jsx'
 
@@ -57,6 +57,6 @@ export default function App() {
       <Chat session={session} />
     </ChatErrorBoundary>
   ) : (
-    <Login />
+    <Auth />
   )
 }

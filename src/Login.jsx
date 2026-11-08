@@ -1,8 +1,13 @@
 import { useState } from 'react'
-import { supabase, usernameToEmail } from './supabase.js'
+import { supabase } from './supabase.js'
+import { resolveLoginEmail } from './auth.js'
 
-export default function Login() {
-  const [username, setUsername] = useState('')
+// Log in: email and password for an account that already exists.
+// A legacy username still works too (no "@" in it): it maps to the
+// member's internal @chat.local address, so the original members are
+// not locked out by the move to public signup.
+export default function Login({ onGoSignup }) {
+  const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -12,10 +17,11 @@ export default function Login() {
     setBusy(true)
     setError('')
     const { error } = await supabase.auth.signInWithPassword({
-      email: usernameToEmail(username),
+      email: resolveLoginEmail(identifier),
       password,
     })
-    if (error) setError(error.message === 'Invalid login credentials' ? 'Wrong username or password' : error.message)
+    if (error)
+      setError(error.message === 'Invalid login credentials' ? 'Wrong email / username or password' : error.message)
     setBusy(false)
   }
 
@@ -24,12 +30,13 @@ export default function Login() {
       <form className="login-card" onSubmit={onSubmit}>
         <img className="login-logo" src="/logo.png" alt="" />
         <h1>Group Chat</h1>
-        <p className="muted">Sign in with the username and password you were given.</p>
+        <p className="muted">Sign in with your email and password.</p>
+        <p className="muted">Original members can still sign in with their username.</p>
         <label>
-          Username
+          Email or username
           <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
+            value={identifier}
+            onChange={(e) => setIdentifier(e.target.value)}
             autoComplete="username"
             autoCapitalize="none"
             autoFocus
@@ -50,6 +57,12 @@ export default function Login() {
         <button className="primary" disabled={busy}>
           {busy ? 'Signing in…' : 'Sign in'}
         </button>
+        <p className="muted">
+          Don&apos;t have an account?{' '}
+          <button type="button" className="link" onClick={onGoSignup}>
+            Sign up
+          </button>
+        </p>
       </form>
     </div>
   )
