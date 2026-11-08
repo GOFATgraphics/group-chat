@@ -9,11 +9,14 @@ import { useEffect, useState } from 'react'
 // their own usage" rule): ONLY the admin (Mubarak, the owner) sees usage
 // numbers at all. Regular users see ONLY the plan card shell — "Free
 // plan", "Weekly usage resets on <next Monday>", "Additional tokens" +
-// "Never expires", and the "Upgrade" link — with NO figures, NO progress
-// bars, NO stats block, NO per-agent table, NO voice line. The shell is
-// rendered without any API call, so no numbers ever reach a non-owner's
-// browser. The owner sees everything as before. `isOwner` defaults to
-// false (fail closed): numbers are hidden unless ownership is known.
+// "Never expires", and the "Upgrade" link — with NO figures, NO stats
+// block, NO per-agent table, NO voice line. The shell DOES show the two
+// blue progress bars (restored 8 Nov 2026 — the bars are part of the
+// design Ahmad asked for): their widths come from GET /api/usage/bars,
+// which returns ONLY the two 0–100 ratios, so no numbers ever reach a
+// non-owner's browser. The owner sees everything as before. `isOwner`
+// defaults to false (fail closed): numbers are hidden unless ownership
+// is known.
 //
 // UI rule (Ahmad, 8 Nov 2026): numbers only, no explanatory paragraphs.
 // The card, totals, per-agent table and the voice line carry short labels
@@ -68,11 +71,16 @@ function nextMondayLabel(now = new Date()) {
 
 // The summary card + per-agent breakdown, pure (no fetching) so it can be
 // rendered in tests with fixture data. For a non-owner, `data` is null and
-// only the plan card shell renders — no figures, no bars, no stats, no
-// table, no voice line.
-export function MyUsageCard({ data, isOwner = false }) {
+// only the plan card shell renders — no figures, no stats, no table, no
+// voice line — but WITH the two progress bars, whose widths come from the
+// `bars` prop ({ weekBarPct, allTimeBarPct }, 0–100 ratios only, fetched
+// from GET /api/usage/bars). `bars` null means "not loaded yet": the bar
+// tracks still render, with a 0-width fill, so the card never shifts.
+export function MyUsageCard({ data, isOwner = false, bars = null }) {
   const [upgradeNote, setUpgradeNote] = useState(false)
   if (!isOwner) {
+    const weekBarPct = bars?.weekBarPct ?? 0
+    const allTimeBarPct = bars?.allTimeBarPct ?? 0
     return (
       <div>
         <div className="myusage-card" aria-label="My usage summary">
@@ -81,6 +89,9 @@ export function MyUsageCard({ data, isOwner = false }) {
               <span className="myusage-title">Free plan</span>
             </div>
             <p className="myusage-sub">Weekly usage resets on {nextMondayLabel()}</p>
+            <div className="myusage-bar" role="progressbar" aria-label="This week's usage" aria-valuenow={Math.round(weekBarPct)} aria-valuemin={0} aria-valuemax={100}>
+              <div style={{ width: `${weekBarPct}%` }} />
+            </div>
           </div>
 
           <div className="myusage-row">
@@ -88,6 +99,9 @@ export function MyUsageCard({ data, isOwner = false }) {
               <span className="myusage-title">Additional tokens</span>
             </div>
             <p className="myusage-sub">Never expires</p>
+            <div className="myusage-bar" role="progressbar" aria-label="This week's share of all-time tokens" aria-valuenow={Math.round(allTimeBarPct)} aria-valuemin={0} aria-valuemax={100}>
+              <div style={{ width: `${allTimeBarPct}%` }} />
+            </div>
           </div>
 
           <div className="myusage-divider" />
@@ -196,29 +210,35 @@ export function MyUsageCard({ data, isOwner = false }) {
 
 export default function MyUsage({ token, isOwner = false }) {
   const [data, setData] = useState(null)
+  const [bars, setBars] = useState(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
-    // Non-owners never see usage numbers: no fetch at all, so no figures
-    // ever reach their browser. The shell renders below.
-    if (!isOwner) return
     if (!token) {
-      setError('You are not signed in. Sign in again to see your usage.')
+      if (isOwner) setError('You are not signed in. Sign in again to see your usage.')
       return
     }
     let cancelled = false
     setError('')
-    fetch('/api/usage', { headers: { Authorization: `Bearer ${token}` } })
+    // Non-owners fetch ONLY the bar ratios (GET /api/usage/bars returns
+    // { weekBarPct, allTimeBarPct } and nothing else), so the two bars can
+    // show without any figures ever reaching their browser. If the fetch
+    // fails, the bars stay at 0 — the tracks still render.
+    const path = isOwner ? '/api/usage' : '/api/usage/bars'
+    fetch(path, { headers: { Authorization: `Bearer ${token}` } })
       .then(async (res) => {
         const json = await res.json().catch(() => ({}))
         if (!res.ok) throw new Error(json.error || 'Could not load usage.')
         return json
       })
       .then((json) => {
-        if (!cancelled) setData(json)
+        if (!cancelled) {
+          if (isOwner) setData(json)
+          else setBars(json)
+        }
       })
       .catch((err) => {
-        if (!cancelled) setError(err.message || 'Could not load usage.')
+        if (!cancelled && isOwner) setError(err.message || 'Could not load usage.')
       })
     return () => {
       cancelled = true
@@ -229,13 +249,13 @@ export default function MyUsage({ token, isOwner = false }) {
     <section className="myusage" aria-label="My usage">
       <div className="myusage-head">My usage</div>
       {!isOwner ? (
-        <MyUsageCard data={null} isOwner={false} />
+        <MyUsageCard data={null} isOwner={false} bars={bars} />
       ) : error ? (
         <p className="setting-note error">{error}</p>
       ) : !data ? (
         <p className="setting-note muted">Loading usage…</p>
       ) : (
-        <MyUsageCard data={data} isOwner />
+        <MyUsageCard data={data} isOwner bars={null} />
       )}
     </section>
   )

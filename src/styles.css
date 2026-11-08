@@ -2571,6 +2571,14 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
 .myusage-sub { font-size: 14px; line-height: 1.4; color: var(--muted); margin: 4px 0 12px; }
 .myusage-bar { height: 8px; border-radius: 999px; background: var(--fill); overflow: hidden; }
 .myusage-bar > div { height: 100%; border-radius: 999px; background: var(--blue); }
+@media (prefers-color-scheme: dark) {
+  /* Dark-mode bar track: --fill (#1c1c1e) is barely darker than the
+     #2c2c2e card, so an empty bar would be invisible. #3a3a3c reads as a
+     track while the #0b84fe fill stays clearly visible (fill-vs-track
+     ~3.1:1; track-vs-card ~1.2:1, faint by design like the light-mode
+     track at ~1.12:1 — verified in /tmp/test-usage-bars.mjs). */
+  .myusage-bar { background: #3a3a3c; }
+}
 .myusage-divider { height: 0.5px; background: var(--separator); margin: 4px 0 10px; }
 .myusage-upgrade { background: none; border: 0; padding: 6px 0; font-size: 17px; color: var(--blue); cursor: pointer; min-height: 44px; }
 .myusage-upgrade:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }

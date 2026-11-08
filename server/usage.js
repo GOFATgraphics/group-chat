@@ -239,3 +239,21 @@ export function weeklyCreditTotals(rows, userId, agentIds) {
   }
   return { byWeek, busiestWeekCredits: Math.max(0, ...Object.values(byWeek)) }
 }
+
+// --- Bar ratios (visuals only, no absolute values) -----------------------
+// The two progress bars in the "My usage" card, as 0–100 ratios —
+// nothing a bar width could be read back from as a number. Both bars
+// are shown to EVERYONE (decided 8 Nov 2026: the bars are part of the
+// design; only the figures are admin-only):
+//   weekBarPct     — this week's credits vs the user's own busiest week.
+//   allTimeBarPct  — this week's tokens as a share of the all-time total.
+// A ratio of 0 means no usage to compare (no busiest week / no tokens
+// at all), never a fake or fixed width.
+export function barRatios(totals, busiestWeekCredits) {
+  const clamp = (v) => Math.max(0, Math.min(100, Math.round(v * 100) / 100))
+  const weekBarPct =
+    busiestWeekCredits > 0 ? clamp((totals.weekCredits / busiestWeekCredits) * 100) : 0
+  const allTimeBarPct =
+    totals.totalTokens > 0 ? clamp((totals.weekTokens / totals.totalTokens) * 100) : 0
+  return { weekBarPct, allTimeBarPct }
+}

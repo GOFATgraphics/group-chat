@@ -5,6 +5,7 @@ import {
   computePairUsage,
   summarizeUsage,
   weeklyCreditTotals,
+  barRatios,
 } from '../usage.js'
 
 // Per-user token / credit usage, estimated from stored chat text
@@ -13,6 +14,13 @@ import {
 //   GET /api/usage      -> the ADMIN's own usage (owner only since
 //                          8 Nov 2026 — see below). Works for a Supabase
 //                          access token and for a gck_ personal API key.
+//   GET /api/usage/bars  -> the caller's own bar ratios ONLY
+//                          ({ weekBarPct, allTimeBarPct }, 0–100). Any
+//                          signed-in user may call it; it carries NO
+//                          tokens, credits, cost or counts, so the two
+//                          progress bars in the Settings card can be
+//                          shown to everyone while the figures stay
+//                          admin-only (decided 8 Nov 2026).
 //   GET /api/usage/all  -> every user's totals, admin (owner) only.
 //                          Totals only — never message content.
 //
@@ -52,10 +60,10 @@ async function fetchAll(sb, buildQuery) {
 
 function usageResponse(perAgent, week, busiestWeekCredits = 0) {
   const totals = summarizeUsage(perAgent)
-  // The bar is this week scaled against the user's own busiest week so
-  // far — a visual, not a % of a limit. There is no allowance and no cap.
-  const weekBarPct =
-    busiestWeekCredits > 0 ? Math.max(0, Math.min(100, (totals.weekCredits / busiestWeekCredits) * 100)) : 0
+  // The bars are this week scaled against the user's own busiest week
+  // and against the all-time total — visuals, not a % of a limit. There
+  // is no allowance and no cap.
+  const ratios = barRatios(totals, busiestWeekCredits)
   return {
     estimated: true,
     benchmark: {
@@ -74,7 +82,7 @@ function usageResponse(perAgent, week, busiestWeekCredits = 0) {
     totals: {
       ...totals,
       busiestWeekCredits,
-      weekBarPct,
+      weekBarPct: ratios.weekBarPct,
     },
   }
 }
@@ -92,6 +100,43 @@ async function checkOwner(userId) {
   if (!me?.is_owner) throw new HttpError(403, 'Only the admin can see usage')
 }
 
+// Load the caller's own usage from their approved agent pairs: the
+// per-agent breakdown, the current week bounds, and the busiest week's
+// credits. Shared by GET /api/usage (owner only) and GET /api/usage/bars
+// (any signed-in user — but bars only ever returns ratios, see below).
+async function loadMyUsage(sb, userId) {
+  const week = weekBounds()
+  const requests = check(
+    await sb
+      .from('agent_requests')
+      .select('assigned_agent_id')
+      .eq('requested_by', userId)
+      .eq('status', 'approved')
+      .not('assigned_agent_id', 'is', null),
+  )
+  const agentIds = [...new Set(requests.map((r) => r.assigned_agent_id))]
+  if (!agentIds.length) return { perAgent: [], week, busiestWeekCredits: 0 }
+  const profiles = check(await sb.from('profiles').select('id, username').in('id', agentIds))
+  const names = Object.fromEntries(profiles.map((p) => [p.id, p.username]))
+  // My DM rows, both directions (RLS already scopes to what I can read);
+  // the pair filter in computePairUsage keeps only approved agents.
+  const rows = await fetchAll(sb, () =>
+    sb
+      .from('messages')
+      .select(MESSAGE_COLUMNS)
+      .is('group_id', null)
+      .not('recipient_id', 'is', null)
+      .or(`user_id.eq.${userId},recipient_id.eq.${userId}`),
+  )
+  const perAgent = agentIds.map((agentId) => ({
+    agentId,
+    agentUsername: names[agentId] ?? 'AI agent',
+    ...computePairUsage(rows, userId, agentId, week.weekStart),
+  }))
+  const { busiestWeekCredits } = weeklyCreditTotals(rows, userId, agentIds)
+  return { perAgent, week, busiestWeekCredits }
+}
+
 // Own usage: the caller's session, so RLS limits the read to messages
 // they can see. Approved pairs come from their own agent_requests.
 // Owner only (see the header): a non-owner gets 403.
@@ -99,36 +144,21 @@ export const own = route({
   async GET(req) {
     const { sb, userId } = await auth(req)
     await checkOwner(userId)
-    const week = weekBounds()
-    const requests = check(
-      await sb
-        .from('agent_requests')
-        .select('assigned_agent_id')
-        .eq('requested_by', userId)
-        .eq('status', 'approved')
-        .not('assigned_agent_id', 'is', null),
-    )
-    const agentIds = [...new Set(requests.map((r) => r.assigned_agent_id))]
-    if (!agentIds.length) return usageResponse([], week)
-    const profiles = check(await sb.from('profiles').select('id, username').in('id', agentIds))
-    const names = Object.fromEntries(profiles.map((p) => [p.id, p.username]))
-    // My DM rows, both directions (RLS already scopes to what I can read);
-    // the pair filter in computePairUsage keeps only approved agents.
-    const rows = await fetchAll(sb, () =>
-      sb
-        .from('messages')
-        .select(MESSAGE_COLUMNS)
-        .is('group_id', null)
-        .not('recipient_id', 'is', null)
-        .or(`user_id.eq.${userId},recipient_id.eq.${userId}`),
-    )
-    const perAgent = agentIds.map((agentId) => ({
-      agentId,
-      agentUsername: names[agentId] ?? 'AI agent',
-      ...computePairUsage(rows, userId, agentId, week.weekStart),
-    }))
-    const { busiestWeekCredits } = weeklyCreditTotals(rows, userId, agentIds)
+    const { perAgent, week, busiestWeekCredits } = await loadMyUsage(sb, userId)
     return usageResponse(perAgent, week, busiestWeekCredits)
+  },
+})
+
+// Bar ratios only: the two progress-bar widths for the caller's own
+// "My usage" card, as 0–100 ratios. ANY signed-in user may call this —
+// the response carries NO tokens, NO credits, NO cost and NO counts,
+// so no figures can be read back from it; the bars are visuals only.
+// Owner and non-owner get the same shape.
+export const bars = route({
+  async GET(req) {
+    const { sb, userId } = await auth(req)
+    const { perAgent, busiestWeekCredits } = await loadMyUsage(sb, userId)
+    return barRatios(summarizeUsage(perAgent), busiestWeekCredits)
   },
 })
 

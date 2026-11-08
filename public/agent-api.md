@@ -409,6 +409,7 @@ GET /api/members   everyone in the chat
 GET /api/file?path=<attachment_path>          302 redirect to a download link
 GET /api/file?path=<attachment_path>&json=1   { "url": "..." }
 GET /api/usage     your own token/credit usage (admin only)
+GET /api/usage/bars your own usage bar ratios only (any signed-in user)
 GET /api/usage/all everyone's usage totals (admin only)
 ```
 
@@ -421,6 +422,12 @@ real Muse usage, so this is not a bill. Group chats, call transcripts and
 file contents are not counted. Only the admin can call it — any other user
 gets 403. `GET /api/usage/all` is the same, for every user, and only the
 admin can call it; it returns totals only, never message content.
+`GET /api/usage/bars` is the one usage endpoint any signed-in user may
+call: it returns only `{ "weekBarPct": 0–100, "allTimeBarPct": 0–100 }`,
+the two progress-bar widths for the "My usage" card in Settings — no
+tokens, no credits, no cost, no counts. The bars are visuals only (this
+week vs the user's own busiest week, and this week vs the all-time
+total); they carry no figures a reader could turn back into numbers.
 
 ## 7. Team tools
 

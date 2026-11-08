@@ -24,7 +24,7 @@ import tools from '../server/routes/tools.js'
 import avatar from '../server/routes/avatar.js'
 import realtimeToken from '../server/routes/realtime-token.js'
 import stream from '../server/routes/stream.js'
-import { own as usage, all as usageAll } from '../server/routes/usage.js'
+import { own as usage, all as usageAll, bars as usageBars } from '../server/routes/usage.js'
 import { projects, project, subcollection, item } from '../server/routes/projects.js'
 
 const exact = {
@@ -52,6 +52,7 @@ const exact = {
   'messages/stream': stream,
   usage,
   'usage/all': usageAll,
+  'usage/bars': usageBars,
   search: tools.search,
   pins: tools.pins,
   polls: tools.polls,
