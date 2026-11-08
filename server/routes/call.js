@@ -16,8 +16,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { gateway } from '@ai-sdk/gateway'
 import { getVercelOidcToken } from '@vercel/oidc'
-import { route, auth, body, check, HttpError } from '../lib.js'
-import { PERSONAS, defaultPersona, PRIVATE_GUARDRAIL } from '../personas.js'
+import { route, auth, body, check, HttpError, authEmailFor } from '../lib.js'
+import { PERSONAS, defaultPersona, PRIVATE_GUARDRAIL, shouldApplyGuardrail } from '../personas.js'
 import { speak, transcribeAudio } from '../speech.js'
 
 export const CALL_MODEL = process.env.CALL_MODEL || 'openai/gpt-realtime-2'
@@ -51,6 +51,23 @@ export function readTicket(ticket) {
   const claims = JSON.parse(Buffer.from(data, 'base64url').toString())
   if (!claims.exp || claims.exp < Date.now() / 1000) throw new HttpError(401, 'Call ticket expired; start the call again')
   return claims
+}
+
+// Call instructions for one AI member. Exported so tests can call the
+// real assembly. The guardrail is included only when `guarded` is true
+// — a restricted (public-signup) caller; original members get the
+// normal instructions (same scope as the text bot, personas.js).
+export function buildCallInstructions({ persona, callerUsername, minutes, history, guarded }) {
+  return (
+    `${persona}\n\n` +
+    (guarded ? `${PRIVATE_GUARDRAIL}\n\n` : '') +
+    `You are on a live voice call with ${callerUsername}, a member of your group chat. ` +
+    `Talk like a real phone call: short, warm, natural sentences, one idea at a time, and let them speak. ` +
+    `Never read out lists, markdown, links or emoji. Answer in the language ${callerUsername} speaks. ` +
+    `Start by greeting ${callerUsername} by name in one short sentence. ` +
+    `Calls last at most ${minutes} minutes; if you are told time is almost up, wrap up kindly and say goodbye.` +
+    (history ? `\n\nYour recent private messages with ${callerUsername} (oldest first):\n${history}` : '')
+  )
 }
 
 const start = route({
@@ -87,14 +104,17 @@ const start = route({
 
     const persona = process.env[`BOT_PERSONA_${ai.username.toUpperCase()}`] || PERSONAS[ai.username] || defaultPersona(ai.username)
     const minutes = Math.round(CALL_MAX_SECONDS / 60)
-    const instructions =
-      `${persona}\n\n${PRIVATE_GUARDRAIL}\n\n` +
-      `You are on a live voice call with ${me.username}, a member of your group chat. ` +
-      `Talk like a real phone call: short, warm, natural sentences, one idea at a time, and let them speak. ` +
-      `Never read out lists, markdown, links or emoji. Answer in the language ${me.username} speaks. ` +
-      `Start by greeting ${me.username} by name in one short sentence. ` +
-      `Calls last at most ${minutes} minutes; if you are told time is almost up, wrap up kindly and say goodbye.` +
-      (history ? `\n\nYour recent private messages with ${me.username} (oldest first):\n${history}` : '')
+    // Same scope as the text bot (Ahmad, 8 Nov 2026): the strict
+    // guardrail only for a restricted (public-signup) caller — never for
+    // Mubarak or another original member. A call is always 1-to-1 with
+    // an AI member, so the only question is who is calling; their email
+    // lives in auth.users, looked up with the service-role client, and a
+    // failed lookup fails closed (guarded).
+    const guarded =
+      me.username === 'mubarak'
+        ? false
+        : shouldApplyGuardrail({ isDirect: true, senderUsername: me.username, senderEmail: await authEmailFor(userId) })
+    const instructions = buildCallInstructions({ persona, callerUsername: me.username, minutes, history, guarded })
 
     return {
       ticket: makeTicket({ u: userId, p: ai.id, m: CALL_MODEL }),

@@ -84,6 +84,24 @@ export function admin() {
   return createClient(SUPABASE_URL, secret, { auth: { persistSession: false, autoRefreshToken: false } })
 }
 
+// The auth email for a member id. Email lives only in auth.users, which
+// an anon-key session cannot read, so this uses the service-role client.
+// Returns null when the lookup is unavailable (no service-role key, or
+// the user no longer exists) — callers treat null as restricted (fail
+// closed). Used only to decide whether the private-assistant guardrail
+// applies to a bot reply or a voice call; the email itself is never
+// shown to anyone or put in a prompt.
+export async function authEmailFor(userId) {
+  try {
+    const adm = admin()
+    const { data, error } = await adm.auth.admin.getUserById(userId)
+    if (error || !data?.user?.email) return null
+    return data.user.email
+  } catch {
+    return null
+  }
+}
+
 // Why a key didn't work, as precisely as is safe to say (never echoes the
 // key back beyond its public 12-character prefix).
 const KEY_LENGTH = 47
