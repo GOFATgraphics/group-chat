@@ -2,6 +2,9 @@ import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import { supabase, BUCKET, AVATAR_BUCKET, avatarUrl } from './supabase.js'
 import Splash from './Splash.jsx'
 import ChatList, { listPreview, listTime } from './ChatList.jsx'
+import AgentRequest from './AgentRequest.jsx'
+import RequestSheet from './RequestSheet.jsx'
+import { fetchMyRequests, fetchPendingRequests, approvedAgentIds } from './agentRequests.js'
 import { ProjectsList, CreateProject, ProjectDashboard, listProjects, createProject } from './Projects.jsx'
 import { Usage, USAGE_DATA } from './Usage.jsx'
 import GroupSheet from './Groups.jsx'
@@ -183,6 +186,14 @@ export default function Chat({ session }) {
   // when the user is already at the bottom.
   const [showJumpToLatest, setShowJumpToLatest] = useState(false)
   const [aiIds, setAiIds] = useState(() => new Set()) // AI members (can be called)
+  // AI agent requests (migration 0021): my requests, and — for Mubarak —
+  // the pending ones. Until 0021 is applied live the table does not
+  // exist and these fetches fail; they are caught and the feature simply
+  // stays hidden, so the app never breaks on the old schema.
+  const [myRequests, setMyRequests] = useState([])
+  const [pendingRequests, setPendingRequests] = useState([])
+  const [requestSheet, setRequestSheet] = useState(null) // one request for Mubarak to decide
+  const [homeDismissed, setHomeDismissed] = useState(false) // "Browse the group chat instead", this session
   const [callWith, setCallWith] = useState(null) // { id, username } during a live call
   const [sounds, setSounds] = useState(soundsEnabled)
   // Realtime notifications (in-app toast + optional browser Notification).
@@ -979,6 +990,14 @@ export default function Chat({ session }) {
   }
 
   function openDm(id) {
+    // AI members are DM-able only once Mubarak has approved and assigned
+    // them to this user (migration 0021). The owner is exempt. The DB
+    // trigger enforces this too — this is the friendly check, so the user
+    // sees guidance instead of a failed send.
+    if (aiIds.has(id) && !isOwner && !approvedAgentIds(myRequests).has(id)) {
+      setError('This AI agent has not been assigned to you yet — request one from the home screen and wait for Mubarak to approve it.')
+      return
+    }
     addDmPeer(id)
     openConversation({ type: 'dm', peerId: id })
   }
@@ -1049,11 +1068,26 @@ export default function Chat({ session }) {
 
   // ---- initial load + realtime ---------------------------------------------
 
+  // Reload my requests (and Mubarak's pending list) after a submit or a
+  // decision, and from the realtime subscription below. A failure is
+  // swallowed on purpose: until migration 0021 is applied live the
+  // table does not exist, and the feature simply stays hidden.
+  const reloadAgentRequests = useCallback(async () => {
+    try {
+      setMyRequests(await fetchMyRequests(myId))
+      if (isOwnerRef.current) setPendingRequests(await fetchPendingRequests())
+    } catch {
+      // Table not live yet, or a transient failure: not worth an error toast.
+    }
+  }, [myId])
+  const reloadAgentRequestsRef = useRef(() => {})
+  reloadAgentRequestsRef.current = reloadAgentRequests
+
   useEffect(() => {
     let cancelled = false
 
     async function load() {
-      const [{ data: meRow }, { data: profileRows }, { data: dmRows, error: dmErr }] = await Promise.all([
+      const [{ data: meRow }, { data: profileRows }, { data: dmRows, error: dmErr }, requestRows] = await Promise.all([
         supabase.from('profiles').select('id, username').eq('id', myId).maybeSingle(),
         supabase.from('profiles').select('id, username, avatar_path, is_ai, last_seen_at'),
         supabase
@@ -1062,6 +1096,7 @@ export default function Chat({ session }) {
           .not('recipient_id', 'is', null)
           .or(`user_id.eq.${myId},recipient_id.eq.${myId}`)
           .limit(1000),
+        fetchMyRequests(myId).catch(() => null),
       ])
       if (cancelled) return
       setMe(meRow ?? null)
@@ -1073,6 +1108,7 @@ export default function Chat({ session }) {
       setLastSeen(
         Object.fromEntries((profileRows ?? []).filter((p) => p.last_seen_at).map((p) => [p.id, Date.parse(p.last_seen_at)])),
       )
+      if (requestRows) setMyRequests(requestRows)
       // Peers the user already has a DM conversation with, from message history.
       const peers = new Set()
       for (const row of dmRows ?? []) {
@@ -1098,6 +1134,11 @@ export default function Chat({ session }) {
           pairs.set(pairKey(row.user_id, row.recipient_id), [row.user_id, row.recipient_id].sort())
         }
         setOwnerPairs([...pairs.values()])
+        try {
+          setPendingRequests(await fetchPendingRequests())
+        } catch {
+          // Table not live yet: Mubarak's request list simply stays empty.
+        }
       }
     }
     load()
@@ -1358,6 +1399,7 @@ export default function Chat({ session }) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, ({ new: row }) => {
         if (row?.id) applyProfile(row)
       })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'agent_requests' }, () => reloadAgentRequestsRef.current())
       .on('presence', { event: 'sync' }, () => {
         const ids = new Set(
           Object.values(channel.presenceState())
@@ -1937,7 +1979,10 @@ export default function Chat({ session }) {
         <div className="login-card">
           <img className="login-logo" src="/logo.png" alt="" />
           <h1>No access</h1>
-          <p className="muted">This account hasn&apos;t been added to the group chat. Ask the admin for a login.</p>
+          <p className="muted">
+            This account hasn&apos;t been added to the group chat yet. If you just signed up, try signing in again — if it
+            still doesn&apos;t work, ask Mubarak for help.
+          </p>
           <button className="primary" onClick={() => supabase.auth.signOut()}>
             Sign out
           </button>
@@ -2110,6 +2155,22 @@ export default function Chat({ session }) {
     return named ? `${profiles[m.user_id] ?? 'Someone'}: ${body}` : body
   }
   const stamp = (key) => Date.parse(lastByKey[key]?.created_at ?? 0) || 0
+  // ---- AI agent requests -------------------------------------------------
+  // A new user who has no approved agent and no AI DM history sees the
+  // Agent Request home screen instead of the group chat's "No messages
+  // yet". The owner (Mubarak) never sees it. Dismissing it (choosing a
+  // chat, or "Browse the group chat instead") hides it for the session.
+  const aiAgents = useMemo(
+    () =>
+      [...aiIds]
+        .map((id) => ({ id, username: profiles[id] ?? '…', avatar: avatars[id] }))
+        .sort((a, b) => a.username.localeCompare(b.username)),
+    [aiIds, profiles, avatars],
+  )
+  const myApprovedAgentIds = useMemo(() => approvedAgentIds(myRequests), [myRequests])
+  const hasAiDmHistory = dmPeers.some((id) => aiIds.has(id))
+  const showAgentHome = !isOwner && !homeDismissed && myApprovedAgentIds.size === 0 && !hasAiDmHistory
+
   const listItems = [
     {
       key: 'group',
@@ -2129,6 +2190,10 @@ export default function Chat({ session }) {
       })),
     ...memberIds
       .filter((id) => id !== myId)
+      // AI members appear in the list only once Mubarak assigned them to
+      // this user (or the user already has DM history with them, e.g.
+      // from before migration 0021). The owner sees every AI member.
+      .filter((id) => !aiIds.has(id) || isOwner || myApprovedAgentIds.has(id) || dmPeers.includes(id))
       .map((id) => ({
         key: `dm:${id}`,
         view: { type: 'dm', peerId: id },
@@ -2243,6 +2308,8 @@ export default function Chat({ session }) {
           onOpen={openConversation}
           onSettings={() => setShowSettings(true)}
           onNewGroup={isOwner ? () => setGroupSheet('create') : null}
+          agentRequests={isOwner ? pendingRequests : []}
+          onOpenRequest={setRequestSheet}
           Avatar={Avatar}
           profiles={profiles}
           avatars={avatars}
@@ -2310,6 +2377,22 @@ export default function Chat({ session }) {
       <PinStrip pins={pins} profiles={profiles} onJump={(id) => jumpTo(id)} preview={quotePreviewOf} />
 
       <main className={`messages ${pins.length ? 'has-pins' : ''}`} ref={listRef} onScroll={onScroll} onClick={() => setPickerFor(null)}>
+        {showAgentHome ? (
+          <AgentRequest
+            me={me}
+            myId={myId}
+            aiAgents={aiAgents}
+            requests={myRequests}
+            Avatar={Avatar}
+            onStartChat={(id) => {
+              setHomeDismissed(true)
+              openDm(id)
+            }}
+            onBrowseGroup={() => setHomeDismissed(true)}
+            onRequestSent={reloadAgentRequests}
+          />
+        ) : (
+          <>
         {hasMore && (
           <button className="load-older" onClick={loadOlder}>
             Load earlier messages
@@ -2410,6 +2493,8 @@ export default function Chat({ session }) {
             </div>
           </div>
         ))}
+          </>
+        )}
       </main>
 
       {showJumpToLatest && !loading && (
@@ -2445,7 +2530,7 @@ export default function Chat({ session }) {
         </div>
       )}
 
-      {readOnly ? (
+      {showAgentHome ? null : readOnly ? (
         <div className="owner-readonly" role="note">
           {notInGroup
             ? "Read-only · you're not in this group."
@@ -2507,6 +2592,18 @@ export default function Chat({ session }) {
       )}
 
       </div>
+
+      {requestSheet && (
+        <RequestSheet
+          request={requestSheet}
+          requester={{ username: profiles[requestSheet.requested_by], avatar: avatars[requestSheet.requested_by] }}
+          aiAgents={aiAgents}
+          Avatar={Avatar}
+          myId={myId}
+          onClose={() => setRequestSheet(null)}
+          onDecided={reloadAgentRequests}
+        />
+      )}
 
       {showMembers && (
         <div className="sheet-backdrop" onClick={() => setShowMembers(false)}>
