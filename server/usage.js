@@ -33,13 +33,33 @@
 // flat "1 credit = 1 token" would hide that; credits are priced from the
 // token rates instead.
 //
-// NO LIMIT (decided by Ahmad, 8 Nov 2026: "Just the look — show usage,
-// no limit"). There is no weekly allowance, no cap, no enforcement and
-// nobody is ever cut off. The "Free plan" progress bar is a VISUAL of
-// this week's usage scaled against the user's own busiest week so far —
-// it must never be presented as a % of a limit, and no "% used" label
-// may appear anywhere. The "Additional tokens" row is the user's
-// all-time token total; there is no additional-token balance in v1.
+// TWO-TIER MODEL (decided by Ahmad, 8 Nov 2026 — this REVERSES the
+// earlier "Just the look — show usage, no limit" decision). Each user
+// gets FREE_WEEKLY_CREDITS free credits per Mon–Sun week; any usage
+// above that draws from their additional-tokens balance (granted by the
+// admin only, never expires, starts at 0). When both the free week and
+// the additional tokens are used up, the agent tells the user they are
+// out until Monday or until more tokens are added (see
+// public/agent-api.md §6). The owner (Mubarak) is EXEMPT from the
+// cutoff — his usage is still counted and shown, but he is never out
+// of credits.
+//
+// FAIR-START RULE: two-tier excess counts only for weeks starting on or
+// after FAIR_START_WEEK (Mon 2026-11-09). Usage before that was under
+// the old display-only regime and must NOT consume additional tokens —
+// nobody starts in debt. The "Free plan" bar is now this week vs the
+// 20-credit limit; the "Additional tokens" bar is additional tokens
+// used vs granted. Both bars are still shown to everyone (ratios only);
+// the FIGURES stay admin-only.
+//
+// Counting and pricing are unchanged: credits at 1 credit = $0.01,
+// Sonnet 5.5 $2 in / $10 out per 1M, character estimate from chat text,
+// voice notes included, approved agent_requests DMs only.
+
+export const FREE_WEEKLY_CREDITS = 20
+// First Mon–Sun week the two-tier excess counts for (ISO week-start
+// date, 'YYYY-MM-DD'). Weeks starting before this contribute 0 excess.
+export const FAIR_START_WEEK = '2026-11-09'
 //
 // Voice notes (approved: included): audio minutes and text tokens are
 // DIFFERENT meters. A voice note costs transcription (per minute) PLUS
@@ -221,9 +241,9 @@ export function summarizeUsage(perAgent) {
 }
 
 // Credits per Mon–Sun week for one user across all their approved agents,
-// plus the busiest week's credits. The "Free plan" bar is scaled against
-// the busiest week — the user's own history, not a limit. There is no
-// allowance and no cap (decided 8 Nov 2026: display-only, no limit).
+// plus the busiest week's credits. The per-week map is what
+// twoTierBalances() uses for the fair-start excess sum; the "Free plan"
+// bar is now scaled against the 20-credit limit, not the busiest week.
 export function weeklyCreditTotals(rows, userId, agentIds) {
   const byWeek = {}
   for (const m of rows) {
@@ -245,15 +265,57 @@ export function weeklyCreditTotals(rows, userId, agentIds) {
 // nothing a bar width could be read back from as a number. Both bars
 // are shown to EVERYONE (decided 8 Nov 2026: the bars are part of the
 // design; only the figures are admin-only):
-//   weekBarPct     — this week's credits vs the user's own busiest week.
-//   allTimeBarPct  — this week's tokens as a share of the all-time total.
-// A ratio of 0 means no usage to compare (no busiest week / no tokens
-// at all), never a fake or fixed width.
-export function barRatios(totals, busiestWeekCredits) {
+//   weekBarPct        — this week's credits vs the 20-credit free limit.
+//   additionalBarPct  — additional tokens used vs granted (0 when
+//                       nothing has been granted — there is no balance
+//                       to show a share of).
+// A ratio of 0 means no usage to compare (no credits this week / no
+// grants), never a fake or fixed width.
+export function barRatios(twoTier) {
   const clamp = (v) => Math.max(0, Math.min(100, Math.round(v * 100) / 100))
-  const weekBarPct =
-    busiestWeekCredits > 0 ? clamp((totals.weekCredits / busiestWeekCredits) * 100) : 0
-  const allTimeBarPct =
-    totals.totalTokens > 0 ? clamp((totals.weekTokens / totals.totalTokens) * 100) : 0
-  return { weekBarPct, allTimeBarPct }
+  const weekBarPct = clamp(((twoTier.weekCredits ?? 0) / FREE_WEEKLY_CREDITS) * 100)
+  const additionalBarPct =
+    (twoTier.additionalGranted ?? 0) > 0
+      ? clamp(((twoTier.additionalUsed ?? 0) / twoTier.additionalGranted) * 100)
+      : 0
+  return { weekBarPct, additionalBarPct }
+}
+
+// --- Two-tier balances ----------------------------------------------------
+// The single definition of the two-tier model, used by every endpoint
+// and the UI. Inputs:
+//   byWeek   — { 'YYYY-MM-DD' (Mon week start): credits } for the user,
+//              from weeklyCreditTotals().
+//   weekCredits — this week's credits (same number as byWeek for the
+//              current week, passed in so callers need no date math).
+//   granted  — the user's additional-tokens balance granted so far
+//              (sum of their credit_grants rows; 0 when none / when the
+//              table does not exist yet).
+//   isOwner  — true for the admin (Mubarak): counted and shown, but
+//              never out of credits.
+// Returns the week's free split, the additional balance, and whether
+// the user is out. additionalUsed is the excess ONLY from weeks
+// starting on/after FAIR_START_WEEK — a heavy week before that date
+// contributes 0 (fair-start rule: nobody starts in debt).
+export function twoTierBalances({ byWeek = {}, weekCredits = 0, granted = 0, isOwner = false } = {}) {
+  const weekFreeUsed = Math.min(weekCredits, FREE_WEEKLY_CREDITS)
+  const weekFreeRemaining = Math.max(0, FREE_WEEKLY_CREDITS - weekCredits)
+  let additionalUsed = 0
+  for (const [weekStart, credits] of Object.entries(byWeek)) {
+    if (weekStart < FAIR_START_WEEK) continue
+    additionalUsed += Math.max(0, credits - FREE_WEEKLY_CREDITS)
+  }
+  const additionalGranted = Math.max(0, granted)
+  const additionalRemaining = Math.max(0, additionalGranted - additionalUsed)
+  const outOfCredits = !isOwner && weekFreeRemaining <= 0 && additionalRemaining <= 0
+  return {
+    freeWeeklyCredits: FREE_WEEKLY_CREDITS,
+    weekCredits,
+    weekFreeUsed,
+    weekFreeRemaining,
+    additionalGranted,
+    additionalUsed,
+    additionalRemaining,
+    outOfCredits,
+  }
 }

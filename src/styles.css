@@ -2554,9 +2554,11 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
    "Additional tokens" row, a divider and a blue Upgrade link. It uses
    the app's own tokens, so in dark mode the card is #2c2c2e with the
    #0b84fe bar, exactly like the screenshot; in light mode it adapts.
-   There is no limit (decided 8 Nov 2026: "Just the look — show usage,
-   no limit"), so the bars compare this week with the user's own busiest
-   week and with their all-time total — never a % of a cap.
+   TWO-TIER MODEL (decided 8 Nov 2026 — reverses the earlier "no limit"
+   decision): each user gets 20 free credits per Mon–Sun week; excess
+   draws from their additional-tokens balance (admin-granted, never
+   expires). The Free plan bar is this week vs the 20-credit limit; the
+   Additional tokens bar is additional tokens used vs granted.
    The breakdown table below the card reuses .usage-table.
    UI rule (Ahmad, 8 Nov 2026): numbers only, no explanatory paragraphs
    in the usage section — short labels only (see MyUsage.jsx). */
@@ -2596,6 +2598,15 @@ mark { background: color-mix(in srgb, #ffd60a 55%, transparent); color: inherit;
 .myusage-breakdown td { padding: 12px 0; }
 .myusage-breakdown td:first-child { font-weight: 500; }
 .usage-table-wrap { overflow-x: auto; }
+/* Grant form in the admin "Everyone" section (Usage.jsx): username +
+   credits + Grant button, inline, on the app's own tokens. */
+.usage-grant { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; }
+.usage-grant input { font: inherit; font-size: 15px; padding: 8px 10px; border: 0.5px solid var(--separator); border-radius: 10px; background: var(--bg); color: var(--text); min-height: 44px; }
+.usage-grant input:first-child { width: 160px; }
+.usage-grant input[type="number"] { width: 110px; }
+.usage-grant button { font: inherit; font-size: 15px; font-weight: 600; padding: 8px 14px; border: 0; border-radius: 10px; background: var(--blue); color: #ffffff; cursor: pointer; min-height: 44px; }
+.usage-grant button:disabled { opacity: 0.5; cursor: default; }
+.usage-grant .usage-note { margin: 0; }
 /* Same contrast guard for Projects: empty notes were #8e8e93 on white
    (3.26:1, fails AA). Scoped to project pages only, chat untouched. */
 .project-page .project-empty { color: #555555; }

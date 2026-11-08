@@ -33,11 +33,16 @@ import { useEffect, useState } from 'react'
 // (15%, 2B tokens, 15 Nov were the other app's data). The reset date is
 // the next Monday, computed by the server.
 //
-// NO LIMIT (decided 8 Nov 2026: "Just the look — show usage, no limit"):
-// there is no weekly allowance and no "% used" anywhere. The Free plan
-// bar is this week scaled against the user's own busiest week so far;
-// the Additional tokens bar is this week's share of the all-time total.
-// Neither bar implies a cap.
+// TWO-TIER MODEL (decided 8 Nov 2026 — this REVERSES the earlier
+// "Just the look — show usage, no limit" decision): each user gets 20
+// free credits per Mon–Sun week; any usage above that draws from their
+// additional-tokens balance (granted by the admin only, never expires,
+// starts at 0). When both are used up, the agent tells the user they
+// are out until Monday or until more tokens are added. The owner is
+// exempt from the cutoff. The Free plan bar is this week vs the
+// 20-credit limit; the Additional tokens bar is additional tokens used
+// vs granted (0 when nothing granted). The figures stay admin-only;
+// the bars are ratios only, shown to everyone.
 
 function fmt(n) {
   return Number(n ?? 0).toLocaleString('en-US')
@@ -73,14 +78,14 @@ function nextMondayLabel(now = new Date()) {
 // rendered in tests with fixture data. For a non-owner, `data` is null and
 // only the plan card shell renders — no figures, no stats, no table, no
 // voice line — but WITH the two progress bars, whose widths come from the
-// `bars` prop ({ weekBarPct, allTimeBarPct }, 0–100 ratios only, fetched
+// `bars` prop ({ weekBarPct, additionalBarPct }, 0–100 ratios only, fetched
 // from GET /api/usage/bars). `bars` null means "not loaded yet": the bar
 // tracks still render, with a 0-width fill, so the card never shifts.
 export function MyUsageCard({ data, isOwner = false, bars = null }) {
   const [upgradeNote, setUpgradeNote] = useState(false)
   if (!isOwner) {
     const weekBarPct = bars?.weekBarPct ?? 0
-    const allTimeBarPct = bars?.allTimeBarPct ?? 0
+    const additionalBarPct = bars?.additionalBarPct ?? 0
     return (
       <div>
         <div className="myusage-card" aria-label="My usage summary">
@@ -99,8 +104,8 @@ export function MyUsageCard({ data, isOwner = false, bars = null }) {
               <span className="myusage-title">Additional tokens</span>
             </div>
             <p className="myusage-sub">Never expires</p>
-            <div className="myusage-bar" role="progressbar" aria-label="This week's share of all-time tokens" aria-valuenow={Math.round(allTimeBarPct)} aria-valuemin={0} aria-valuemax={100}>
-              <div style={{ width: `${allTimeBarPct}%` }} />
+            <div className="myusage-bar" role="progressbar" aria-label="Additional tokens used" aria-valuenow={Math.round(additionalBarPct)} aria-valuemin={0} aria-valuemax={100}>
+              <div style={{ width: `${additionalBarPct}%` }} />
             </div>
           </div>
 
@@ -119,17 +124,17 @@ export function MyUsageCard({ data, isOwner = false, bars = null }) {
   }
   const totals = data.totals
   const week = data.week
+  const freeWeeklyCredits = data.freeWeeklyCredits ?? 20
   const weekBarPct = totals.weekBarPct ?? 0
-  // Additional tokens bar: this week's share of the all-time total.
-  const allTimeBarPct =
-    totals.totalTokens > 0 ? Math.max(0, Math.min(100, (totals.weekTokens / totals.totalTokens) * 100)) : 0
+  // Additional tokens bar: additional tokens used vs granted.
+  const additionalBarPct = totals.additionalBarPct ?? 0
   return (
     <div>
       <div className="myusage-card" aria-label="My usage summary">
         <div className="myusage-row">
           <div className="myusage-row-top">
             <span className="myusage-title">Free plan</span>
-            <span className="myusage-pct">{fmtCredits(totals.weekCredits)} credits this week</span>
+            <span className="myusage-pct">{fmtCredits(totals.weekCredits)} / {freeWeeklyCredits} credits this week</span>
           </div>
           <p className="myusage-sub">Weekly usage resets on {week.resetLabel}</p>
           <div className="myusage-bar" role="progressbar" aria-label="This week's usage" aria-valuenow={Math.round(weekBarPct)} aria-valuemin={0} aria-valuemax={100}>
@@ -140,11 +145,11 @@ export function MyUsageCard({ data, isOwner = false, bars = null }) {
         <div className="myusage-row">
           <div className="myusage-row-top">
             <span className="myusage-title">Additional tokens</span>
-            <span className="myusage-pct">{fmt(totals.totalTokens)} tokens</span>
+            <span className="myusage-pct">{fmtCredits(data.additionalRemaining ?? 0)} credits left</span>
           </div>
           <p className="myusage-sub">Never expires</p>
-          <div className="myusage-bar" role="progressbar" aria-label="This week's share of all-time tokens" aria-valuenow={Math.round(allTimeBarPct)} aria-valuemin={0} aria-valuemax={100}>
-            <div style={{ width: `${allTimeBarPct}%` }} />
+          <div className="myusage-bar" role="progressbar" aria-label="Additional tokens used" aria-valuenow={Math.round(additionalBarPct)} aria-valuemin={0} aria-valuemax={100}>
+            <div style={{ width: `${additionalBarPct}%` }} />
           </div>
         </div>
 
@@ -221,7 +226,7 @@ export default function MyUsage({ token, isOwner = false }) {
     let cancelled = false
     setError('')
     // Non-owners fetch ONLY the bar ratios (GET /api/usage/bars returns
-    // { weekBarPct, allTimeBarPct } and nothing else), so the two bars can
+    // { weekBarPct, additionalBarPct } and nothing else), so the two bars can
     // show without any figures ever reaching their browser. If the fetch
     // fails, the bars stay at 0 — the tracks still render.
     const path = isOwner ? '/api/usage' : '/api/usage/bars'

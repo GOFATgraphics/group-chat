@@ -1,3 +1,5 @@
+import { useState } from 'react'
+
 // Usage screen, polished from GitHub dashboard patterns:
 // - next-shadcn-dashboard-starter (Kiranism, 7,207 stars): KPI cards,
 //   hairline borders, separate cards, one job per screen.
@@ -115,9 +117,75 @@ function fmtMoney(n) {
   return `$${v < 0.01 ? v.toFixed(4) : v.toFixed(2)}`
 }
 
+function fmtCredits(c) {
+  const v = Number(c ?? 0)
+  return v < 10 ? v.toFixed(2) : v.toFixed(0)
+}
+
+// Grant additional tokens to a user (admin only). Compact form: username
+// + credits + Grant. Calls POST /api/usage/grant with the admin's token
+// and refreshes the table on success. No explanatory text — labels only.
+function GrantForm({ token, onRefresh }) {
+  const [username, setUsername] = useState('')
+  const [credits, setCredits] = useState('')
+  const [status, setStatus] = useState('')
+  const [busy, setBusy] = useState(false)
+  if (!token) return null
+  const submit = async (e) => {
+    e.preventDefault()
+    if (busy) return
+    setBusy(true)
+    setStatus('')
+    try {
+      const res = await fetch('/api/usage/grant', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, credits: Number(credits) }),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(json.error || 'Could not grant credits.')
+      setStatus(`Granted ${fmtCredits(json.additionalGranted)} credits to ${json.username}.`)
+      setUsername('')
+      setCredits('')
+      if (onRefresh) onRefresh()
+    } catch (err) {
+      setStatus(err.message || 'Could not grant credits.')
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <form className="usage-grant" onSubmit={submit} aria-label="Grant additional tokens">
+      <input
+        type="text"
+        value={username}
+        onChange={(e) => setUsername(e.target.value)}
+        placeholder="Username"
+        aria-label="Username"
+        autoComplete="off"
+      />
+      <input
+        type="number"
+        value={credits}
+        onChange={(e) => setCredits(e.target.value)}
+        placeholder="Credits"
+        aria-label="Credits"
+        min="0"
+        step="any"
+      />
+      <button type="submit" disabled={busy || !username.trim() || !credits}>
+        {busy ? 'Granting…' : 'Grant'}
+      </button>
+      {status ? <span className="usage-note">{status}</span> : null}
+    </form>
+  )
+}
+
 // Live per-user totals for the admin (Mubarak). `admin` is null for
 // everyone else — the section never renders for them. Totals only, no
-// message content ever reaches this screen.
+// message content ever reaches this screen. The table also shows each
+// user's additional-tokens balance (granted / left) and whether they are
+// out of credits; the grant form above it adds to that balance.
 function AdminUsage({ admin }) {
   if (!admin) return null
   const { loading, error, data } = admin
@@ -137,6 +205,7 @@ function AdminUsage({ admin }) {
         <p className="usage-note">No usage yet — nobody has chatted with an assigned agent.</p>
       ) : (
         <>
+          <GrantForm token={admin.token} onRefresh={admin.onRefresh} />
           <div className="usage-table-wrap">
             <table className="usage-table">
               <thead>
@@ -149,6 +218,9 @@ function AdminUsage({ admin }) {
                   <th scope="col" className="num">Cost</th>
                   <th scope="col" className="num">Voice</th>
                   <th scope="col" className="num">Msgs</th>
+                  <th scope="col" className="num">Granted</th>
+                  <th scope="col" className="num">Left</th>
+                  <th scope="col" className="num">Out</th>
                 </tr>
               </thead>
               <tbody>
@@ -162,6 +234,9 @@ function AdminUsage({ admin }) {
                     <td className="num">{fmtMoney(u.totals.costUsd)}</td>
                     <td className="num">{u.totals.voiceMinutes < 1 ? `${Math.round(u.totals.voiceMinutes * 60)}s` : `${u.totals.voiceMinutes.toFixed(1)}m`}</td>
                     <td className="num">{fmt(u.totals.messages)}</td>
+                    <td className="num">{fmtCredits(u.additionalGranted ?? 0)}</td>
+                    <td className="num">{fmtCredits(u.additionalRemaining ?? 0)}</td>
+                    <td className="num cost">{u.outOfCredits ? 'Out' : '—'}</td>
                   </tr>
                 ))}
               </tbody>

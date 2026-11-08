@@ -156,23 +156,29 @@ export default function Chat({ session }) {
   // renders the admin section only when `admin` is passed).
   const [showUsage, setShowUsage] = useState(false)
   const [adminUsage, setAdminUsage] = useState({ loading: false, error: '', data: null })
-  const openUsage = () => {
-    setShowUsage(true)
+  // Loads live per-user totals from GET /api/usage/all (owner only).
+  // Also passed to the Usage page as `admin.token` (for the grant form)
+  // and `admin.onRefresh` (re-load the table after a grant).
+  const loadAdminUsage = () => {
     if (!isOwner) return
     const token = session?.access_token
     if (!token) {
       setAdminUsage({ loading: false, error: 'You are not signed in. Sign in again to see everyone’s usage.', data: null })
       return
     }
-    setAdminUsage({ loading: true, error: '', data: null })
+    setAdminUsage({ loading: true, error: '', data: null, token, onRefresh: loadAdminUsage })
     fetch('/api/usage/all', { headers: { Authorization: `Bearer ${token}` } })
       .then(async (res) => {
         const json = await res.json().catch(() => ({}))
         if (!res.ok) throw new Error(json.error || 'Could not load usage.')
         return json
       })
-      .then((json) => setAdminUsage({ loading: false, error: '', data: json }))
-      .catch((err) => setAdminUsage({ loading: false, error: err.message || 'Could not load usage.', data: null }))
+      .then((json) => setAdminUsage({ loading: false, error: '', data: json, token, onRefresh: loadAdminUsage }))
+      .catch((err) => setAdminUsage({ loading: false, error: err.message || 'Could not load usage.', data: null, token, onRefresh: loadAdminUsage }))
+  }
+  const openUsage = () => {
+    setShowUsage(true)
+    loadAdminUsage()
   }
   const createProjectAndOpen = async (name) => {
     const token = session?.access_token

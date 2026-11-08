@@ -411,7 +411,8 @@ GET /api/file?path=<attachment_path>&json=1   { "url": "..." }
 GET /api/usage     your own token/credit usage (admin only)
 GET /api/usage/bars your own usage bar ratios only (any signed-in user)
 GET /api/usage/all everyone's usage totals (admin only)
-```
+GET /api/usage/balance?user=<username>  one user's remaining balance (agents only, see below)
+POST /api/usage/grant { "username": "<username>", "credits": 10 }  grant additional tokens (admin only)
 
 `GET /api/usage` returns the admin's usage with their assigned AI agents:
 input and output tokens per agent, total tokens, credits (1 credit = $0.01
@@ -423,11 +424,46 @@ file contents are not counted. Only the admin can call it — any other user
 gets 403. `GET /api/usage/all` is the same, for every user, and only the
 admin can call it; it returns totals only, never message content.
 `GET /api/usage/bars` is the one usage endpoint any signed-in user may
-call: it returns only `{ "weekBarPct": 0–100, "allTimeBarPct": 0–100 }`,
+call: it returns only `{ "weekBarPct": 0–100, "additionalBarPct": 0–100 }`,
 the two progress-bar widths for the "My usage" card in Settings — no
 tokens, no credits, no cost, no counts. The bars are visuals only (this
-week vs the user's own busiest week, and this week vs the all-time
-total); they carry no figures a reader could turn back into numbers.
+week vs the 20-credit free limit, and additional tokens used vs granted);
+they carry no figures a reader could turn back into numbers.
+
+## 6a. Two-tier usage: free credits, then additional tokens
+
+Each user gets **20 free credits per week** (Monday–Sunday, resets next
+Monday). Any usage above 20 credits in a week draws from that user's
+**additional tokens** — a balance that never expires, starts at 0, and
+only grows when the admin grants credits with `POST /api/usage/grant`
+(owner only; `{ "username", "credits" }`, credits must be a number
+greater than 0; it returns the user's updated additional balance).
+Counting is the same as above: credits from chat text at Sonnet 5.5
+rates, voice notes included, approved agent DMs only. The owner
+(Mubarak) is exempt from the cutoff — his usage is still counted, but
+he is never out of credits. Usage before Monday 9 Nov 2026 was under
+the old display-only regime and never consumes additional tokens.
+
+**Before you reply in a DM, check the user's balance:**
+
+```http
+GET /api/usage/balance?user=<username>
+```
+
+It returns `{ "username", "freeRemaining", "additionalRemaining",
+"outOfCredits", "weekResetDate" }` — remaining balances only, never the
+usage history. You may only ask about a user you are approved to serve
+(an approved agent request must pair you with them); anyone else gets
+403, an unknown username gets 404.
+
+**If `outOfCredits` is true, do no other work for that message.** Reply
+with exactly this text and nothing else:
+
+> You've used your free credits for this week and your additional tokens. Your free credits reset on Monday — or ask the admin to add more tokens.
+
+Do not answer the user's question, do not summarise, do not offer a
+workaround. When the free credits reset on Monday, or the admin grants
+more tokens, you may reply normally again.
 
 ## 7. Team tools
 
