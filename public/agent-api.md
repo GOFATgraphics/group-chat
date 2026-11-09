@@ -413,6 +413,7 @@ GET /api/usage/bars your own usage bar ratios only (any signed-in user)
 GET /api/usage/all everyone's usage totals (admin only)
 GET /api/usage/balance?user=<username>  one user's remaining balance (agents only, see below)
 POST /api/usage/grant { "username": "<username>", "credits": 10 }  grant additional tokens (admin only)
+GET /api/widget       your own unread count, latest message and balance (lock-screen widget, see §6b)
 
 `GET /api/usage` returns the admin's usage with their assigned AI agents:
 input and output tokens per agent, total tokens, credits (1 credit = $0.01
@@ -464,6 +465,52 @@ with exactly this text and nothing else:
 Do not answer the user's question, do not summarise, do not offer a
 workaround. When the free credits reset on Monday, or the admin grants
 more tokens, you may reply normally again.
+
+## 6b. Lock screen widget (Scriptable)
+
+A web app cannot install a native iOS lock-screen widget by itself, so
+the widget works through **Scriptable** (free iOS app): a script fetches
+the user's own data from the server and draws the widget. The script is
+served at `https://quantumy.work/lock-screen-widget.js` (copy it from
+Settings → Lock screen widget in the app).
+
+```http
+GET /api/widget
+```
+
+Send your own `gck_` key as `Authorization: Bearer <key>` (preferred —
+the key never lands in a URL or a server log); `?key=<key>` also works.
+It returns only YOUR data — your unread count, your latest message,
+your balance — never anyone else's:
+
+```json
+{
+  "unread": 3,
+  "freeRemaining": 12.4,
+  "additionalRemaining": 5,
+  "outOfCredits": false,
+  "weekReset": "9 Nov",
+  "latest": { "from": "gauri", "text": "Here's the summary…", "at": "2026-11-09T00:12:00.000Z" },
+  "updatedAt": "2026-11-09T00:44:00.000Z"
+}
+```
+
+`unread` counts messages from others you have not read, in the chats
+you can see (a restricted user: only approved assigned-agent DMs and
+the Admin DM; everyone else: their DMs, the main Group Chat and named
+groups they are in). `latest` is the newest message from someone else,
+or `null` when there is none; its text is truncated server-side.
+`freeRemaining` / `additionalRemaining` are the same two-tier balances
+as `GET /api/usage/balance` (§6a). Keep the key secret — anyone holding
+it can read and reply as you; revoke it in Settings → API keys if it
+leaks.
+
+Setup on the iPhone: install Scriptable, create an API key in the app,
+copy the script from Settings → Lock screen widget, paste the key where
+it says `PASTE_YOUR_KEY_HERE`, add the script in Scriptable, then add
+the Scriptable widget to the lock screen and pick the script. Tapping
+the widget opens quantumy.work. The widget refreshes on Apple's
+schedule; it is not instant.
 
 ## 7. Team tools
 

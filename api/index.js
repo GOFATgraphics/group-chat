@@ -25,6 +25,7 @@ import avatar from '../server/routes/avatar.js'
 import realtimeToken from '../server/routes/realtime-token.js'
 import stream from '../server/routes/stream.js'
 import { own as usage, all as usageAll, bars as usageBars, balance as usageBalance, grant as usageGrant } from '../server/routes/usage.js'
+import { widget } from '../server/routes/widget.js'
 import { projects, project, subcollection, item } from '../server/routes/projects.js'
 
 const exact = {
@@ -55,6 +56,7 @@ const exact = {
   'usage/bars': usageBars,
   'usage/balance': usageBalance,
   'usage/grant': usageGrant,
+  widget,
   search: tools.search,
   pins: tools.pins,
   polls: tools.polls,

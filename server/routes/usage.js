@@ -176,7 +176,7 @@ async function isOwnerId(adm, userId) {
 // /api/usage and /api/usage/bars (RLS scopes the read); the
 // service-role client for /api/usage/balance (the caller is an agent
 // asking about its user, and only aggregates leave the server).
-async function loadUsageForUser(sb, userId) {
+export async function loadUsageForUser(sb, userId) {
   const week = weekBounds()
   const requests = check(
     await sb
@@ -212,7 +212,7 @@ async function loadUsageForUser(sb, userId) {
 }
 
 // The two-tier balances for a user whose usage is already loaded.
-async function balancesFor(adm, userId, loaded, isOwner = false) {
+export async function balancesFor(adm, userId, loaded, isOwner = false) {
   const granted = await loadGrantsTotal(adm, userId)
   return twoTierBalances({
     byWeek: loaded.weekly.byWeek,

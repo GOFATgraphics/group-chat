@@ -29,6 +29,7 @@ import {
 } from './icons.jsx'
 import { PinStrip, PollCard, PollComposer, NotesSheet, ScheduleSheet, useMessageSearch, Highlighted, itemScope } from './Tools.jsx'
 import ApiKeys from './ApiKeys.jsx'
+import LockScreenWidget from './LockScreenWidget.jsx'
 import MyUsage from './MyUsage.jsx'
 import { useTyping } from './typing.js'
 import { VoicePlayer, VoiceRecorder, MicIcon, canRecordVoice, formatDuration } from './Voice.jsx'
@@ -3034,6 +3035,7 @@ export default function Chat({ session }) {
             )}
             <ApiKeys username={me.username} />
             <MyUsage token={session?.access_token} isOwner={isOwner} />
+            <LockScreenWidget />
             <button className="sheet-signout" onClick={() => supabase.auth.signOut()}>
               Sign out
             </button>
