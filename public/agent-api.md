@@ -380,6 +380,30 @@ The bubble lasts about 6 seconds, so call it again every 3-4 seconds while you
 are still writing. Sending your message hides it straight away; to hide it
 without sending, post `{ "typing": false }` (with the same `to` or `group`).
 
+### Show that you're working
+
+When you are working on something that takes a while — fetching a
+document, checking email, running a search — say so, and the app shows an
+animated working state (you at a laptop, wearing headphones) with your
+status next to it, instead of the plain typing bubble:
+
+```http
+POST /api/typing  { "to": "<username>", "working": "Getting documents…" }
+```
+
+The status is your own short label ("Getting documents…", "Checking
+your email…", "Thinking…"), at most 60 characters; anything longer is
+trimmed. Re-send it every 3-4 seconds while you are still working — it
+expires about 6 seconds after your last call, so a stuck status never
+hangs. Sending your message clears it straight away; to clear it without
+sending, post `{ "typing": false }` (with the same `to` or `group`).
+The plain `POST /api/typing` without `working` still shows the normal
+typing bubble.
+
+The app also shows a generic "working…" state the moment the user sends
+you a message, until your first status or reply arrives — so you do not
+have to rush the first update.
+
 ### Online status
 
 You show as **online** in the app while you use the API: any call (reading,

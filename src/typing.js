@@ -1,21 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from './supabase.js'
+import { SHOW_FOR_MS, applyPresenceEvent, sweepPresence } from './workingStatus.js'
 
 // "Someone is typing" over a Supabase Realtime broadcast channel. Nothing is
 // stored. Each event says who is typing and where: to: null for the group
 // chat, or the recipient's id for a private message. A bubble shows for a few
 // seconds after the last event, and disappears as soon as that person's
 // message arrives. AI members send the same event through POST /api/typing.
+//
+// Working status is typing with a label: an agent posts
+// POST /api/typing { "working": "Getting documents…" } and the same event
+// carries `working`, so the app shows the animated working state with the
+// label instead of the plain typing bubble. It shares typing's heartbeat
+// and expiry — a stuck status disappears on its own.
 
 export const TYPING_CHANNEL = 'typing'
-const SHOW_FOR_MS = 6000
 const RESEND_EVERY_MS = 2500
 
 // target: null in the main group chat, "g:<id>" in a named group, the peer's id
 // in a private chat, undefined where typing should be neither sent nor shown
 // (the owner's read-only view).
 export function useTyping(myId, target) {
-  const [typing, setTyping] = useState({}) // userId -> { to, until }
+  const [typing, setTyping] = useState({}) // userId -> { to, until, working }
   const channelRef = useRef(null)
   const lastSent = useRef(0)
 
@@ -26,22 +32,13 @@ export function useTyping(myId, target) {
       .on('broadcast', { event: 'typing' }, ({ payload }) => {
         const id = payload?.user_id
         if (!id || id === myId) return
-        setTyping((prev) => {
-          const next = { ...prev }
-          if (payload.typing === false) delete next[id]
-          else next[id] = { to: payload.to ?? null, until: Date.now() + SHOW_FOR_MS }
-          return next
-        })
+        setTyping((prev) => applyPresenceEvent(prev, payload))
       })
       .subscribe()
     channelRef.current = channel
 
     const sweep = setInterval(() => {
-      setTyping((prev) => {
-        const now = Date.now()
-        const live = Object.entries(prev).filter(([, v]) => v.until > now)
-        return live.length === Object.keys(prev).length ? prev : Object.fromEntries(live)
-      })
+      setTyping((prev) => sweepPresence(prev))
     }, 1000)
 
     return () => {
@@ -81,14 +78,23 @@ export function useTyping(myId, target) {
     })
   }, [])
 
-  const typers = Object.entries(typing)
-    .filter(([id, v]) =>
-      target === null || String(target).startsWith('g:')
-        ? v.to === target
-        : target !== undefined && id === target && v.to === myId,
-    )
-    .map(([id]) => id)
+  // In this conversation: the group chat (to === null), a named group
+  // (to === "g:<id>"), or a DM where the peer is typing to me.
+  const inView = ([id, v]) =>
+    target === null || String(target).startsWith('g:')
+      ? v.to === target
+      : target !== undefined && id === target && v.to === myId
 
-  // Everyone typing anywhere you can see: { userId: { to, until } }, for the chat list.
-  return { typers, notify, clear, all: typing }
+  const typers = Object.entries(typing).filter(inView).map(([id]) => id)
+
+  // Whoever is working in this conversation: [{ id, label }], and the
+  // same as a lookup { userId: label }. A working entry is also a typer —
+  // the bubble and the header show the label instead of the dots.
+  const workers = Object.entries(typing)
+    .filter((entry) => inView(entry) && entry[1].working)
+    .map(([id, v]) => ({ id, label: v.working }))
+  const workingById = Object.fromEntries(workers.map((w) => [w.id, w.label]))
+
+  // Everyone typing anywhere you can see: { userId: { to, until, working } }, for the chat list.
+  return { typers, workers, workingById, notify, clear, all: typing }
 }

@@ -328,12 +328,21 @@ export async function markRead(sb, userId, rows) {
 // via the same Realtime broadcast channel the app listens on (src/typing.js).
 // to: null for the main group chat, the recipient's user id for a private
 // chat, or "g:<group id>" for a named group.
-export async function broadcastTyping(token, userId, to, typing = true) {
+export async function broadcastTyping(token, userId, to, typing = true, working = null) {
+  // `working` is the agent's short status label ("Getting documents…"):
+  // it rides the same broadcast as typing, so it shares typing's ~6 s
+  // visibility and heartbeat — a stuck status expires on its own. The
+  // field is sent only when a non-empty label is given with typing on;
+  // clearing typing clears working too, never the two together. Plain
+  // typing is unchanged. The label is already sanitised by the /api/typing
+  // route; a caller passing one directly must keep it short.
+  const payload = { user_id: userId, to: to ?? null, typing }
+  if (typing !== false && typeof working === 'string' && working.trim()) payload.working = working.trim().slice(0, 60)
   const res = await fetch(`${SUPABASE_URL}/realtime/v1/api/broadcast`, {
     method: 'POST',
     headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      messages: [{ topic: 'typing', event: 'typing', payload: { user_id: userId, to: to ?? null, typing } }],
+      messages: [{ topic: 'typing', event: 'typing', payload }],
     }),
   })
   if (!res.ok) throw new HttpError(502, `Typing broadcast failed (HTTP ${res.status})`)

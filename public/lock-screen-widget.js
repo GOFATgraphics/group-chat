@@ -25,10 +25,18 @@ const APP_URL = 'https://quantumy.work'
 
 async function loadData() {
   try {
-    if (!WIDGET_KEY || WIDGET_KEY === 'PASTE_YOUR_KEY_HERE') return { error: 'no-key' }
+    // Trim the key: a copy-paste from chat often picks up a stray space
+    // or newline, and a padded key hashes to the wrong value (the
+    // server trims too, but the script should not send a padded key).
+    const key = String(WIDGET_KEY || '').trim()
+    if (!key || key === 'PASTE_YOUR_KEY_HERE') return { error: 'no-key' }
     const req = new Request(API_URL)
-    req.headers = { Authorization: 'Bearer ' + WIDGET_KEY }
-    req.timeoutInterval = 15
+    req.headers = { Authorization: 'Bearer ' + key }
+    // 30s: Render's free tier takes 50s+ to wake from a cold start, so
+    // 15s was too short; 60s risks iOS killing the widget run. Even
+    // 30s may not cover a fully cold start — the first tap wakes
+    // Render, and the retry then succeeds (SPEC §11).
+    req.timeoutInterval = 30
     const data = await req.loadJSON()
     if (!data || typeof data.unread !== 'number') return { error: 'bad-data' }
     const result = { data }
@@ -67,6 +75,16 @@ function shortText(text, max) {
 
 // --- widget ---------------------------------------------------------------
 
+// What the error state says (SPEC §11): each failure gets its own short
+// reason, so the lock screen itself tells the user what is wrong instead
+// of the same generic line for every cause. Unknown values fall back to
+// the most common cause (the server could not be reached).
+const ERROR_LINES = {
+  'no-key': 'Add your key in the script',
+  'fetch-failed': "Couldn't reach the server",
+  'bad-data': 'Unexpected reply',
+}
+
 function buildWidget(result) {
   const w = new ListWidget()
   w.url = APP_URL
@@ -74,7 +92,13 @@ function buildWidget(result) {
     const title = w.addText('Group Chat')
     title.font = Font.systemFont(13, 'semibold')
     title.textColor = Color.white()
-    const hint = w.addText('Tap to open')
+    const reason = w.addText(ERROR_LINES[result.error] || ERROR_LINES['fetch-failed'])
+    reason.font = Font.systemFont(12)
+    reason.textColor = Color.white()
+    // "Tap to retry": with "Run Script" set, tapping re-runs the script
+    // (refresh) instead of opening the app — "Tap to open" was
+    // misleading. widget.url is unchanged, so Open App behaviour stays.
+    const hint = w.addText('Tap to retry')
     hint.font = Font.systemFont(11)
     hint.textColor = Color.white()
     return w

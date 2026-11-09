@@ -1530,6 +1530,49 @@ video.media { cursor: default; }
   .typing-bubble span, .typing-row { animation: none; }
 }
 
+/* ---- agent working indicator ---- */
+
+.topbar-avatar .working-avatar {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--blue);
+}
+.working-avatar svg { width: 46px; height: 46px; }
+.working-headphones { animation: working-bob 2.4s ease-in-out infinite; transform-origin: 32px 30px; }
+.working-dot { animation: working-dot 1.2s ease-in-out infinite; }
+.working-dot:nth-of-type(2) { animation-delay: 0.15s; }
+.working-dot:nth-of-type(3) { animation-delay: 0.3s; }
+@keyframes working-dot {
+  0%, 60%, 100% { opacity: 0.35; }
+  30% { opacity: 1; }
+}
+@keyframes working-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1.5px); }
+}
+
+.working-bubble {
+  display: inline-flex;
+  align-items: center;
+  padding: 10px 14px;
+}
+.working-bubble-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+.working-mini { width: 22px; height: 22px; flex-shrink: 0; color: var(--blue); }
+.working-label { font-size: 14px; }
+
+.pill-sub.working { color: var(--blue); }
+
+@media (prefers-reduced-motion: reduce) {
+  .working-headphones, .working-dot { animation: none; }
+}
+
 /* ---- voice notes ---- */
 
 .mic-btn {
