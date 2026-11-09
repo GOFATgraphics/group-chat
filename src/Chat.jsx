@@ -32,7 +32,7 @@ import ApiKeys from './ApiKeys.jsx'
 import LockScreenWidget from './LockScreenWidget.jsx'
 import MyUsage from './MyUsage.jsx'
 import { useTyping } from './typing.js'
-import { WorkingAvatar, WorkingBubble } from './WorkingAvatar.jsx'
+import { WorkingAvatar } from './WorkingAvatar.jsx'
 import { VoicePlayer, VoiceRecorder, MicIcon, canRecordVoice, formatDuration } from './Voice.jsx'
 import MediaViewer from './MediaViewer.jsx'
 // The call screen (and the realtime SDK) only loads when a call starts.
@@ -2738,8 +2738,9 @@ export default function Chat({ session }) {
           ),
         )}
         {typing.typers.map((id) => {
-          // A working peer gets the laptop illustration and its label
-          // instead of the three dots; plain typing is unchanged.
+          // The message-list bubble is always the original three dots —
+          // the working video and its status live in the header, not
+          // in a second bubble here.
           const label = typing.workingById[id]
           return (
             <div key={`typing-${id}`} className="row theirs first typing-row" aria-label={label ? `${profiles[id] ?? 'Someone'} is ${label}` : `${profiles[id] ?? 'Someone'} is typing`}>
@@ -2749,17 +2750,11 @@ export default function Chat({ session }) {
               <div className="stack">
                 {isGroup && <div className="sender">{profiles[id] ?? '…'}</div>}
                 <div className="pieces">
-                  {label ? (
-                    <div className="bubble tail working-bubble">
-                      <WorkingBubble label={label} username={profiles[id]} />
-                    </div>
-                  ) : (
-                    <div className="bubble tail typing-bubble">
-                      <span />
-                      <span />
-                      <span />
-                    </div>
-                  )}
+                  <div className="bubble tail typing-bubble">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
                 </div>
               </div>
             </div>
@@ -2776,8 +2771,10 @@ export default function Chat({ session }) {
             </div>
             <div className="stack">
               <div className="pieces">
-                <div className="bubble tail working-bubble">
-                  <WorkingBubble label="working…" username={profiles[peerId]} />
+                <div className="bubble tail typing-bubble">
+                  <span />
+                  <span />
+                  <span />
                 </div>
               </div>
             </div>

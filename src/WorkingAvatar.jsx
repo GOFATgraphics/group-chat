@@ -110,35 +110,3 @@ export function WorkingAvatar({ label, username, forceStill = false }) {
     </span>
   )
 }
-
-// Message-list version: a small laptop with the status label next to it,
-// rendered inside the typing bubble in place of the three dots. Agents
-// with their own picture get a small circular clip of it instead.
-export function WorkingBubble({ label, username, forceStill = false }) {
-  const media = workingMediaFor(username)
-  const [mediaFailed, setMediaFailed] = useState(false)
-  if (media && !mediaFailed) {
-    return (
-      <span className="working-bubble-inner">
-        <WorkingVideo media={media} className="working-bubble-video" forceStill={forceStill} onMediaFailed={() => setMediaFailed(true)} />
-        <span className="working-label">{label || 'working…'}</span>
-      </span>
-    )
-  }
-  return (
-    <span className="working-bubble-inner">
-      <svg className="working-mini" viewBox="0 0 24 24" aria-hidden="true">
-        <g fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="5" y="5" width="14" height="10" rx="1.5" />
-          <path d="M2.5 18.5 h19" />
-        </g>
-        <g fill="currentColor">
-          <circle className="working-dot" cx="9" cy="10" r="1.3" />
-          <circle className="working-dot" cx="12" cy="10" r="1.3" />
-          <circle className="working-dot" cx="15" cy="10" r="1.3" />
-        </g>
-      </svg>
-      <span className="working-label">{label || 'working…'}</span>
-    </span>
-  )
-}
