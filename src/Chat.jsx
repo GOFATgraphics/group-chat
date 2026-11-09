@@ -2615,7 +2615,7 @@ export default function Chat({ session }) {
                 <Avatar name={ownerNameB} src={avatars[ownerB]} />
               </>
             ) : headerWorkingLabel ? (
-              <WorkingAvatar label={headerWorkingLabel} />
+              <WorkingAvatar label={headerWorkingLabel} username={profiles[peerId]} />
             ) : (
               <Avatar name={peerName} src={avatars[peerId]} />
             )}
@@ -2751,7 +2751,7 @@ export default function Chat({ session }) {
                 <div className="pieces">
                   {label ? (
                     <div className="bubble tail working-bubble">
-                      <WorkingBubble label={label} />
+                      <WorkingBubble label={label} username={profiles[id]} />
                     </div>
                   ) : (
                     <div className="bubble tail typing-bubble">
@@ -2777,7 +2777,7 @@ export default function Chat({ session }) {
             <div className="stack">
               <div className="pieces">
                 <div className="bubble tail working-bubble">
-                  <WorkingBubble label="working…" />
+                  <WorkingBubble label="working…" username={profiles[peerId]} />
                 </div>
               </div>
             </div>

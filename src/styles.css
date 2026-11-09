@@ -1540,6 +1540,11 @@ video.media { cursor: default; }
   color: var(--blue);
 }
 .working-avatar svg { width: 46px; height: 46px; }
+/* An agent's own animated picture: the video fills the avatar circle
+   (the still is the poster and the fallback). */
+.working-avatar video, .working-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; display: block; }
+/* The bubble thumb: a small circular clip of the same picture. */
+.working-bubble-video { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; flex-shrink: 0; display: block; }
 .working-headphones { animation: working-bob 2.4s ease-in-out infinite; transform-origin: 32px 30px; }
 .working-dot { animation: working-dot 1.2s ease-in-out infinite; }
 .working-dot:nth-of-type(2) { animation-delay: 0.15s; }
