@@ -490,7 +490,8 @@ your balance — never anyone else's:
   "additionalRemaining": 5,
   "outOfCredits": false,
   "weekReset": "9 Nov",
-  "latest": { "from": "gauri", "text": "Here's the summary…", "at": "2026-11-09T00:12:00.000Z" },
+  "latest": { "from": "gauri", "text": "Here's the summary…", "at": "2026-11-09T00:12:00.000Z", "avatarUrl": "https://.../avatars/gauri.png" },
+  "agent": { "name": "gauri", "avatarUrl": "https://.../avatars/gauri.png" },
   "updatedAt": "2026-11-09T00:44:00.000Z"
 }
 ```
@@ -499,8 +500,12 @@ your balance — never anyone else's:
 you can see (a restricted user: only approved assigned-agent DMs and
 the Admin DM; everyone else: their DMs, the main Group Chat and named
 groups they are in). `latest` is the newest message from someone else,
-or `null` when there is none; its text is truncated server-side.
-`freeRemaining` / `additionalRemaining` are the same two-tier balances
+or `null` when there is none; its text is truncated server-side and
+`avatarUrl` is the sender's profile photo (or `null` when none is set).
+`agent` is the AI agent the widget is about — the latest message's
+sender when that sender is an AI agent, otherwise your first approved
+agent, otherwise `null` — with its profile photo in `avatarUrl` (or
+`null`). `freeRemaining` / `additionalRemaining` are the same two-tier balances
 as `GET /api/usage/balance` (§6a). Keep the key secret — anyone holding
 it can read and reply as you; revoke it in Settings → API keys if it
 leaks.

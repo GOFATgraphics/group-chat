@@ -1,13 +1,19 @@
-import { route, auth, admin, check, HttpError } from '../lib.js'
+import { route, auth, admin, check, HttpError, SUPABASE_URL } from '../lib.js'
 import { weekBounds, twoTierBalances } from '../usage.js'
 import { loadUsageForUser, balancesFor } from './usage.js'
+
+// Public URL for a profile photo, same construction as
+// server/routes/avatar.js and members.js (public `avatars` bucket).
+// Exported for tests.
+export const publicUrl = (path) => (path ? `${SUPABASE_URL}/storage/v1/object/public/avatars/${path}` : null)
 
 // Lock-screen widget data (see public/lock-screen-widget.js and
 // ~/workspace/group-chat-lock-screen-widget-SPEC.md).
 //
 //   GET /api/widget  -> the caller's OWN unread count, latest message
-//                       and credit balance, for the Scriptable widget
-//                       on their iPhone lock screen.
+//                       (with the sender's avatar), AI agent (name +
+//                       avatar) and credit balance, for the Scriptable
+//                       widget on their iPhone lock screen.
 //
 // A web app cannot install a native iOS WidgetKit widget by itself, so
 // this endpoint exists for Scriptable (free iOS app): a script fetches
@@ -63,6 +69,14 @@ export function widgetText(m) {
 // Pure payload builder (exported for tests): takes the key owner's
 // rows only — it can never return another user's messages or balance,
 // because it is only ever handed this user's rows.
+//
+// Avatar fields (SPEC §10): `avatars` maps a profile id to its public
+// avatar URL (null when none), `isAi` maps a profile id to its
+// profiles.is_ai flag, and `approvedAgents` is the user's approved
+// agent ids in earliest-approved-first order. The widget's agent is
+// the latest message's sender when that sender is an AI agent,
+// otherwise the user's first approved agent, otherwise null — so a
+// restricted user only ever gets their own assigned agent(s).
 export function buildWidgetPayload({
   userId,
   isRestricted,
@@ -72,6 +86,9 @@ export function buildWidgetPayload({
   messages = [],
   readIds = new Set(),
   names = {},
+  avatars = {},
+  isAi = {},
+  approvedAgents = [],
   balances,
   weekReset,
 } = {}) {
@@ -120,8 +137,26 @@ export function buildWidgetPayload({
         isRestricted && ownerId != null && latest.user_id === ownerId
           ? 'Admin'
           : (names[latest.user_id] ?? 'Someone')
-      latestOut = { from, text, at: latest.created_at ?? null }
+      latestOut = {
+        from,
+        text,
+        at: latest.created_at ?? null,
+        avatarUrl: avatars[latest.user_id] ?? null,
+      }
     }
+  }
+  // The AI agent the widget is about (SPEC §10): the latest message's
+  // sender when that sender is an AI agent, otherwise the user's first
+  // approved agent, otherwise null. `approvedAgents` only ever holds
+  // this user's own approved agents, so a restricted user can never
+  // be shown another user's agent here.
+  let agent = null
+  const agentId =
+    latest && isAi[latest.user_id]
+      ? latest.user_id
+      : (approvedAgents[0] ?? null)
+  if (agentId != null) {
+    agent = { name: names[agentId] ?? 'Agent', avatarUrl: avatars[agentId] ?? null }
   }
   const twoTier = balances ?? twoTierBalances({})
   return {
@@ -131,6 +166,7 @@ export function buildWidgetPayload({
     outOfCredits: Boolean(twoTier.outOfCredits),
     weekReset: weekReset ?? weekBounds().resetLabel,
     latest: latestOut,
+    agent,
     updatedAt: new Date().toISOString(),
   }
 }
@@ -164,9 +200,12 @@ async function loadWidgetPayload(adm, userId) {
       .select('assigned_agent_id')
       .eq('requested_by', userId)
       .eq('status', 'approved')
-      .not('assigned_agent_id', 'is', null),
+      .not('assigned_agent_id', 'is', null)
+      .order('created_at', { ascending: true }),
   )
   const agentIds = new Set(requests.map((r) => r.assigned_agent_id))
+  // Ordered earliest-approved-first, for the widget's agent (§10).
+  const approvedAgents = requests.map((r) => r.assigned_agent_id)
   let memberGroupIds = new Set()
   if (!isRestricted) {
     const members = check(
@@ -207,12 +246,22 @@ async function loadWidgetPayload(adm, userId) {
       .limit(800),
   )
   const readIds = new Set(readRows.map((r) => r.message_id))
-  // Sender names for the visible messages (bounded).
-  const senderIds = [...new Set(messages.map((m) => m.user_id))].slice(0, 100)
+  // Sender names + avatars + AI flags for the visible messages, plus
+  // the approved agents (an approved agent may not have sent a message
+  // yet, but the widget still shows them — SPEC §10).
+  const senderIds = [...new Set([...messages.map((m) => m.user_id), ...approvedAgents])].slice(0, 100)
   const names = {}
+  const avatars = {}
+  const isAi = {}
   if (senderIds.length) {
-    const profiles = check(await adm.from('profiles').select('id, username').in('id', senderIds))
-    for (const p of profiles) names[p.id] = p.username
+    const profiles = check(
+      await adm.from('profiles').select('id, username, avatar_path, is_ai').in('id', senderIds),
+    )
+    for (const p of profiles) {
+      names[p.id] = p.username
+      avatars[p.id] = publicUrl(p.avatar_path)
+      isAi[p.id] = Boolean(p.is_ai)
+    }
   }
   const loaded = await loadUsageForUser(adm, userId)
   const twoTier = await balancesFor(adm, userId, loaded, Boolean(me.is_owner))
@@ -225,6 +274,9 @@ async function loadWidgetPayload(adm, userId) {
     messages,
     readIds,
     names,
+    avatars,
+    isAi,
+    approvedAgents,
     balances: twoTier,
     weekReset: loaded.week.resetLabel,
   })

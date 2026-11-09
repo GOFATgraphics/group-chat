@@ -2,8 +2,9 @@
 //
 // A web app cannot install a native iOS lock-screen widget by itself, so
 // this script is the widget: it fetches your own unread count, latest
-// message and credit balance from the group-chat server and draws the
-// lock-screen widget. Tapping the widget opens the app.
+// message, AI agent avatar and credit balance from the group-chat
+// server and draws the lock-screen widget. Tapping the widget opens
+// the app.
 //
 // Setup (see Settings → Lock screen widget in the app):
 //   1. Create a personal API key in the app (Settings → API keys).
@@ -30,7 +31,20 @@ async function loadData() {
     req.timeoutInterval = 15
     const data = await req.loadJSON()
     if (!data || typeof data.unread !== 'number') return { error: 'bad-data' }
-    return { data }
+    const result = { data }
+    // The agent's avatar (SPEC §10): one small image, short timeout,
+    // and any failure falls back silently to the text-only layout —
+    // the widget must never block on the image or show a broken one.
+    if (data.agent && data.agent.avatarUrl) {
+      try {
+        const imgReq = new Request(data.agent.avatarUrl)
+        imgReq.timeoutInterval = 8
+        result.avatarImage = await imgReq.loadImage()
+      } catch (e) {
+        // No avatar image — the widget renders without it.
+      }
+    }
+    return result
   } catch (e) {
     return { error: 'fetch-failed' }
   }
@@ -84,9 +98,27 @@ function buildWidget(result) {
   }
 
   // accessoryRectangular, and any home-screen size as a fallback.
-  const title = w.addText('Group Chat' + (d.unread > 0 ? '  •  ' + d.unread + ' new' : ''))
-  title.font = Font.systemFont(13, 'semibold')
-  title.textColor = Color.white()
+  // With an avatar (SPEC §10): a horizontal row — the agent's photo,
+  // small and round, at the left of the title line. Without one (or if
+  // the image failed to load), the text-only layout, exactly as before.
+  if (result.avatarImage) {
+    const row = w.addStack()
+    row.layoutHorizontally()
+    row.centerAlignContent()
+    row.spacing = 8
+    const photo = row.addImage(result.avatarImage)
+    photo.imageSize = new Size(28, 28)
+    photo.cornerRadius = 14
+    const col = row.addStack()
+    col.layoutVertically()
+    const title = col.addText('Group Chat' + (d.unread > 0 ? '  •  ' + d.unread + ' new' : ''))
+    title.font = Font.systemFont(13, 'semibold')
+    title.textColor = Color.white()
+  } else {
+    const title = w.addText('Group Chat' + (d.unread > 0 ? '  •  ' + d.unread + ' new' : ''))
+    title.font = Font.systemFont(13, 'semibold')
+    title.textColor = Color.white()
+  }
   if (d.latest && d.latest.text) {
     w.addSpacer(4)
     const latest = w.addText(shortText(d.latest.from + ': ' + d.latest.text, 64))
