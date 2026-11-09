@@ -3,6 +3,7 @@ import {
 } from '../lib.js'
 import { speak, voiceFor, mp3Duration } from '../speech.js'
 import { takeDueTasks } from './tools.js'
+import { recordMessageUsage } from '../usageLedger.js'
 
 const MAX_WAIT_SECONDS = 25
 // 1 second between long-poll checks (was 150 ms): same 25 s wait, about
@@ -199,6 +200,10 @@ export default route({
       if (uploadedPaths.length) await sb.storage.from(BUCKET).remove(uploadedPaths)
       check({ error })
     }
+    // Best-effort usage ledger: record this message's credits
+    // (fire-and-forget, so a ledger failure never slows or breaks
+    // sending — see recordMessageUsage in server/usageLedger.js).
+    void recordMessageUsage(data)
     if (files) {
       // Best-effort extra rows: the message itself is already saved with
       // the first file in its legacy columns, so a missing extra row is

@@ -8,6 +8,7 @@ import {
   barRatios,
   twoTierBalances,
 } from '../usage.js'
+import { loadUsageFromLedger } from '../usageLedger.js'
 
 // Per-user token / credit usage, estimated from stored chat text
 // (see server/usage.js for the method and its limits).
@@ -176,7 +177,18 @@ async function isOwnerId(adm, userId) {
 // /api/usage and /api/usage/bars (RLS scopes the read); the
 // service-role client for /api/usage/balance (the caller is an agent
 // asking about its user, and only aggregates leave the server).
+//
+// The cached usage ledger is tried first (one small query, no message
+// content — see server/usageLedger.js). If the ledger is not available
+// yet (migration 0025 not applied live) or any ledger read fails, this
+// falls back to the full-history computation below — same numbers, just
+// slower. The endpoints never 500 because of the ledger.
 export async function loadUsageForUser(sb, userId) {
+  try {
+    return await loadUsageFromLedger(admin(), userId)
+  } catch (err) {
+    console.error('usage ledger read (falling back to history)', err.message)
+  }
   const week = weekBounds()
   const requests = check(
     await sb
@@ -377,15 +389,48 @@ export const all = route({
     const agentIds = [...new Set(requests.map((r) => r.assigned_agent_id))]
     const agentProfiles = check(await adm.from('profiles').select('id, username').in('id', agentIds))
     const agentNames = Object.fromEntries(agentProfiles.map((p) => [p.id, p.username]))
-    // Every DM row (service role, so RLS does not filter); the
-    // approved-pairs check in computePairUsage is what scopes the
-    // counting, and only aggregates ever leave the server.
-    const rows = await fetchAll(adm, () =>
-      adm.from('messages').select(MESSAGE_COLUMNS).is('group_id', null).not('recipient_id', 'is', null),
-    )
     const grants = await loadGrantsTotals(adm, userIds)
-    const users = userIds
-      .map((uid) => {
+    // One row per user, from (perAgent, totals, byWeek).
+    const rowFor = (uid, perAgent, totals, byWeek) => {
+      const twoTier = twoTierBalances({
+        byWeek,
+        weekCredits: totals.weekCredits,
+        granted: grants.get(uid) ?? 0,
+        // The admin is exempt from the cutoff (his own row included).
+        isOwner: uid === userId,
+      })
+      return {
+        userId: uid,
+        username: names[uid] ?? 'Someone',
+        agents: perAgent,
+        totals,
+        additionalGranted: twoTier.additionalGranted,
+        additionalRemaining: twoTier.additionalRemaining,
+        outOfCredits: twoTier.outOfCredits,
+      }
+    }
+    // Try the cached ledger first (one small query per user, no message
+    // content). If the ledger is not available yet (migration 0025 not
+    // applied live) or any ledger read fails, fall back to the
+    // full-history computation below — same numbers, just slower.
+    let users = null
+    try {
+      users = []
+      for (const uid of userIds) {
+        const loaded = await loadUsageFromLedger(adm, uid)
+        users.push(rowFor(uid, loaded.perAgent, loaded.totals, loaded.weekly.byWeek))
+      }
+    } catch (err) {
+      console.error('usage ledger read (falling back to history)', err.message)
+      users = null
+    }
+    if (!users) {
+      // Full-history fallback (the pre-ledger computation, unchanged):
+      // every DM row, counted per user from the approved pairs.
+      const rows = await fetchAll(adm, () =>
+        adm.from('messages').select(MESSAGE_COLUMNS).is('group_id', null).not('recipient_id', 'is', null),
+      )
+      users = userIds.map((uid) => {
         const agentIdsForUser = pairsByUser.get(uid)
         const perAgent = agentIdsForUser.map((agentId) => ({
           agentId,
@@ -394,24 +439,10 @@ export const all = route({
         }))
         const totals = summarizeUsage(perAgent)
         const { byWeek } = weeklyCreditTotals(rows, uid, agentIdsForUser)
-        const twoTier = twoTierBalances({
-          byWeek,
-          weekCredits: totals.weekCredits,
-          granted: grants.get(uid) ?? 0,
-          // The admin is exempt from the cutoff (his own row included).
-          isOwner: uid === userId,
-        })
-        return {
-          userId: uid,
-          username: names[uid] ?? 'Someone',
-          agents: perAgent,
-          totals,
-          additionalGranted: twoTier.additionalGranted,
-          additionalRemaining: twoTier.additionalRemaining,
-          outOfCredits: twoTier.outOfCredits,
-        }
+        return rowFor(uid, perAgent, totals, byWeek)
       })
-      .sort((a, b) => b.totals.credits - a.totals.credits)
+    }
+    users.sort((a, b) => b.totals.credits - a.totals.credits)
     const grand = summarizeUsage(users.map((u) => u.totals))
     return { ...usageResponse([], week, twoTierBalances({})), users, totals: { ...grand, users: users.length } }
   },

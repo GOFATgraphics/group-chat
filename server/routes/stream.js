@@ -8,11 +8,13 @@
 // to a public echo server both close with code 1006, while https works).
 // So the listener cannot subscribe to Supabase Realtime itself.
 //
-// Instead, this Vercel function subscribes to Supabase Realtime (Vercel
-// is not the VM, and the web app's browser clients already prove
-// Realtime works from a normal network), and forwards each new message
-// to the listener over HTTPS as an SSE event. The listener never opens
-// a websocket, and never polls.
+// Instead, this server subscribes to Supabase Realtime (the server is
+// not the VM, and the web app's browser clients already prove Realtime
+// works from a normal network), and forwards each new message to the
+// listener over HTTPS as an SSE event. The listener never opens a
+// websocket, and never polls. This is also the recommended way for
+// agents to listen (public/agent-api.md §2, Option B) — long-polling
+// still works as a fallback.
 //
 // Query parameters, mirroring GET /api/messages:
 //   ?after_id=123         only messages newer than this id, sent first
@@ -35,11 +37,11 @@
 // Heartbeats are SSE comments (": ping"), sent every 15 seconds, with
 // no database query behind them.
 //
-// Lifetime: the stream closes after 50 seconds, well under any
-// serverless duration cap, and the client reconnects immediately with
-// after_id set to the last id it saw. On reconnect the server first
-// sends any messages that arrived during the gap, so nothing is lost
-// and nothing is sent twice, as long as the client advances after_id.
+// Lifetime: the stream closes after 50 seconds, and the client
+// reconnects immediately with after_id set to the last id it saw. On
+// reconnect the server first sends any messages that arrived during
+// the gap, so nothing is lost and nothing is sent twice, as long as
+// the client advances after_id.
 //
 // Cost, per listener, while idle:
 //   - About 72 stream connections per hour (one per 50 seconds).

@@ -11,6 +11,7 @@
 //   POST   /api/schedule { text, at, kind?: message|reminder|task, repeat?: daily|weekly, to?|group? }
 //   GET    /api/tasks  -> your due AI tasks (and marks them handled)
 import { route, auth, body, check, present, conversationFor, presentPoll, userIdFor, HttpError } from '../lib.js'
+import { recordMessageUsage } from '../usageLedger.js'
 
 const args = (req) => ({ ...req.query, ...body(req) })
 const where = (query, conv, { pairCols = false } = {}) => {
@@ -85,6 +86,9 @@ const polls = route({
       await sb.from('messages').delete().eq('id', msg.id)
       check({ error })
     }
+    // Best-effort usage ledger (fire-and-forget) — after the poll row is
+    // saved, so a message that gets deleted is never recorded.
+    void recordMessageUsage(msg)
     const [message] = await present(sb, [msg])
     return { message }
   },

@@ -161,6 +161,16 @@ function buildWidget(result) {
 const result = await loadData()
 const widget = buildWidget(result)
 
+// Ask iOS to refresh the widget regularly (every 5 minutes): without
+// this, iOS only refreshes on its own schedule and the widget can sit
+// on stale data until it is re-run by hand. iOS treats this as a
+// request, not a guarantee — it enforces its own minimum (about 15
+// minutes for a widget like this) and may refresh later to save
+// battery, so asking for 1–2 minutes would not make it refresh any
+// faster. 5 minutes is the shortest worth asking for. Tapping still
+// forces an immediate refresh.
+widget.refreshAfterDate = new Date(Date.now() + 5 * 60 * 1000)
+
 if (config.runsInApp) {
   // Preview inside the Scriptable app, with the short setup steps.
   widget.presentSmall()

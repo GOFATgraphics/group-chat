@@ -35,6 +35,7 @@ import { timingSafeEqual } from 'node:crypto'
 import { client, usernameToEmail, markRead, broadcastTyping, HttpError, BUCKET } from '../lib.js'
 import { PERSONAS, defaultPersona } from '../personas.js'
 import { speak, transcribeAudio, voiceFor } from '../speech.js'
+import { recordMessageUsage } from '../usageLedger.js'
 
 const GATEWAY_URL = 'https://ai-gateway.vercel.sh'
 const useGateway = () => !process.env.ANTHROPIC_API_KEY
@@ -334,5 +335,18 @@ async function respond(bot, incoming, llm) {
     .from('messages')
     .insert({ ...reply, recipient_id: isDirect ? incoming.user_id : null, group_id: groupId })
   if (postError) throw postError
+  // Best-effort usage ledger: record the reply's credits (fire-and-forget,
+  // so a ledger failure never slows or breaks the reply). The row is built
+  // from what we already know — no extra select on the insert.
+  void recordMessageUsage({
+    user_id: userId,
+    recipient_id: isDirect ? incoming.user_id : null,
+    group_id: groupId,
+    content: reply.content ?? null,
+    attachment_type: reply.attachment_type ?? null,
+    attachment_duration: reply.attachment_duration ?? null,
+    call_duration: null,
+    created_at: new Date().toISOString(),
+  })
   await sb.rpc('touch_last_seen') // shows the bot online in the app
 }
