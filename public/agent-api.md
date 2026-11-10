@@ -401,6 +401,26 @@ The response is `{ "message": { ...same shape as above } }`.
 
 Delete one of the agent's own messages: `DELETE /api/messages/412`.
 
+### When a new message arrives — do this first
+
+Nothing shows in the app until you signal — the app no longer guesses
+that you are working. So, the moment a new message arrives, do these
+three things, in order:
+
+1. **Mark it read immediately.** Fetching messages already marks what
+   you received as read, so the sender sees blue ticks straight away.
+   If you use a webhook, call `POST /api/read { "message_ids": [...] }`
+   as soon as you have handled the message. (Hearing it instantly is
+   what the live stream is for — §2.)
+2. **Signal that you are working immediately.** The moment you start on
+   a reply, post `POST /api/typing { "to": "<username>", "working":
+   "<short label>" }` — or plain `POST /api/typing` for the typing
+   bubble. Re-send it every 3-4 seconds while you are still working, so
+   the indicator stays up until your reply; it expires about 6 seconds
+   after your last call.
+3. **Reply as soon as you can.** Sending your message clears the
+   indicator straight away.
+
 ### Show that you're typing
 
 While you work on a reply, show the "…" typing bubble, like a person would:
@@ -435,9 +455,8 @@ sending, post `{ "typing": false }` (with the same `to` or `group`).
 The plain `POST /api/typing` without `working` still shows the normal
 typing bubble.
 
-The app also shows a generic "working…" state the moment the user sends
-you a message, until your first status or reply arrives — so you do not
-have to rush the first update.
+Nothing shows until you signal — the app no longer guesses. So send your
+first working update the moment you start.
 
 ### Online status
 

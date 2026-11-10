@@ -396,36 +396,7 @@ export default function Chat({ session }) {
   const typing = useTyping(myId, isGroup ? (groupId ? `g:${groupId}` : null) : peerId ?? undefined)
   const clearTyping = typing.clear
 
-  // ---- agent working indicator -------------------------------------------
-  // The moment I send a message to an AI agent, show the generic working
-  // state until the agent's first typing/working event arrives, the agent's
-  // reply arrives, or 2 minutes pass. Pure client state — no server
-  // round-trip. The ref mirrors the state so the realtime message handler
-  // (defined in an effect below) can clear it without a stale closure.
-  const [awaitingAgent, setAwaitingAgent] = useState(null) // { peerId, since } | null
-  const awaitingAgentRef = useRef(null)
-  const setAwaiting = useCallback((v) => {
-    awaitingAgentRef.current = v
-    setAwaitingAgent(v)
-  }, [])
 
-  // The agent's first typing/working event takes over from the generic
-  // "working…" state — the real status (or the plain typing bubble) says
-  // more than the guess.
-  useEffect(() => {
-    if (awaitingAgent && typing.typers.includes(awaitingAgent.peerId)) setAwaiting(null)
-  }, [awaitingAgent, typing.typers, setAwaiting])
-
-  // A stuck generic state never hangs: 2 minutes is longer than any agent
-  // should take to say something, and the agent's own status (when it
-  // reports one) expires on its own ~6 s heartbeat.
-  useEffect(() => {
-    if (!awaitingAgent) return
-    const timer = setInterval(() => {
-      if (awaitingAgentRef.current && Date.now() - awaitingAgentRef.current.since > 120000) setAwaiting(null)
-    }, 5000)
-    return () => clearInterval(timer)
-  }, [awaitingAgent, setAwaiting])
   const ownerA = isOwnerView ? view.aId : null
   const ownerB = isOwnerView ? view.bId : null
   const viewRef = useRef(view)
@@ -1475,9 +1446,6 @@ export default function Chat({ session }) {
         seenIdsRef.current.add(m.id)
         if (lastIdRef.current == null || m.id > lastIdRef.current) lastIdRef.current = m.id
         clearTyping(m.user_id)
-        // The agent's reply ends the generic "working…" state, just as it
-        // ends typing.
-        if (awaitingAgentRef.current && m.user_id === awaitingAgentRef.current.peerId) setAwaiting(null)
         bumpLast(m)
         const peer = dmPeerOf(m)
         if (peer) {
@@ -1804,11 +1772,7 @@ export default function Chat({ session }) {
     // the second line of defence if send is ever called from that view.
     if (viewRef.current.type === 'owner') return false
     setError('')
-    // A message to an AI agent in a DM: the generic working state shows at
-    // once (SPEC §4) — the agent's own status takes over when it arrives,
-    // and the reply clears it. Set at each point below where the message
-    // actually goes out, never on a validation failure.
-    const toAgent = viewRef.current.type === 'dm' && aiIds.has(peerId)
+
     // A reply only quotes a message from the conversation being sent in.
     // replyTo is cleared on every view change, so this check is a second
     // line: if the quoted message is no longer in this view, send plain.
@@ -1847,7 +1811,6 @@ export default function Chat({ session }) {
       bumpLast(draft)
       setReplyTo(null)
       playSend()
-      if (toAgent) setAwaiting({ peerId, since: Date.now() })
       deliver(draft)
       return true
     }
@@ -1869,7 +1832,6 @@ export default function Chat({ session }) {
       bumpLast(draft)
       setReplyTo(null)
       playSend()
-      if (toAgent) setAwaiting({ peerId, since: Date.now() })
       deliver(draft)
       return true
     }
@@ -1903,7 +1865,6 @@ export default function Chat({ session }) {
     bumpLast(draft)
     setReplyTo(null)
     playSend()
-    if (toAgent) setAwaiting({ peerId, since: Date.now() })
     deliver(draft)
     return true
   }
@@ -2050,8 +2011,7 @@ export default function Chat({ session }) {
 
   function retrySend(msg) {
     setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, _status: 'sending' } : m)))
-    // A retried message to an AI agent is a fresh wait for its reply.
-    if (msg.recipient_id && aiIds.has(msg.recipient_id)) setAwaiting({ peerId: msg.recipient_id, since: Date.now() })
+
     deliver({ ...msg, _status: 'sending' })
   }
 
@@ -2250,11 +2210,10 @@ export default function Chat({ session }) {
   const headerTyping = typingNames.length > 0
   // Working beats typing in the subtitle: the agent's own label says what
   // it is doing. In a DM the label is the whole subtitle; in a group the
-  // first working member is named. The generic awaiting state (no label
-  // yet) reads "working…".
+  // first working member is named. The label comes only from the agent's
+  // own typing/working signal — nothing is shown until the agent reports it.
   const peerWorkingLabel = !isGroup && peerId ? typing.workingById[peerId] ?? null : null
-  const awaitingLabel = awaitingAgent && awaitingAgent.peerId === peerId ? 'working…' : null
-  const headerWorkingLabel = peerWorkingLabel ?? awaitingLabel
+  const headerWorkingLabel = peerWorkingLabel
   const headerSubtitle = headerWorkingLabel
     ? headerWorkingLabel
     : headerTyping
@@ -2760,26 +2719,7 @@ export default function Chat({ session }) {
             </div>
           )
         })}
-        {/* Generic "working…" while the agent's first status or reply is
-            still on its way (SPEC §4). It never doubles the real row: the
-            effect above clears the awaiting state the moment the peer's
-            typing/working event arrives. */}
-        {awaitingAgent && awaitingAgent.peerId === peerId && !typing.typers.includes(peerId) && (
-          <div key="awaiting-agent" className="row theirs first typing-row" aria-label={`${peerName ?? 'Agent'} is working`}>
-            <div className="row-avatar">
-              <Avatar name={peerName ?? '?'} src={avatars[peerId]} />
-            </div>
-            <div className="stack">
-              <div className="pieces">
-                <div className="bubble tail typing-bubble">
-                  <span />
-                  <span />
-                  <span />
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+
           </>
         )}
       </main>
