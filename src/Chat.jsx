@@ -84,6 +84,31 @@ function readInboxCache(userId) {
   }
 }
 
+// Cold-start cache for the open conversation: the newest messages of each
+// chat, saved on every change and restored when the chat is opened — so
+// opening a chat shows its messages at once instead of a blank screen with
+// "Loading messages…" for 5–10 seconds while the network fetch runs.
+// Same rules as the list cache: per user, best-effort, and the network
+// refresh always overwrites within seconds. Only the last 50 real,
+// already-sent messages are kept (no optimistic `_status` rows), and no
+// signed URLs — those are re-fetched fresh, since they expire.
+const CONV_CACHE_KEY = (userId, key) => `chat-conv-cache:${userId}:${key}`
+const CONV_CACHE_VERSION = 1
+const CONV_CACHE_KEEP = 50
+function readConvCache(userId, key) {
+  if (!userId || !key) return null
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CONV_CACHE_KEY(userId, key)) ?? 'null')
+    if (!parsed || parsed.v !== CONV_CACHE_VERSION || !Array.isArray(parsed.messages)) return null
+    const messages = parsed.messages.filter(
+      (m) => m && typeof m.id === 'number' && m.created_at && !Number.isNaN(Date.parse(m.created_at)) && !m._status,
+    )
+    return messages.length ? messages : null
+  } catch {
+    return null
+  }
+}
+
 export default function Chat({ session }) {
   const myId = session.user.id
   const [me, setMe] = useState(undefined)
@@ -1364,9 +1389,27 @@ export default function Chat({ session }) {
   useEffect(() => {
     if (me === undefined || me === null) return
     let cancelled = false
-    setLoading(true)
-    setMessages([])
-    setHasMore(false)
+    // Paint from the conversation cache at once if there is one: the chat
+    // opens with its messages already on screen, and the network fetch
+    // below refreshes them in the background. Without a cache, keep the
+    // old behaviour — blank screen with "Loading messages…" until the
+    // fetch returns. Reactions, reads and photos are re-fetched fresh for
+    // the cached rows, so nothing stale is shown for long.
+    const cached = readConvCache(myId, viewKey(view))
+    if (cached) {
+      setMessages(cached)
+      setHasMore(cached.length === CONV_CACHE_KEEP)
+      setLoading(false)
+      loadReactions(cached.map((m) => m.id))
+      loadReads(cached.map((m) => m.id))
+      markAsRead(cached)
+      signUrls(cached.map((m) => m.attachment_path))
+      loadAttachments(cached.map((m) => m.id))
+    } else {
+      setLoading(true)
+      setMessages([])
+      setHasMore(false)
+    }
     stickToBottom.current = true
     async function load() {
       const { data: msgRows, error: msgErr } = await filterConversation(
@@ -1397,6 +1440,23 @@ export default function Chat({ session }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [me, view])
+
+  // Save the open conversation's messages for the next cold open, whenever
+  // they change. Only real sent messages, newest 50; never an empty save,
+  // so a first paint can never wipe a good cache.
+  useEffect(() => {
+    if (!myId) return
+    const rows = messages.filter((m) => m && typeof m.id === 'number' && !m._status).slice(-CONV_CACHE_KEEP)
+    if (!rows.length) return
+    try {
+      localStorage.setItem(
+        CONV_CACHE_KEY(myId, viewKey(view)),
+        JSON.stringify({ v: CONV_CACHE_VERSION, savedAt: Date.now(), messages: rows }),
+      )
+    } catch {
+      // Storage full / private mode: the chat just loads from the network.
+    }
+  }, [myId, messages, view])
 
   // ---- never miss a message --------------------------------------------------
   // Phones cut the realtime connection whenever the app is in the background
