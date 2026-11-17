@@ -49,13 +49,46 @@ const STAMP_GAP_MS = 15 * 60 * 1000
 const LONG_PRESS_MS = 450
 const AVATAR_PX = 256
 const WIDE_QUERY = '(min-width: 900px)'
-const PREVIEW_FIELDS = 'id, user_id, recipient_id, content, attachment_path, attachment_name, attachment_type, call_duration, created_at'
+const PREVIEW_FIELDS = 'id, user_id, recipient_id, group_id, content, attachment_path, attachment_name, attachment_type, call_duration, created_at'
+// group_id MUST be in PREVIEW_FIELDS: loadInbox keys every message by
+// notifyTarget(), which checks group_id first. Without it, a message in a
+// named group (Mercancia, Business, …) was keyed as the main Group Chat —
+// so the named group never got a last message, stayed at the bottom of
+// the list with "New group · say hi", and Group Chat stole its preview.
+
+// Cold-start cache for the chat list: the last message of each
+// conversation, plus the names and avatar URLs, saved on every change and
+// restored on the next open — so the list opens already sorted, with the
+// latest chat at the top and pictures in place, instead of alphabetical
+// placeholders ("Start a private chat", no times) until loadInbox finishes
+// over the network. Per user, best-effort (a bad or stale entry is
+// ignored), and the network refresh always overwrites it within seconds.
+const INBOX_CACHE_KEY = (userId) => `chat-inbox-cache:${userId}`
+const INBOX_CACHE_VERSION = 2
+function readInboxCache(userId) {
+  if (!userId) return null
+  try {
+    const parsed = JSON.parse(localStorage.getItem(INBOX_CACHE_KEY(userId)) ?? 'null')
+    if (!parsed || parsed.v !== INBOX_CACHE_VERSION) return null
+    const lastByKey = parsed.lastByKey && typeof parsed.lastByKey === 'object' ? parsed.lastByKey : {}
+    const profiles = parsed.profiles && typeof parsed.profiles === 'object' ? parsed.profiles : {}
+    const avatars = parsed.avatars && typeof parsed.avatars === 'object' ? parsed.avatars : {}
+    // Only trust entries that look like real messages (numeric id + date);
+    // anything else is dropped, never rendered.
+    for (const [key, m] of Object.entries(lastByKey)) {
+      if (!m || typeof m.id !== 'number' || !m.created_at || Number.isNaN(Date.parse(m.created_at))) delete lastByKey[key]
+    }
+    return { lastByKey, profiles, avatars }
+  } catch {
+    return null
+  }
+}
 
 export default function Chat({ session }) {
   const myId = session.user.id
   const [me, setMe] = useState(undefined)
-  const [profiles, setProfiles] = useState({})
-  const [avatars, setAvatars] = useState({})
+  const [profiles, setProfiles] = useState(() => readInboxCache(myId)?.profiles ?? {})
+  const [avatars, setAvatars] = useState(() => readInboxCache(myId)?.avatars ?? {})
   const [messages, setMessages] = useState([])
   const [reactions, setReactions] = useState({})
   const [urls, setUrls] = useState({})
@@ -198,7 +231,23 @@ export default function Chat({ session }) {
     }
   }
   // Conversation key -> its newest message, for the chat list.
-  const [lastByKey, setLastByKey] = useState({})
+  // Restored from the cold-start cache (see readInboxCache above), so the
+  // list is sorted correctly on the first paint, before loadInbox returns.
+  const [lastByKey, setLastByKey] = useState(() => readInboxCache(myId)?.lastByKey ?? {})
+  // Save the list cache whenever it changes. Never an empty one, so a
+  // first paint can never wipe a good cache.
+  useEffect(() => {
+    if (!myId) return
+    if (!Object.keys(lastByKey).length && !Object.keys(profiles).length) return
+    try {
+      localStorage.setItem(
+        INBOX_CACHE_KEY(myId),
+        JSON.stringify({ v: INBOX_CACHE_VERSION, savedAt: Date.now(), lastByKey, profiles, avatars }),
+      )
+    } catch {
+      // Storage full / private mode: the list just loads from the network.
+    }
+  }, [myId, lastByKey, profiles, avatars])
   // Named groups you can see: id -> { id, name, created_by, members: [user ids] }
   const [groups, setGroups] = useState({})
   const groupsRef = useRef(groups)
@@ -306,6 +355,21 @@ export default function Chat({ session }) {
       return next
     })
   }, [])
+
+  // A photo that fails to load (Safari shows a bare "?" for a broken
+  // <img>) gets one fresh signed URL, then gives up: the old URL may have
+  // expired or the first fetch may have flaked on a slow connection, but
+  // re-signing the same missing file forever would loop, so each path is
+  // retried at most once per session.
+  const retriedImagesRef = useRef(new Set())
+  const retryImage = useCallback(
+    (path) => {
+      if (!path || retriedImagesRef.current.has(path)) return
+      retriedImagesRef.current.add(path)
+      signUrls([path])
+    },
+    [signUrls],
+  )
 
   // Enrich loaded messages with their extra attachments (0018).
   // Best-effort: if the table does not exist yet (migration not run),
@@ -2686,6 +2750,7 @@ export default function Chat({ session }) {
               onDelete={() => deleteMessage(item.msg)}
               onOpenImage={setLightbox}
               onMediaLoad={scrollToBottom}
+              onImageError={retryImage}
               poll={polls[item.msg.id]}
               pinned={pins.some((p) => p.id === item.msg.id)}
               onPin={() => togglePin(item.msg)}
@@ -3118,6 +3183,7 @@ function Message({
   onDelete,
   onOpenImage,
   onMediaLoad,
+  onImageError,
   replyOriginal,
   onReply,
   status = null,
@@ -3141,6 +3207,24 @@ function Message({
   // Time and ticks show under the last message of each run; tapping any
   // other message reveals its own.
   const [revealed, setRevealed] = useState(false)
+  // A photo whose signed URL fails to load: ask for one fresh URL, once.
+  // If that still fails, show "Photo couldn't load" instead of Safari's
+  // bare "?" for a broken <img>. A new URL resets the state, so a
+  // successful re-sign loads the photo instead of staying failed.
+  const [imgFailed, setImgFailed] = useState(false)
+  const [imgRetried, setImgRetried] = useState(false)
+  useEffect(() => {
+    setImgFailed(false)
+    setImgRetried(false)
+  }, [url])
+  const onImgError = () => {
+    if (!imgRetried) {
+      setImgRetried(true)
+      onImageError?.(msg.attachment_path)
+    } else {
+      setImgFailed(true)
+    }
+  }
 
   // Selection mode ends when the user taps Done, or taps outside this
   // bubble. Taps inside the bubble must keep working, so the user can drag
@@ -3399,7 +3483,12 @@ function Message({
                         className="media"
                         src={aUrl}
                         alt={a.attachment_name ?? 'photo'}
+                        loading="lazy"
+                        decoding="async"
                         onLoad={onMediaLoad}
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none'
+                        }}
                         onClick={() => !msg._status && onOpenImage({ url: aUrl, name: a.attachment_name ?? 'photo.jpg', type: 'image', msg })}
                       />
                       {msg._status === 'sending' && <UploadRing progress={uploadProgress} />}
@@ -3436,16 +3525,23 @@ function Message({
           {isMedia &&
             (url ? (
               isImage ? (
-                <span className="media-wrap">
-                  <img
-                    className="media"
-                    src={url}
-                    alt={msg.attachment_name}
-                    onLoad={onMediaLoad}
-                    onClick={() => !msg._status && onOpenImage({ url, name: msg.attachment_name ?? 'photo.jpg', type: 'image', msg })}
-                  />
-                  {msg._status === 'sending' && <UploadRing progress={uploadProgress} />}
-                </span>
+                imgFailed ? (
+                  <div className="media placeholder">Photo couldn’t load</div>
+                ) : (
+                  <span className="media-wrap">
+                    <img
+                      className="media"
+                      src={url}
+                      alt={msg.attachment_name}
+                      loading="lazy"
+                      decoding="async"
+                      onLoad={onMediaLoad}
+                      onError={onImgError}
+                      onClick={() => !msg._status && onOpenImage({ url, name: msg.attachment_name ?? 'photo.jpg', type: 'image', msg })}
+                    />
+                    {msg._status === 'sending' && <UploadRing progress={uploadProgress} />}
+                  </span>
+                )
               ) : (
                 <span className="media-wrap">
                   <video className="media" src={url} controls playsInline preload="metadata" onLoadedMetadata={onMediaLoad} />
@@ -4299,7 +4395,7 @@ function MyPhoto({ name, src, onPick, onRemove }) {
 }
 
 function Avatar({ name, src }) {
-  if (src) return <img className="avatar" src={src} alt="" />
+  if (src) return <img className="avatar" src={src} alt="" loading="lazy" decoding="async" />
   // Guard: [...name] and name.slice throw on undefined/null. Most call
   // sites pass a fallback, but a missing profile must never blank the
   // whole chat, so fall back to '?' here too.

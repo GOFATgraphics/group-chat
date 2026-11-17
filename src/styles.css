@@ -535,7 +535,7 @@ button.read-status.failed b { color: var(--danger); }
   background: var(--gray-bubble);
 }
 video.media { cursor: default; }
-.media.placeholder { width: 220px; height: 160px; }
+.media.placeholder { width: 220px; height: 160px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 14px; text-align: center; padding: 12px; }
 
 .bubble.file {
   display: flex;
