@@ -14,8 +14,19 @@ import { supabase, BUCKET } from './supabase.js'
 //   3. Her reply is spoken back to you: a voice-note reply plays its audio;
 //      a text reply is read aloud by the phone/browser (speechSynthesis).
 //
+// The bridge also sends one short text message the moment the call starts
+// (CALL_START_TEXT). Agents otherwise assume a call is the old realtime one
+// and wait for the call record after you hang up — the signal tells them
+// this call is live, turn by turn, and to answer each voice note in text
+// straight away. It is an ordinary message, so the agent gets it through
+// the same listener as any text.
+//
 // No server endpoint, no new key, no new billing: turns are ordinary
 // messages, so usage counts exactly as it does for voice notes and text.
+
+// Sent once, at the start of every bridge call, so the agent knows the call
+// is live and answers voice-note turns in text while you are still on it.
+const CALL_START_TEXT = '📞 Live call — I\'m talking to you live now. My words will come as voice notes, one at a time. Reply to each voice note in TEXT straight away, 1–3 short sentences, so I hear you while we\'re still on the call.'
 
 const MAX_TURN_SECONDS = 60
 const REPLY_TIMEOUT_MS = 120_000
@@ -95,6 +106,18 @@ export default function BridgeCallScreen({ peer, avatar, myName, myId, messages,
   const seenIds = useRef(new Set((messages ?? []).map((m) => m.id)))
   const phaseRef = useRef(phase)
   phaseRef.current = phase
+  const sendRef = useRef(send)
+  sendRef.current = send
+  const signalSent = useRef(false)
+
+  // Tell the agent the call is live, the moment it starts. send() is read
+  // through a ref so this fires exactly once even if the prop changes.
+  useEffect(() => {
+    if (signalSent.current) return
+    signalSent.current = true
+    sendRef.current({ text: CALL_START_TEXT })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Prime the speech engine on mount so voices are loaded when needed.
   useEffect(() => {
