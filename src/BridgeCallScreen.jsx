@@ -399,6 +399,7 @@ export default function BridgeCallScreen({ peer, avatar, myName, myId, messages,
   }
 
   function testVoice() {
+    setError('')
     if (!window.speechSynthesis) {
       setError('This browser cannot speak replies aloud. You can still read them in the chat.')
       return
@@ -440,7 +441,7 @@ export default function BridgeCallScreen({ peer, avatar, myName, myId, messages,
           {status}
         </div>
         {error && <div className="call-error">{error}</div>}
-        {caption && !error && <div className="call-caption">{caption}</div>}
+        {caption && <div className="call-caption">{caption}</div>}
         {phase === 'recording' && (
           <div className="call-levels" aria-hidden="true">
             {levels.map((l, i) => (
