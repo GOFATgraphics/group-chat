@@ -73,7 +73,7 @@ function speechChunks(text) {
 
 const formatClock = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`
 
-export default function BridgeCallScreen({ peer, avatar, myName, myId, messages, urls, send, onEnded }) {
+export default function BridgeCallScreen({ peer, avatar, myName, myId, messages, urls, send, onEnded, agentTyping, agentWorking }) {
   const [phase, setPhase] = useState('idle') // idle | recording | waiting | speaking | noreply
   const [elapsed, setElapsed] = useState(0)
   const [turnElapsed, setTurnElapsed] = useState(0)
@@ -86,10 +86,11 @@ export default function BridgeCallScreen({ peer, avatar, myName, myId, messages,
 
   const startedAt = useRef(Date.now())
   const ended = useRef(false)
-  const rec = useRef(null) // { recorder, stream, ctx, chunks, startedAt, mime }
+  const rec = useRef(null) // { recorder, stream, ctx, chunks, startedAt, mime, auto, hadSpeech, lastLoudAt }
   const audio = useRef(null)
   const speechToken = useRef(0) // cancels a stale speak chain
   const replyTimer = useRef(null)
+  const autoListenTimer = useRef(null)
   const turns = useRef([]) // { from: 'me' | peer.username, text } for the call card
   const seenIds = useRef(new Set((messages ?? []).map((m) => m.id)))
   const phaseRef = useRef(phase)
@@ -159,9 +160,13 @@ export default function BridgeCallScreen({ peer, avatar, myName, myId, messages,
   }
 
   // ---- recording ------------------------------------------------------------
+  // auto: this turn started itself after a reply (hands-free). An auto turn
+  // that hears no speech within 8 s gives up quietly instead of sending
+  // silence to the agent.
 
-  async function startRecording() {
+  async function startRecording(auto = false) {
     if (phaseRef.current === 'recording') return
+    clearTimeout(autoListenTimer.current)
     stopSpeaking()
     setError('')
     setCaption('')
@@ -207,20 +212,45 @@ export default function BridgeCallScreen({ peer, avatar, myName, myId, messages,
         let sum = 0
         for (const v of data) sum += ((v - 128) / 128) ** 2
         const level = Math.min(1, Math.sqrt(sum / data.length) * 4)
+        if (level > 0.25) {
+          rec.current.hadSpeech = true
+          rec.current.lastLoudAt = Date.now()
+        }
         setLevels((prev) => [...prev.slice(1), Math.max(0.08, level)])
       }, 90)
     } catch {
       // No level meter on this browser; recording still works.
     }
-    rec.current = { recorder, stream, ctx, chunks, startedAt: Date.now(), mime: recorder.mimeType || mime }
+    rec.current = {
+      recorder,
+      stream,
+      ctx,
+      chunks,
+      startedAt: Date.now(),
+      mime: recorder.mimeType || mime,
+      auto,
+      hadSpeech: false,
+      lastLoudAt: Date.now(),
+    }
     setTurnElapsed(0)
     setPhase('recording')
     const tick = setInterval(() => {
-      if (!rec.current) return clearInterval(tick)
-      const secs = (Date.now() - rec.current.startedAt) / 1000
+      const r = rec.current
+      if (!r) return clearInterval(tick)
+      const secs = (Date.now() - r.startedAt) / 1000
       setTurnElapsed(secs)
-      if (secs >= MAX_TURN_SECONDS) finishRecording()
+      if (secs >= MAX_TURN_SECONDS) return finishRecording()
+      // Spoke, then went quiet: send without waiting for a tap.
+      if (r.hadSpeech && Date.now() - r.lastLoudAt > 1500) return finishRecording()
+      // Auto turn, nothing said: give up quietly, don't send silence.
+      if (r.auto && !r.hadSpeech && secs > 8) return stopAutoListen()
     }, 250)
+  }
+
+  // An auto-started turn heard nothing: stop and wait for a tap.
+  function stopAutoListen() {
+    stopRecording(true)
+    setPhase('idle')
   }
 
   async function finishRecording() {
@@ -237,6 +267,11 @@ export default function BridgeCallScreen({ peer, avatar, myName, myId, messages,
     }
     stopRecording()
     await stopped
+    // Nothing was actually said: discard, don't send silence to the agent.
+    if (!r.hadSpeech) {
+      setPhase('idle')
+      return
+    }
     const type = (r.mime || r.chunks[0]?.type || 'audio/webm').split(';')[0]
     const ext = type.includes('mp4') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm'
     const blob = new Blob(r.chunks, { type })
@@ -263,6 +298,25 @@ export default function BridgeCallScreen({ peer, avatar, myName, myId, messages,
     replyTimer.current = setTimeout(() => {
       if (phaseRef.current === 'waiting') setPhase('noreply')
     }, REPLY_TIMEOUT_MS)
+  }
+
+  // A reply finished playing: listen for the next turn by itself, so a
+  // call feels like a conversation instead of a tap per turn. Fires only
+  // when the screen is still idle 600 ms later (a queued reply, a manual
+  // tap, or hang-up all cancel it).
+  function scheduleAutoListen() {
+    clearTimeout(autoListenTimer.current)
+    autoListenTimer.current = setTimeout(() => {
+      if (ended.current) return
+      if (phaseRef.current !== 'idle') return
+      startRecording(true)
+    }, 600)
+  }
+
+  function finishSpeaking() {
+    setSpeaking(false)
+    setPhase('idle')
+    scheduleAutoListen()
   }
 
   // ---- replies ---------------------------------------------------------------
@@ -312,8 +366,7 @@ export default function BridgeCallScreen({ peer, avatar, myName, myId, messages,
       audio.current = a
       a.onended = () => {
         audio.current = null
-        setSpeaking(false)
-        setPhase('idle')
+        finishSpeaking()
       }
       a.onerror = () => {
         audio.current = null
@@ -333,8 +386,7 @@ export default function BridgeCallScreen({ peer, avatar, myName, myId, messages,
     }
     const text = (msg.content ?? '').trim()
     if (!text) {
-      setSpeaking(false)
-      setPhase('idle')
+      finishSpeaking()
       return
     }
     setCaption(text)
@@ -351,8 +403,7 @@ export default function BridgeCallScreen({ peer, avatar, myName, myId, messages,
     const sayNext = () => {
       if (token !== speechToken.current) return // cancelled / hung up
       if (i >= chunks.length) {
-        setSpeaking(false)
-        setPhase('idle')
+        finishSpeaking()
         return
       }
       const u = new SpeechSynthesisUtterance(chunks[i])
@@ -391,6 +442,7 @@ export default function BridgeCallScreen({ peer, avatar, myName, myId, messages,
     if (ended.current) return
     ended.current = true
     clearTimeout(replyTimer.current)
+    clearTimeout(autoListenTimer.current)
     stopRecording(true)
     stopSpeaking()
     const duration = Math.round((Date.now() - startedAt.current) / 1000)
@@ -420,7 +472,11 @@ export default function BridgeCallScreen({ peer, avatar, myName, myId, messages,
     phase === 'recording'
       ? `Listening… ${formatClock(turnElapsed)}`
       : phase === 'waiting'
-        ? `Waiting for ${peer.username}…`
+        ? agentWorking
+          ? agentWorking
+          : agentTyping
+            ? `${peer.username} is typing…`
+            : `Waiting for ${peer.username}…`
         : phase === 'speaking'
           ? `${peer.username} is speaking`
           : phase === 'noreply'

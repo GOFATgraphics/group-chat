@@ -3220,6 +3220,8 @@ export default function Chat({ session }) {
             messages={messages}
             urls={urls}
             send={send}
+            agentTyping={headerTyping}
+            agentWorking={headerWorkingLabel}
             onEnded={(result) => saveCall(callWith, result)}
           />
         </Suspense>
