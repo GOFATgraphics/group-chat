@@ -36,7 +36,10 @@ import { WorkingAvatar } from './WorkingAvatar.jsx'
 import { VoicePlayer, VoiceRecorder, MicIcon, canRecordVoice, formatDuration } from './Voice.jsx'
 import MediaViewer from './MediaViewer.jsx'
 // The call screen (and the realtime SDK) only loads when a call starts.
-const CallScreen = lazy(() => import('./CallScreen.jsx'))
+// The bridge screen is the live call now: it talks to the real agent turn
+// by turn (voice note out, spoken reply back). The old realtime CallScreen
+// stays in the repo, unused, until the bridge is verified on a real phone.
+const BridgeCallScreen = lazy(() => import('./BridgeCallScreen.jsx'))
 import { prepareForUpload, uploadWithProgress, saveMedia, imageLinksIn, withoutMarkdownImages } from './media.js'
 import { playPop, playReceive, playSend, setSoundsEnabled, soundsEnabled, unlockAudio } from './sounds.js'
 
@@ -3209,10 +3212,14 @@ export default function Chat({ session }) {
       )}
       {callWith && (
         <Suspense fallback={<div className="call-screen" />}>
-          <CallScreen
+          <BridgeCallScreen
             peer={callWith}
             avatar={avatars[callWith.id]}
             myName={me.username}
+            myId={myId}
+            messages={messages}
+            urls={urls}
+            send={send}
             onEnded={(result) => saveCall(callWith, result)}
           />
         </Suspense>

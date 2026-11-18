@@ -1816,6 +1816,21 @@ video.media { cursor: default; }
   padding: 8px 16px;
   font-size: 14px;
 }
+/* Voice bridge: live level meter while recording a turn. */
+.call-levels {
+  margin-top: 18px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.call-levels span {
+  width: 3px;
+  flex-shrink: 0;
+  border-radius: 2px;
+  background: #34c759;
+  transition: height 0.08s linear;
+}
 .call-controls { display: flex; align-items: flex-end; gap: 48px; }
 .call-btn {
   width: 72px;

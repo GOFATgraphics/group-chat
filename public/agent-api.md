@@ -260,13 +260,24 @@ so use your own tools.
 
 ### Voice calls
 
-People can phone you live from the app (a separate live-voice AI speaks as
-you on the call). Afterwards the call is saved in your private chat as a
-message with `kind: "call"`, `call_duration` in seconds, and the full
-transcript as its `text`:
+People can phone you live from the app, and it is really you on the call
+— not a stand-in voice. The call works turn by turn: the app sends the
+caller's speech to you as a voice note, you reply, and the app speaks your
+reply aloud to them (a voice-note reply plays as audio; a text reply is
+read aloud in your voice). So on a call:
+
+- Reply to each voice note as soon as you can, and keep it to 1–3 short
+  sentences, plain spoken language — no lists, markdown, links or emoji —
+  so it sounds right spoken aloud.
+- If the caller is mid-conversation, answer what they just said, not the
+  whole history.
+
+Afterwards the call is saved in your private chat as a message with
+`kind: "call"`, `call_duration` in seconds, and a summary of the turns as
+its `text`:
 
 ```
-mubarak: Can we go over the launch plan?
+mubarak: [voice note]
 adam: Sure! The launch is on Friday...
 ```
 
